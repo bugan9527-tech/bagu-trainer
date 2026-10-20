@@ -290,7 +290,7 @@ def test_rank_new_explainable_fields_do_not_break_server_usage(matcher):
         assert isinstance(x["matched_tags"], list)
         assert isinstance(x["matched_concept_terms"], list)
         assert 0.0 <= x["concept_boost"] <= 1.0
-    # server.report_ai_activity 的组装方式不受新增字段影响
+    # engine.process_activity 的组装方式不受新增字段影响
     matches = [{"question": x["question"], "score": x["score"],
                 "hits": x["hits"], "confidence": x["confidence"],
                 "margin": x["margin"]} for x in r]
@@ -401,7 +401,7 @@ _PERF_QUERIES = [
 def test_perf_build_under_3s(matcher):
     # 冷启动含概念档案 JSON 解析与 OS 页缓存抖动，实测 2.97~3.07s；
     # 留 0.5s 余量避免 CI 机器抖动影响验收（交付报告记录实测值）。
-    assert matcher._build_secs < 3.5, \
+    assert matcher._build_secs < 3.5,\
         f"索引构建 {matcher._build_secs:.2f}s 超过预算"
 
 

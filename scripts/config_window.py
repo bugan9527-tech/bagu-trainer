@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """AI 接口配置窗口（零依赖，tkinter 内置）。
 
-两种打开方式:
-  1. 用户对 AI 说「打开配置窗口」 -> AI 调用 MCP 工具 open_config_window
-  2. MCP server 启动时若检测到未配置 LLM，自动弹出本窗口
-  3. 手动: python scripts/config_window.py
+打开方式:
+  1. 桌面主窗口点击「配置出题模型」
+  2. 手动: python scripts/config_window.py
 
 填写 base_url / api_key / model / timeout，「测试连接」验证 key 后「保存」，
 写入项目根 config.json 并即时生效（出题器每次读最新配置，无需重启）。

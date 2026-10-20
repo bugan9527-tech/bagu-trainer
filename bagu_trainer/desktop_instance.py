@@ -1,10 +1,7 @@
-"""Same-user Windows named-pipe bridge: desktop and MCP share one engine.
+"""Same-user single-instance window activation over a private Windows pipe.
 
-No TCP port is opened. Discovery credentials live in an ignored runtime folder;
-an OS file lock, rather than a stale PID or discovery file, identifies the owner.
+Only window activation and status are accepted; learning operations stay in process.
 """
-import functools
-import inspect
 import json
 import os
 import secrets
@@ -14,13 +11,7 @@ from pathlib import Path
 from multiprocessing.connection import Client, Listener
 
 RUNTIME = Path(__file__).resolve().parent.parent / "data" / ".desktop-runtime"
-_OWNER = False
-TOOLS = frozenset({
-    "_show_dashboard", "_desktop_status",
-    "list_knowledge_points", "report_ai_activity", "check_pending_quiz",
-    "open_config_window", "configure_llm", "generate_quiz", "submit_answer",
-    "get_learning_stats",
-})
+WINDOW_COMMANDS = frozenset({"_show_dashboard", "_desktop_status"})
 
 
 class OwnerLock:
@@ -54,7 +45,7 @@ class OwnerLock:
 
 
 def desktop_running():
-    if _OWNER or os.name != "nt" or not (RUNTIME / "owner.lock").exists():
+    if os.name != "nt" or not (RUNTIME / "owner.lock").exists():
         return False
     probe = OwnerLock()
     if not probe.acquire():
@@ -69,33 +60,13 @@ def remote_call(name, arguments):
     with Client(endpoint["address"], family="AF_PIPE",
                 authkey=bytes.fromhex(endpoint["auth"])) as connection:
         connection.send_bytes(json.dumps({"name": name, "arguments": arguments}).encode("utf-8"))
-        if not connection.poll(120):
-            raise TimeoutError("Desktop engine did not respond")
+        if not connection.poll(5):
+            raise TimeoutError("Desktop window did not respond")
         return json.loads(connection.recv_bytes(4 * 1024 * 1024).decode("utf-8"))
 
 
-def forward_to_desktop(function):
-    signature = inspect.signature(function)
-
-    @functools.wraps(function)
-    def wrapped(*args, **kwargs):
-        if not desktop_running():
-            return function(*args, **kwargs)
-        bound = signature.bind(*args, **kwargs)
-        bound.apply_defaults()
-        try:
-            return remote_call(function.__name__, bound.arguments)
-        except Exception:
-            # Fail closed: never run a second generator when the desktop owns it.
-            return {"ok": False, "has_pending": False, "desktop_mode": True,
-                    "note": "桌面训练器正在启动或暂时不可用，请稍后重试。"}
-
-    return wrapped
-
-
-class BridgeServer:
+class WindowBroker:
     def __init__(self, dispatch, owner):
-        global _OWNER
         self.owner = owner
         self.dispatch = dispatch
         self.address = r"\\.\pipe\bagu-trainer-" + uuid.uuid4().hex
@@ -106,10 +77,9 @@ class BridgeServer:
         temporary = self.endpoint.with_suffix(".tmp")
         temporary.write_text(json.dumps({"address": self.address, "auth": self.auth.hex()}), encoding="utf-8")
         os.replace(temporary, self.endpoint)
-        _OWNER = True
 
     def start(self):
-        threading.Thread(target=self._serve, daemon=True, name="bagu-desktop-bridge").start()
+        threading.Thread(target=self._serve, daemon=True, name="bagu-window-broker").start()
 
     def _serve(self):
         while not self.closed:
@@ -125,7 +95,7 @@ class BridgeServer:
                 if not connection.poll(5):
                     return
                 request = json.loads(connection.recv_bytes(64 * 1024).decode("utf-8"))
-                if request["name"] not in TOOLS:
+                if request["name"] not in WINDOW_COMMANDS:
                     result = {"ok": False, "note": "不支持的操作"}
                 else:
                     result = self.dispatch(request["name"], request.get("arguments") or {})
@@ -137,9 +107,7 @@ class BridgeServer:
                     pass
 
     def close(self):
-        global _OWNER
         self.closed = True
         self.listener.close()
         self.endpoint.unlink(missing_ok=True)
-        _OWNER = False
         self.owner.close()

@@ -115,7 +115,7 @@ class DesktopMonitor:
         self.initialized.intersection_update(roots)
         result = {"state": "watching", "projects": len(roots)}
         for root in roots:
-            # Context collection and snapshots are shared with manual MCP reports.
+            # All desktop activity shares the same scoped context and snapshot pipeline.
             with engine._STATE_LOCK:
                 if root not in self.initialized:
                     engine._diff_readers[root] = ActivityDiffReader(root)
@@ -190,24 +190,14 @@ class DesktopMonitor:
                     return engine._public_pending(pending)
         return None
 
-    def dispatch(self, name, arguments):
-        engine = self.engine
+    def window_command(self, name, arguments):
         if name == "_desktop_status":
             return {"ok": True, **self.ui_state}
         if name == "_show_dashboard":
             if self.ui_post:
                 self.ui_post(("show", None))
             return {"ok": self.ui_post is not None}
-        if name == "check_pending_quiz":
-            root, error = engine._resolve_project_root(arguments.get("project_root", ""))
-            return {"ok": error is None, "has_pending": False, "desktop_mode": True,
-                    "note": error or "桌面训练器已接管自动出题，题目会在独立窗口显示。"}
-        if name == "report_ai_activity":
-            response = engine._refresh(arguments.get("project_root", ""),
-                                       arguments.get("description", ""))
-            return {"ok": response.get("ok") is not False, "desktop_mode": True,
-                    "quizzes": [], "note": response.get("error") or "检测已完成，题目将在桌面窗口展示。"}
-        return getattr(engine, name)(**arguments)
+        return {"ok": False, "note": "不支持的窗口操作"}
 
 
 def add_project(path):

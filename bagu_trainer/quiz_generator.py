@@ -53,7 +53,7 @@ CONTEXT_MAX_CHARS = 2000   # 发送给 LLM 的上下文字符上限
 
 def test_llm(base_url: str, api_key: str, model: str, timeout: int = 8) -> str:
     """发一个最小 chat/completions 请求验证接口，返回结果说明文字。
-    供 configure_llm 工具与配置窗口共用。返回值经脱敏，不含 Key。
+    供桌面配置窗口调用。返回值经脱敏，不含 Key。
     """
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {"model": model, "max_tokens": 1,
@@ -146,7 +146,7 @@ class QuizGenerator:
                     # 只保留异常类名：异常文本可能携带请求/响应细节（含密钥）
                     fail_reason = f"LLM 调用失败: {e.__class__.__name__}"
         else:
-            fail_reason = "未配置 LLM（请设置环境变量 BAGU_LLM_API_KEY 或用 configure_llm/open_config_window 配置）"
+            fail_reason = "未配置 LLM（请在主窗口打开模型配置，或设置环境变量 BAGU_LLM_API_KEY）"
         print(f"[quiz] {fail_reason} -> 尝试题库已验证选择题回退 ({kp_question['id']})",
               file=sys.stderr)
         return self._fallback(kp_question, base, fail_reason)

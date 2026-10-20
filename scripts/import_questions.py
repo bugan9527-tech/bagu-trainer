@@ -283,7 +283,7 @@ def main(src=SRC, repos=REPOS, bank_path=BANK, backup_path=BACKUP,
           % (len(bank), n_kw / max(1, len(bank))))
     print("[title] 标题清洗拒绝 %d 条，明细 -> %s"
           % (stat["title_rejected"], report_path))
-    print("[done] 重启 bagu-trainer MCP server 后生效")
+    print("[done] 重启桌面训练器后生效")
     return {"before": before, "after": after, "extract_stat": stat,
             "backup": str(backup_used) if backup_used else None,
             "title_report": str(report_path)}

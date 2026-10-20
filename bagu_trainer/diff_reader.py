@@ -47,7 +47,7 @@ class DiffReader:
 
     def _run_git(self, args: list) -> subprocess.CompletedProcess:
         """git 子进程必须切断 stdin 继承并限制超时：
-        Windows 下 git(MSYS) 继承 MCP 的 stdin 管道句柄时可能永不退出，
+        Windows 下 git(MSYS) 继承父进程的 stdin 管道句柄时可能永不退出，
         导致 subprocess.run 死等（实测卡在 is_git_repo）。
         pythonw 无控制台时还须禁止子进程创建控制台，避免每次轮询闪黑窗。
         """

@@ -32,7 +32,7 @@ def test_example_config_uses_relocated_install_from_another_cwd(tmp_path):
     probe = """
 import json
 from pathlib import Path
-from bagu_trainer import config, desktop_bridge, server
+from bagu_trainer import config, desktop_instance, engine
 cfg = config.load_config()
 print(json.dumps({
     'project': str(config.PROJECT_ROOT),
@@ -40,11 +40,11 @@ print(json.dumps({
     'roots': cfg['project_roots'],
     'trae': cfg['trae_home'],
     'expected_trae': str(Path.home() / '.trae-cn'),
-    'db': server._db_path(),
-    'runtime': str(desktop_bridge.RUNTIME),
+    'db': engine._db_path(),
+    'runtime': str(desktop_instance.RUNTIME),
 }))
 """
-    # The subprocess imports only the copied package and never starts the server.
+    # The subprocess imports only the copied package and never starts the desktop.
     env = dict(os.environ, PYTHONPATH=str(project), PYTHONIOENCODING="utf-8")
     result = subprocess.run([sys.executable, "-B", "-c", probe], cwd=elsewhere,
                             env=env, capture_output=True, text=True,

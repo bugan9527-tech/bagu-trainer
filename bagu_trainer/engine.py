@@ -1,14 +1,7 @@
-# -*- coding: utf-8 -*-
-"""「AI 八股训练器」MCP Server（stdio）。
+"""Desktop learning engine: matching, quiz lifecycle, grading and persistence.
 
-工具：
-  list_knowledge_points   列出题库知识点
-  report_ai_activity      报告/采集 AI 当前活动 -> 匹配知识点 -> 生成情景题
-  generate_quiz           按知识点 ID + 上下文生成题目
-  submit_answer           提交答案并判分、给解析
-
-启动日志打到 stderr（stdout 是 MCP 协议通道）。可直接运行：
-  python bagu_trainer/server.py
+This module has no transport registration or independent background loop.
+DesktopMonitor owns change detection and DesktopApp owns interaction.
 """
 import collections
 import hashlib
@@ -20,56 +13,16 @@ import time
 import uuid
 from pathlib import Path
 
-# MCP 协议要求 UTF-8；Windows 默认 GBK 写 stdout 会破坏传输，必须显式切换
-if sys.platform == "win32":
-    for stream in (sys.stdout, sys.stderr):
-        if stream is not None and hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8")
-
-# 直接执行本文件时，Python 会把 bagu_trainer/ 放到 sys.path[0]。
-# 这会让第三方库的 `import secrets` 误命中项目的 secrets.py，导致
-# starlette 无法导入标准库 token_hex。先移除脚本目录，再加入项目根目录。
-_SCRIPT_DIR_RAW = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
-_SCRIPT_DIR = os.path.normcase(_SCRIPT_DIR_RAW)
-_PROJECT_DIR_RAW = os.path.dirname(_SCRIPT_DIR_RAW)
-_PROJECT_DIR = os.path.normcase(_PROJECT_DIR_RAW)
-
-
-def _same_path(left, right):
-    try:
-        return os.path.normcase(os.path.realpath(left)) == right
-    except (OSError, ValueError):
-        return False
-
-
-sys.path[:] = [p for p in sys.path if not _same_path(p, _SCRIPT_DIR)]
-if not any(_same_path(p, _PROJECT_DIR) for p in sys.path):
-    sys.path.insert(0, _PROJECT_DIR_RAW)
-
-from bagu_trainer import secrets
-from bagu_trainer.config import CONFIG_PATH, PROJECT_ROOT, load_config, update_llm
-from bagu_trainer.diff_reader import DiffReader
-from bagu_trainer.desktop_bridge import desktop_running, forward_to_desktop
-from bagu_trainer.knowledge_base import KnowledgeBase
-from bagu_trainer.matcher import Matcher
-from bagu_trainer.quiz_generator import (
-    QuizGenerator,
-    get_verified_fallback,
-    test_llm,
-    verified_fallback_count,
-)
-from bagu_trainer.scheduler import next_state
-from bagu_trainer.scorer import Scorer
-from bagu_trainer.session_reader import entries_to_text, find_trae_home, read_recent_entries
-from bagu_trainer.store import Store
-
-from mcp.server.fastmcp import FastMCP
-
-if "--check-imports" in sys.argv:
-    print("server imports ok")
-    raise SystemExit(0)
-
-mcp = FastMCP("bagu-trainer")
+from . import secrets
+from .config import PROJECT_ROOT, load_config
+from .diff_reader import DiffReader
+from .knowledge_base import KnowledgeBase
+from .matcher import Matcher
+from .quiz_generator import QuizGenerator, get_verified_fallback, verified_fallback_count
+from .scheduler import next_state
+from .scorer import Scorer
+from .session_reader import entries_to_text, find_trae_home, read_recent_entries
+from .store import Store
 
 cfg = load_config()
 kb = KnowledgeBase()
@@ -77,7 +30,7 @@ matcher = Matcher(kb)
 generator = QuizGenerator(cfg)
 scorer = Scorer()
 
-# 服务进程内存态：
+# 桌面学习引擎内存态：
 #   quizzes: quiz_id -> 完整 quiz（含 answer 与 _meta，作答前不外发）
 #   pending: 待答题状态记录，状态机 ready/delivered/answered/expired
 #   seen:    已出题指纹 (project_root, kp_id, 归一化上下文 hash)，带容量上限
@@ -90,8 +43,8 @@ _state = {
     "seen": collections.deque(),
     "seen_set": set(),
 }
-# SQLite 学习闭环存储（懒初始化：首个工具调用时按 config db_path 建库，
-# 一并水合未完成/未复习的持久化状态，保证服务重启不丢失）
+# SQLite 学习闭环存储（首次使用时按 config db_path 建库，
+# 一并水合未完成/未复习的持久化状态，保证程序重启不丢失）
 _store = None
 # 薄弱知识点阈值与上限（get_learning_stats 用）
 WEAK_MASTERY = 0.6
@@ -128,7 +81,7 @@ def _db_path() -> str:
         path = Path(p).expanduser()
         return str(path if path.is_absolute() else (PROJECT_ROOT / path))
     return str(PROJECT_ROOT / "data" / "trainer.db")
-# 后台监测线程与工具调用共用同一把锁，串行化「采集->匹配->生成->清理」全流程，
+# 桌面监测线程与学习操作共用同一把锁，串行化「采集->匹配->生成->清理」全流程，
 # 避免并发重复生成/重复计费
 _STATE_LOCK = threading.RLock()
 # watch 模式监听器按项目根目录跨调用复用（快照不持久会永远检测不到变更）
@@ -138,7 +91,7 @@ CONFIG_WINDOW = str(PROJECT_ROOT / "scripts" / "config_window.py")
 
 
 def _open_config_window() -> bool:
-    """以独立进程弹出 AI 接口配置窗口（tkinter 需独立进程，不与 stdio 冲突）"""
+    """以独立进程弹出 AI 接口配置窗口（tkinter 在独立进程运行）"""
     try:
         subprocess.Popen(
             [sys.executable, CONFIG_WINDOW],
@@ -151,34 +104,12 @@ def _open_config_window() -> bool:
         return False
 
 
-def _llm_configured() -> bool:
-    return bool(secrets.resolve_api_key(load_config().get("llm")))
-
-
 def _startup_log():
-    server_file = os.path.abspath(__file__)
-    trae_home = find_trae_home(cfg.get("trae_home"))
-    llm = cfg.get("llm")
-    fallback_total = verified_fallback_count()
-    lines = [
-        "=" * 60,
-        "[bagu-trainer] AI 八股训练器 MCP Server 启动",
-        f"[bagu-trainer] 题库: {PROJECT_ROOT / 'data' / 'questions.json'} "
-        f"({len(kb.all())} 题 / {len(kb.list_knowledge_points())} 个知识点)",
-        f"[bagu-trainer] 已验证回退题: {fallback_total} 道"
-        f"（当前离线可出 {fallback_total} 道带四选项、答案和解析的题）",
-        f"[bagu-trainer] .trae-cn 会话目录: {trae_home if trae_home else '未检测到(可配置 config.json 的 trae_home)'}",
-        f"[bagu-trainer] LLM: {'已配置 ' + llm['model'] if _llm_configured() and llm else f'未配置(合成出题不可用；当前离线可出 {fallback_total} 道已验证选择题，其余知识点将明确提示不可用；配置参照 config.example.json / KEY_MIGRATION.md)'}",
-        f"[bagu-trainer] 配置: {CONFIG_PATH if CONFIG_PATH.exists() else 'config.json 不存在，使用默认值'}",
-        f"[bagu-trainer] 学习数据(练习记录/掌握度/复习计划): {_db_path()} (SQLite, 重启不丢失)",
-        "-" * 60,
-        "[bagu-trainer] 在 TraeCode 中注册（TraeCode -> 设置 -> MCP -> 添加 MCP 服务器，类型选 stdio）：",
-        f"  命令: python",
-        f"  参数: {server_file}",
-        "-" * 60,
-    ]
-    for line in lines:
-        print(line, file=sys.stderr)
+    """Print local engine status without transport setup instructions or secrets."""
+    count = verified_fallback_count()
+    print(f"[bagu-trainer] 桌面学习引擎：{len(kb.all())} 个知识点", file=sys.stderr)
+    print(f"[bagu-trainer] 已验证回退题: {count} 道（当前离线可出 {count} 道）", file=sys.stderr)
+    print(f"[bagu-trainer] 学习数据: {_db_path()}", file=sys.stderr)
 
 
 def _public_quiz(quiz_id: str, quiz: dict, project_root=None) -> dict:
@@ -437,7 +368,7 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
 
 def _deliver_pending_locked(entry: dict, now=None):
     """原子交付单条 ready pending：内存状态、quiz 快照状态、SQLite 同步更新。
-    调用方必须已持 _STATE_LOCK；整批交付由 report_ai_activity 在同一锁内完成。"""
+    调用方必须已持 _STATE_LOCK；整批交付由 process_activity 在同一锁内完成。"""
     delivered_at = _now() if now is None else now
     entry["status"] = "delivered"
     entry["delivered_at"] = delivered_at
@@ -502,11 +433,11 @@ def _cleanup_locked(caps: dict):
 
 def _refresh(project_root: str, description: str = "",
              deliver_generated: bool = False) -> dict:
-    """后台监测与工具调用共用的受锁刷新流程：
+    """活动处理共用的受锁刷新流程：
     采集上下文 -> 匹配 -> 去重生成 -> 清理。
     返回 info/generated/matches/skipped/unavailable；白名单校验失败时
     返回 ok=False + error（不进行任何采集与生成）。deliver_generated=True
-    供 report_ai_activity 使用：生成与 ready->delivered 状态更新在同一锁内完成。
+    供 process_activity 使用：生成与 ready->delivered 状态更新在同一锁内完成。
     """
     caps = _caps()
     with _STATE_LOCK:
@@ -603,23 +534,9 @@ def _deliver_due_review_locked(root: str, prefer, only_prefer: bool, caps: dict)
 
 def _poll_once():
     """后台监测：执行一次共享刷新流程（只生成 ready 题，不交付用户）"""
-    if desktop_running():
-        return
     _refresh("", "")
 
 
-def _monitor_loop(interval: int = 30):
-    """daemon 线程：定期轮询信号源，「AI 干活→自动出题」的触发引擎"""
-    while True:
-        try:
-            _poll_once()
-        except Exception as e:
-            print(f"[monitor] 轮询异常: {e.__class__.__name__}: {e}", file=sys.stderr)
-        time.sleep(interval)
-
-
-@mcp.tool()
-@forward_to_desktop
 def list_knowledge_points(tag: str = "") -> dict:
     """列出题库知识点（可按 tag 过滤，如 http/cache/并发）"""
     kps = kb.list_knowledge_points()
@@ -632,22 +549,13 @@ def list_knowledge_points(tag: str = "") -> dict:
         ]
     return {"total": len(kps), "knowledge_points": kps,
             "verified_fallback_count": verified_fallback_count(),
-            "hint": "用 generate_quiz(knowledge_point_id, context) 针对某知识点出题"}
+            "hint": "调用 create_quiz(knowledge_point_id, context) 针对某知识点出题"}
 
 
-@mcp.tool()
-@forward_to_desktop
-def report_ai_activity(description: str = "", project_root: str = "") -> dict:
-    """【手动报告接口】显式报告一次 AI 活动并立即出题（自动监测由后台完成，
-    日常应优先使用 check_pending_quiz）。可带 description 描述刚做的事，
-    缺省时自动采集会话记录+文件变动；命中知识点则生成情景题(不含答案)。
-    待答队列与未作答冷却按 project_root 隔离；作答历史/复习计划全局共享，
-    但本接口只交付本次 project_root 下新生成的题，不会搬运其他项目 pending。
-    相同 (项目, 知识点, 上下文) 只出一次题，重复报告不会重复生成。
-    生成失败时 quizzes 为空，并在 unavailable 字段给出明确原因（绝不返回
-    无选项/无答案的题目）。用户作答后调用 submit_answer(quiz_id, answer) 判分。
-    隐私保证：project_root 须在 config.json 白名单内；上下文已自动脱敏
-    （密钥/令牌不会出现在任何返回字段中）。
+def process_activity(description: str = "", project_root: str = "") -> dict:
+    """Process activity through the shared matching and persistence pipeline.
+
+    Project scope, deduplication, source checks and redaction apply to every call.
     """
     res = _refresh(project_root, description, deliver_generated=True)
     if res.get("ok") is False:
@@ -680,29 +588,16 @@ def report_ai_activity(description: str = "", project_root: str = "") -> dict:
     elif res["unavailable"]:
         result["note"] = ("命中知识点但题目生成失败（原因见 unavailable 字段，"
                           "如未配置 LLM 或来源正文缺失），不会提供无法作答的题目。"
-                          "可调用 open_config_window 配置 LLM 后重试")
+                          "可在主窗口配置出题模型后重试")
     if res["skipped"]:
         result["note"] = f"相同上下文已出过题，跳过 {res['skipped']} 道重复题目（防重复计费）"
     return result
 
 
-@mcp.tool()
-@forward_to_desktop
-def check_pending_quiz(project_root: str = "") -> dict:
-    """【自动出题检查】检查训练器待答测试题；若无待答，立即同步采集当前上下文
-    匹配并生成一次（不再等待 30 秒后台轮询，规避时序竞态）。
-    自动调用时机、排除条件、去重和作答交互以当前项目的唯一规则源
-    `.trae/rules/quiz-check.md` 为准；本工具只执行一次检查，不应在一轮任务中
-    轮询或重复调用。参数 project_root 可选：指定采集文件变动的项目目录，
-    必须位于 config.json project_roots 白名单内；白名单外/不存在/路径穿越返回
-    明确错误（隐私保护，绝不采集白名单外目录）。缺省用 config.json 配置的默认项目。
-    若返回待答题目：把题干和选项完整呈现给用户，等待用户作答后调用
-    submit_answer(quiz_id, 用户答案) 判分并转述解析；同一题只推送一次，
-    已推送未作答的题仍可通过 submit_answer 正常作答，不会重复推送。
-    若返回无待答题目：说明本次活动未命中题库，无需向用户提及本工具。
-    作用域：ready 队列和未作答知识点冷却按归一化 project_root 隔离；作答记录、
-    掌握度和复习计划全局共享。复习题只从已作答历史重建，不会把其他项目尚未
-    作答的 pending 题干推送到当前项目。
+def next_quiz(project_root: str = "") -> dict:
+    """Return the next scoped quiz or due review, generating if needed.
+
+    Delivery is atomic; a delivered question is not delivered a second time.
     """
     root_path, err = _resolve_project_root((project_root or "").strip())
     if err:
@@ -763,54 +658,14 @@ def check_pending_quiz(project_root: str = "") -> dict:
         return result
 
 
-@mcp.tool()
-@forward_to_desktop
 def open_config_window() -> dict:
-    """弹出本地「AI 接口配置」图形窗口，让用户填写 base_url/API Key/模型。
-    窗口内可点「测试连接」验证 key，保存后即时生效。适合用户想要图形界面的场景。
-    """
+    """Open the desktop model settings in a separate GUI process."""
     if _open_config_window():
-        return {"ok": True, "note": "配置窗口已打开：填好接口地址与 API Key，点「测试连接」验证，再点「保存」。保存后即时生效，无需重启。"}
-    return {"ok": False, "note": "窗口打开失败。可在会话内改用 configure_llm 直接配置"}
+        return {"ok": True}
+    return {"ok": False, "note": "配置窗口打开失败，请运行 scripts/config_window.py 查看错误"}
 
 
-@mcp.tool()
-@forward_to_desktop
-def configure_llm(base_url: str = "", api_key: str = "", model: str = "", timeout_sec: int = 0) -> dict:
-    """【配置 LLM 接口】用户说「配置 AI 接口/配置 LLM/接入 API」之类的话时调用本工具：
-    从用户消息中提取 base_url 与 api_key（用户只给 key 时,base_url 默认
-    https://api.deepseek.com/v1、model 默认 deepseek-chat）。先发一个最小请求验证
-    key 有效性，验证通过才保存并即时生效；验证失败返回具体原因供转述，不保存。
-    隐私保证：api_key 只写入系统凭据管理器（keyring），config.json 绝不保存明文，
-    返回值也不回显 Key；也可改设环境变量 BAGU_LLM_API_KEY。
-    用户想清空配置(回退题库原题模式)时传空 api_key。
-    """
-    url = (base_url or "https://api.deepseek.com/v1").strip()
-    key = (api_key or "").strip()
-    name = (model or "deepseek-chat").strip()
-    timeout = timeout_sec or 60
-    if not key:
-        update_llm({"base_url": url, "api_key": "", "model": name, "timeout_sec": timeout},
-                   clear_api_key=True)
-        fallback_total = verified_fallback_count()
-        return {"ok": True, "configured": False,
-                "note": f"已清空 api_key：合成出题停用；当前离线可出 {fallback_total} 道已验证选择题，其余知识点将明确提示不可用（不会出空题）"}
-    result = test_llm(url, key, name, min(timeout, 15))
-    if not result.startswith(("连接成功", "HTTP 200")):
-        return {"ok": False, "configured": False, "reason": result,
-                "note": "验证失败未保存配置。请把 reason 转述给用户，让用户检查 key/地址后重试"}
-    stored = update_llm({"base_url": url, "api_key": key, "model": name, "timeout_sec": timeout})
-    if stored == "fallback":
-        return {"ok": True, "configured": True, "test": result,
-                "note": ("接口参数已保存并生效，但系统凭据管理器不可用、Key 未落盘（不写明文）。"
-                         "请改为设置环境变量 BAGU_LLM_API_KEY 后重启 MCP 服务")}
-    return {"ok": True, "configured": True, "test": result,
-            "note": "配置已保存并即时生效（api_key 已安全存入系统凭据管理器，config.json 不含明文），后续出题将结合真实场景合成情景题"}
-
-
-@mcp.tool()
-@forward_to_desktop
-def generate_quiz(knowledge_point_id: str, context: str = "") -> dict:
+def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
     """按知识点 ID 生成一道题。context 可附带当前场景（如相关代码片段），未提供时用会话记录。
     传入的 context 在进入 LLM 前统一脱敏（密钥/令牌自动替换为 [REDACTED]）并限制长度。
     生成失败（未配置 LLM、LLM 输出校验失败、来源正文缺失且无已验证选择题回退）时
@@ -829,7 +684,7 @@ def generate_quiz(knowledge_point_id: str, context: str = "") -> dict:
     if quiz.get("available") is False:
         return {"ok": False, "knowledge_point_id": knowledge_point_id,
                 "reason": quiz.get("unavailable_reason") or "题目生成失败",
-                "note": "不提供无法作答的题目。可调用 open_config_window 配置 LLM 后重试"}
+                "note": "不提供无法作答的题目。可在主窗口配置出题模型后重试"}
     quiz_id = uuid.uuid4().hex[:8]
     with _STATE_LOCK:
         caps = _caps()
@@ -840,15 +695,13 @@ def generate_quiz(knowledge_point_id: str, context: str = "") -> dict:
         _get_store_locked().create_quiz(
             quiz_id, quiz.get("kp_id") or knowledge_point_id,
             _quiz_snapshot(quiz), "delivered", str(PROJECT_ROOT),
-            f"手动 generate_quiz | kp={knowledge_point_id}",
+            f"手动 create_quiz | kp={knowledge_point_id}",
             now, now + caps["ttl"], delivered_at=now)
         _cleanup_locked(caps)
     return {"ok": True, **_public_quiz(quiz_id, quiz, str(PROJECT_ROOT)),
             "next": "用 submit_answer(quiz_id, 用户答案) 判分并获取解析"}
 
 
-@mcp.tool()
-@forward_to_desktop
 def submit_answer(quiz_id: str, answer: str) -> dict:
     """提交答案，返回对错 + 解析 + 复习安排（schedule）。
     学习闭环：单事务落库 attempt 与 concept_state（掌握度/下次复习时间由
@@ -898,8 +751,6 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
     }
 
 
-@mcp.tool()
-@forward_to_desktop
 def get_learning_stats() -> dict:
     """【学习统计·只读】返回学习闭环聚合数据：已作答题数、总作答次数、
     正确率、待复习数、薄弱知识点（掌握度低于 0.6 且至少作答一次）。
@@ -931,14 +782,3 @@ def get_learning_stats() -> dict:
             "note": ("只读统计：不含会话原文与代码内容。"
                      "待复习数为 next_review_at 已到期的知识点数。"),
         }
-
-
-if __name__ == "__main__":
-    _startup_log()
-    # 后台监测线程：定期采集双信号源并预生成题目（「AI 干活→自动出题」的引擎）
-    threading.Thread(target=_monitor_loop, daemon=True, name="bagu-monitor").start()
-    # 未配置 LLM 时自动弹出配置窗口（用户点开/刷新本 MCP 即触发，一次填好免手改文件）
-    if not desktop_running() and not _llm_configured():
-        print("[bagu-trainer] 未检测到 LLM 配置，自动弹出 AI 接口配置窗口…", file=sys.stderr)
-        _open_config_window()
-    mcp.run(transport="stdio")

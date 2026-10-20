@@ -139,10 +139,10 @@ def test_tokenize_junk_char_grams():
 
 # ---- server 端：resolve confidence/margin 增量字段 ----
 def test_server_surfaces_confidence_and_margin(env):
-    import bagu_trainer.server as server
+    import bagu_trainer.engine as engine
     env["diff"].results = [{"source": "git", "files": ["x.py"],
                             "diff_text": "redis 缓存穿透"}]
-    rep = server.report_ai_activity()
+    rep = engine.process_activity()
     assert rep["ok"] is True and len(rep["quizzes"]) == 1
     q = rep["quizzes"][0]
     assert "confidence" in q and "margin" in q

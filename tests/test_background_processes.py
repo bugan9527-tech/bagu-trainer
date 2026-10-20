@@ -6,7 +6,7 @@ import sys
 import pytest
 
 from bagu_trainer.diff_reader import DiffReader
-from bagu_trainer import server
+from bagu_trainer import engine
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows console allocation")
@@ -40,7 +40,7 @@ def test_real_git_still_returns_output_without_console(tmp_path):
 def test_config_gui_launch_does_not_create_extra_console(monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
-    assert server._open_config_window()
+    assert engine._open_config_window()
     _, options = calls[0]
     assert options["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
     assert options["stdin"] == subprocess.DEVNULL

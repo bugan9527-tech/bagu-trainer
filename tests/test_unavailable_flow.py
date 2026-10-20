@@ -2,7 +2,7 @@
 """生成失败链路集成测试：unavailable 明确暴露、绝不产出无选项/无答案题目。
 依赖 conftest 的全 fake 环境（无网络/无真实 LLM/无真实 config.json）。
 """
-import bagu_trainer.server as server
+import bagu_trainer.engine as engine
 
 
 class UnavailableGenerator:
@@ -29,33 +29,33 @@ def _set_diff(diff, text):
 
 def test_report_returns_unavailable_not_broken_quiz(env, monkeypatch):
     gen = UnavailableGenerator()
-    monkeypatch.setattr(server, "generator", gen)
+    monkeypatch.setattr(engine, "generator", gen)
     _set_diff(env["diff"], "redis 缓存穿透 空值缓存")
-    rep = server.report_ai_activity()
+    rep = engine.process_activity()
     assert rep["ok"] is True
     assert rep["quizzes"] == []            # 不允许出现空题
     assert rep["unavailable"][0]["knowledge_point"] == "测试知识点"
     assert "未配置 LLM" in rep["unavailable"][0]["reason"]
     assert rep["note"] and "生成失败" in rep["note"]
     # 不产生任何 pending / quizzes 记录
-    assert server._state["pending"] == []
-    assert server._state["quizzes"] == {}
+    assert engine._state["pending"] == []
+    assert engine._state["quizzes"] == {}
 
 
 def test_check_pending_reports_unavailable(env, monkeypatch):
     gen = UnavailableGenerator()
-    monkeypatch.setattr(server, "generator", gen)
+    monkeypatch.setattr(engine, "generator", gen)
     _set_diff(env["diff"], "redis 缓存穿透")
-    r = server.check_pending_quiz()
+    r = engine.next_quiz()
     assert r["ok"] is True and r["has_pending"] is False
     assert "unavailable" in r and r["unavailable"]
     assert "生成失败" in r["note"]
     assert r.get("quiz") is None
 
 
-def test_generate_quiz_tool_returns_unavailable(env, monkeypatch):
+def test_create_quiz_tool_returns_unavailable(env, monkeypatch):
     gen = UnavailableGenerator()
-    monkeypatch.setattr(server, "generator", gen)
+    monkeypatch.setattr(engine, "generator", gen)
 
     class FakeKB:
         def get(self, qid):
@@ -63,8 +63,8 @@ def test_generate_quiz_tool_returns_unavailable(env, monkeypatch):
                     "difficulty": "medium", "question": "如何解决缓存穿透？",
                     "options": {}, "answer": "", "analysis": "来源: x.md"}
 
-    monkeypatch.setattr(server, "kb", FakeKB())
-    r = server.generate_quiz("kp-x", context="")
+    monkeypatch.setattr(engine, "kb", FakeKB())
+    r = engine.create_quiz("kp-x", context="")
     assert r["ok"] is False
     assert "未配置 LLM" in r["reason"]
     assert "quiz_id" not in r and "options" not in r
@@ -72,9 +72,9 @@ def test_generate_quiz_tool_returns_unavailable(env, monkeypatch):
 
 def test_same_context_does_not_retry_generation(env, monkeypatch):
     gen = UnavailableGenerator()
-    monkeypatch.setattr(server, "generator", gen)
+    monkeypatch.setattr(engine, "generator", gen)
     _set_diff(env["diff"], "redis 缓存穿透")
-    server.check_pending_quiz()
+    engine.next_quiz()
     assert gen.calls == 1
-    server.check_pending_quiz()
+    engine.next_quiz()
     assert gen.calls == 1  # 去重指纹生效，失败结果不被反复重试

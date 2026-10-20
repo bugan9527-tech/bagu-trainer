@@ -4,17 +4,16 @@
 """
 from pathlib import Path
 
-# 在导入 server 之前把 CONFIG_PATH 指向不存在的文件，
+# 在导入 engine 之前把 CONFIG_PATH 指向不存在的文件，
 # 保证模块导入期 load_config() 不会读取真实 config.json
 import bagu_trainer.config as config_mod  # noqa: E402
 import bagu_trainer.secrets as secrets_mod  # noqa: E402
-import bagu_trainer.desktop_bridge as desktop_bridge  # noqa: E402
 
 config_mod.CONFIG_PATH = Path(__file__).resolve().parent / "__no_config__.json"
 
 import pytest  # noqa: E402
 
-import bagu_trainer.server as server  # noqa: E402
+import bagu_trainer.engine as engine  # noqa: E402
 
 
 class FakeDiffReader:
@@ -94,15 +93,12 @@ class FakeGenerator:
 def env(monkeypatch, tmp_path):
     """每个用例重置服务内存态，并注入全 fake 依赖 + 独立临时 SQLite；
     同时禁用环境变量与真实 keyring，保证密钥解析 100% 确定"""
-    server._state["quizzes"].clear()
-    server._state["pending"].clear()
-    server._state["seen"].clear()
-    server._state["seen_set"].clear()
-    server._diff_readers.clear()
-    server._store = None  # 每个用例独立的临时学习数据库
-    # Never forward a test operation to a user's running desktop engine.
-    monkeypatch.setattr(desktop_bridge, "desktop_running", lambda: False)
-    monkeypatch.setattr(server, "desktop_running", lambda: False)
+    engine._state["quizzes"].clear()
+    engine._state["pending"].clear()
+    engine._state["seen"].clear()
+    engine._state["seen_set"].clear()
+    engine._diff_readers.clear()
+    engine._store = None  # 每个用例独立的临时学习数据库
 
     # 测试隔离：不读取用户本机环境变量里的 Key、不触碰真实凭据库
     monkeypatch.delenv(secrets_mod.ENV_KEY, raising=False)
@@ -112,7 +108,7 @@ def env(monkeypatch, tmp_path):
 
     cfg = {
         "trae_home": None,
-        "project_roots": [str(server.PROJECT_ROOT)],
+        "project_roots": [str(engine.PROJECT_ROOT)],
         "max_quizzes_per_hit": 1,
         "session_recent_minutes": 180,
         "session_ingest": False,
@@ -126,15 +122,15 @@ def env(monkeypatch, tmp_path):
         "seen_hash_capacity": 100,
         "db_path": str(tmp_path / "trainer.db"),  # 临时库：不落真实用户数据目录
     }
-    monkeypatch.setattr(server, "cfg", cfg)
-    monkeypatch.setattr(server, "load_config", lambda: {**cfg, **caps})
-    monkeypatch.setattr(server, "find_trae_home", lambda cfg_home=None: None)
+    monkeypatch.setattr(engine, "cfg", cfg)
+    monkeypatch.setattr(engine, "load_config", lambda: {**cfg, **caps})
+    monkeypatch.setattr(engine, "find_trae_home", lambda cfg_home=None: None)
     fake_diff = FakeDiffReader()
-    monkeypatch.setattr(server, "DiffReader", lambda root: fake_diff)
+    monkeypatch.setattr(engine, "DiffReader", lambda root: fake_diff)
     fake_gen = FakeGenerator()
-    monkeypatch.setattr(server, "generator", fake_gen)
+    monkeypatch.setattr(engine, "generator", fake_gen)
     fake_matcher = FakeMatcher()
-    monkeypatch.setattr(server, "matcher", fake_matcher)
+    monkeypatch.setattr(engine, "matcher", fake_matcher)
 
     ctx = {"cfg": cfg, "caps": caps, "diff": fake_diff,
            "gen": fake_gen, "matcher": fake_matcher}

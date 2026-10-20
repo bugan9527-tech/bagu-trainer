@@ -38,9 +38,9 @@ python -m bagu_trainer.secrets migrate
 ## Key 轮换（换新 Key）
 
 1. 在服务商控制台创建新 Key，并吊销旧 Key；
-2. 用户对 AI 说「配置 LLM」并提供新 Key（`configure_llm` 工具验证后写入凭据管理器，
-   config.json 不保存明文）；
-3. 或直接设置/更新环境变量 `BAGU_LLM_API_KEY` 后重启 MCP 服务；
+2. 在主窗口点击「配置出题模型」，输入新 Key 并保存到凭据管理器，
+   config.json 不保存明文；
+3. 或直接设置/更新环境变量 `BAGU_LLM_API_KEY` 后重启桌面程序；
 4. 若曾存在旧明文：确认 `config.json` 的 `llm.api_key` 为 `""`。
 
 ## 隐私边界（相关配置）

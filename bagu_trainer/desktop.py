@@ -21,7 +21,7 @@ def main(argv=None):
         root.update_idletasks()
         root.destroy()
         return 0
-    from .desktop_bridge import OwnerLock, BridgeServer, remote_call
+    from .desktop_instance import OwnerLock, WindowBroker, remote_call
     owner = OwnerLock()
     if not owner.acquire():
         if not options.background:
@@ -33,11 +33,11 @@ def main(argv=None):
     bridge = None
     try:
         # Lazy import: the singleton lock is acquired before loading the engine.
-        from . import server
+        from . import engine
         from .desktop_monitor import DesktopMonitor
-        monitor = DesktopMonitor(server)
+        monitor = DesktopMonitor(engine)
         app = DesktopApp(monitor, options.background)
-        bridge = BridgeServer(monitor.dispatch, owner)
+        bridge = WindowBroker(monitor.window_command, owner)
         bridge.start()
         app.run()
     finally:

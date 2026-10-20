@@ -5,7 +5,7 @@ import json
 import pytest
 
 import bagu_trainer.quiz_generator as qg
-import bagu_trainer.server as server
+import bagu_trainer.engine as engine
 from bagu_trainer.fallback_bank import (
     find_fallback,
     load_fallback_quizzes,
@@ -211,25 +211,25 @@ def test_fallback_selection_rejects_generic_question_words():
         assert find_fallback(kp) is None
 
 
-def test_generate_quiz_tool_serves_fallback_id(env, monkeypatch):
+def test_create_quiz_tool_serves_fallback_id(env, monkeypatch):
     class EmptyKB:
         def get(self, qid):
             return None
 
-    monkeypatch.setattr(server, "kb", EmptyKB())
-    monkeypatch.setattr(server, "generator", qg.QuizGenerator())
+    monkeypatch.setattr(engine, "kb", EmptyKB())
+    monkeypatch.setattr(engine, "generator", qg.QuizGenerator())
     monkeypatch.setattr(qg, "load_config", lambda: {})
-    result = server.generate_quiz("fallback-001", context="HTTP 并发场景")
+    result = engine.create_quiz("fallback-001", context="HTTP 并发场景")
     assert result["ok"] is True
     assert result["generated_by"] == "fallback"
     assert sorted(result["options"]) == ["A", "B", "C", "D"]
-    internal = server._state["quizzes"][result["quiz_id"]]
+    internal = engine._state["quizzes"][result["quiz_id"]]
     assert internal["answer"] in ("A", "B", "C", "D")
     assert internal["analysis"].strip()
 
 
 def test_startup_log_reports_offline_count(env, capsys):
-    server._startup_log()
+    engine._startup_log()
     err = capsys.readouterr().err
     assert "已验证回退题:" in err
     assert f"当前离线可出 {len(load_fallback_quizzes())} 道" in err

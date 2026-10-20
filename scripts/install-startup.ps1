@@ -26,7 +26,7 @@ try {
 }
 $pythonwExe = Join-Path (Split-Path -Parent $resolvedPython) 'pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonwExe)) { throw 'pythonw.exe was not found.' }
-& $resolvedPython -B -c 'import tkinter; import mcp; import keyring'
+& $resolvedPython -B -c 'import tkinter; import keyring'
 if ($LASTEXITCODE -ne 0) { throw 'Install requirements.txt and enable Python tkinter before installing startup.' }
 & $resolvedPython -B $entryPoint --check-runtime
 if ($LASTEXITCODE -ne 0) { throw 'The desktop window could not initialize. Startup was not installed.' }
