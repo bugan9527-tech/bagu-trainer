@@ -24,6 +24,9 @@ PowerShell；保留旁边的 `_internal`。使用、旧数据迁移和升级见 
 工作流构建、测试、生成 SHA-256，并上传草稿 Release；发布说明提供下载入口和中文首次使用步骤。
 工作流进入默认分支后才有手动按钮；PR 自动检查只构建和测试，不创建 Release。
 流程、权限及失败重跑见 [发布说明](WINDOWS_PORTABLE.md)。
+本轮已通过 [实际手动构建](https://github.com/bugan9527-tech/bagu-trainer/actions/runs/39484367281)，
+并生成 [v0.1.0 草稿及附件](https://github.com/bugan9527-tech/bagu-trainer/releases)；
+代码在 [草稿 PR #1](https://github.com/bugan9527-tech/bagu-trainer/pull/1)，尚未合并默认分支或正式发布。
 
 [验证记录](VALIDATION.md) 区分实际 EXE/冻结调用链测试和干净系统验证；当前开发机已装 Python/Git，
 禁用 PATH 不代表已完成全新系统验收。另附 [干净 Windows 验收包和流程](CLEAN_WINDOWS_ACCEPTANCE.md)。

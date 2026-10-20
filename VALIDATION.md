@@ -60,6 +60,17 @@ git diff --check
 
 ## 工作流及未覆盖项
 
+已实际手动触发并通过：[GitHub Actions 39484367281](https://github.com/bugan9527-tech/bagu-trainer/actions/runs/39484367281)。
+云端 Windows Server 2022 x64（build 20348）、CPython 3.10.11；160 项发布测试全部通过，
+独立冻结验收使用明确标注的内存凭据，首次闭环、重启和生产 EXE 换目录读取历史均通过。
+两个 job 成功后自动创建 [v0.1.0 草稿 Release](https://github.com/bugan9527-tech/bagu-trainer/releases)，
+目标为 `a768358d6dac43cad3810a9524b9d43886d4c29c`，附件包含 ZIP、SHA-256、JUnit 和 `ACCEPTANCE.json`。
+草稿附件已回下载，重新核对归档和逐文件 hash、干净源码提交、JUnit 以及冻结验收记录，通过。
+云端 ZIP SHA-256：`2761edf3be4ededf0d9c1412c04a319b202ed545f2c260c3ba9d7dbb79198ff5`。
+同一云端 ZIP 又在本机 Windows 10 的中文/空格目录解压，清空 PATH 后实际 EXE 诊断、首次窗口
+及重复启动通过，报告保存在本机 `scratch/cloud-download-check/PACKAGE.json`。
+这些云端机器仍带开发工具，因此不计为干净系统实测。
+
 工作流支持 `workflow_dispatch`；PR 只构建/测试。手动运行且所有检查通过后，独立 job 才有
 Release 写权限并上传草稿。官方 `actionlint 1.7.12` 本地检查通过；云端 run 和草稿链接以实际创建结果为准。
 首次 windows-2022 执行发现西文代码页下的编码问题：内部提取器打印中文路径会抛出
@@ -67,6 +78,7 @@ Release 写权限并上传草稿。官方 `actionlint 1.7.12` 本地检查通过
 已将内部构建输出改为日志，源码及 EXE 统一使用原生 `IShellLinkW`，测试也改为 Unicode 读取；
 构建中断用例显式使用 `cp1252:strict` 重现非中文环境。修复后的云端结果以对应 run 为准。
 手动按钮需要工作流进入默认分支，依据 [GitHub 官方规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
+本轮 PR 注册工作流后，通过 GitHub CLI 对开发分支执行手动调度已成功；默认分支仍待审阅合并。
 
 - **尚未在未安装 Python/Git 的全新 Windows 上执行。** 已提供 `.wsb` 和无需额外开发工具的引导/验收包，待具备 Sandbox 或干净 VM 的机器执行。
 - 本机 computer-use 读到窗口标题和控件树，但截图连续返回 `FrameArrived timed out` / `window capture timed out`。
