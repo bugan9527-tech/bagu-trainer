@@ -19,6 +19,11 @@ python -m bagu_trainer.secrets check
 
 ## 从旧 config.json 明文 Key 迁移
 
+便携版和源码当前默认配置为 `%LOCALAPPDATA%\BaguTrainer\config.json`。
+下方模块命令只处理该用户配置；若旧配置仍在项目旁，先通过首次向导“迁移旧数据…”
+或 `BaguTrainer.exe --migrate-from "旧项目目录"` 复制迁移，过程会先验证凭据存储再启用新配置，
+旧目录保留。便携版无须另装 Python。
+
 ```powershell
 python -m bagu_trainer.secrets migrate
 ```

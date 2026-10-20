@@ -13,7 +13,7 @@ import time
 import uuid
 from pathlib import Path
 
-from . import secrets
+from . import secrets, config
 from .config import PROJECT_ROOT, load_config
 from .diff_reader import DiffReader
 from .knowledge_base import KnowledgeBase
@@ -75,32 +75,26 @@ def _normalize_project_root(project_root) -> str:
 
 
 def _db_path() -> str:
-    """SQLite 路径：config db_path（相对路径按项目根解析）或默认 data/trainer.db"""
-    p = (load_config().get("db_path") or "").strip()
-    if p:
-        path = Path(p).expanduser()
-        return str(path if path.is_absolute() else (PROJECT_ROOT / path))
-    return str(PROJECT_ROOT / "data" / "trainer.db")
+    """SQLite 路径：config db_path（相对用户数据目录）或默认 data/trainer.db。"""
+    return str(config.db_path((load_config().get("db_path") or "").strip()))
 # 桌面监测线程与学习操作共用同一把锁，串行化「采集->匹配->生成->清理」全流程，
 # 避免并发重复生成/重复计费
 _STATE_LOCK = threading.RLock()
 # watch 模式监听器按项目根目录跨调用复用（快照不持久会永远检测不到变更）
 _diff_readers = {}
 
-CONFIG_WINDOW = str(PROJECT_ROOT / "scripts" / "config_window.py")
-
-
 def _open_config_window() -> bool:
     """以独立进程弹出 AI 接口配置窗口（tkinter 在独立进程运行）"""
     try:
+        from .paths import command
         subprocess.Popen(
-            [sys.executable, CONFIG_WINDOW],
+            command("--configure"),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         return True
     except OSError as e:
-        print(f"[config] 弹出配置窗口失败: {e}", file=sys.stderr)
+        print(f"[config] 弹出配置窗口失败（{type(e).__name__}）", file=sys.stderr)
         return False
 
 

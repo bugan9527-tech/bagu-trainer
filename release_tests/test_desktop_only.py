@@ -1,4 +1,5 @@
 """Desktop startup and settings must work without any protocol SDK imports."""
+import json
 import os
 import shutil
 import subprocess
@@ -16,7 +17,14 @@ def test_desktop_and_settings_start_when_protocol_sdk_imports_are_blocked(tmp_pa
         shutil.copytree(source / directory, project / directory,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     (project / "data").mkdir()
-    (project / "data" / "questions.json").write_text("[]\n", encoding="utf-8")
+    (project / "data" / "questions.json").write_text(json.dumps([{
+        "id": "release-1", "knowledge_point": "缓存", "question": "缓存如何失效？",
+        "tags": ["cache"], "keywords": ["redis"], "difficulty": "easy",
+    }]), encoding="utf-8")
+    (project / "config.json").write_text(json.dumps({
+        "project_roots": [str(project)],
+        "llm": {"base_url": "https://example.invalid/v1", "model": "test", "timeout_sec": 30},
+    }), encoding="utf-8")
     probe = r'''
 import runpy
 import sys
@@ -56,8 +64,8 @@ assert 'mcp' not in sys.modules
 print('desktop and settings started without protocol SDK')
 '''
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1",
-               PYTHON_KEYRING_BACKEND="keyring.backends.null.Keyring")
-    env.pop("BAGU_LLM_API_KEY", None)
+               PYTHON_KEYRING_BACKEND="keyring.backends.null.Keyring", BAGU_USER_DATA_DIR=str(project))
+    env["BAGU_LLM_API_KEY"] = "release-test-key"
     env.pop("PYTHONPATH", None)
     result = subprocess.run([sys.executable, "-B", "-c", probe, str(project)],
                             cwd=tmp_path, env=env, capture_output=True, text=True,

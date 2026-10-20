@@ -27,14 +27,16 @@
 import json
 from pathlib import Path
 
-from .config import PROJECT_ROOT
+from .config import data_dir
 
-BANK_PATH = PROJECT_ROOT / "data" / "questions.json"
+BANK_PATH = data_dir() / "questions.json"
 
 
 class KnowledgeBase:
-    def __init__(self, path=BANK_PATH):
-        path = Path(path)
+    def __init__(self, path=None):
+        from .bank_storage import active_bank_dir
+        path = Path(path) if path is not None else active_bank_dir() / "questions.json"
+        self.concepts_path = path.parent / "question_concepts.json"
         if not path.exists():
             raise FileNotFoundError(
                 f"题库不存在：{path}。源码发布版不附带第三方题库；"

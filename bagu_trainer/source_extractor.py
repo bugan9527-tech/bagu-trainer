@@ -22,9 +22,9 @@ import unicodedata
 from functools import lru_cache
 from pathlib import Path
 
-from .config import PROJECT_ROOT
+from .config import USER_DATA_ROOT
 
-REPOS_DEFAULT = PROJECT_ROOT / "interview-banks" / "repos"
+REPOS_DEFAULT = USER_DATA_ROOT / "interview-banks" / "repos"
 EXCERPT_LIMIT_DEFAULT = 1500
 
 # 有效正文最少字符数（只统计中文、英文和数字）。低于该阈值的片段不进入 LLM。

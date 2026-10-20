@@ -9,6 +9,7 @@ from pathlib import Path
 import bagu_trainer.config as config_mod  # noqa: E402
 import bagu_trainer.secrets as secrets_mod  # noqa: E402
 
+config_mod.USER_DATA_ROOT = Path(__file__).resolve().parents[1]
 config_mod.CONFIG_PATH = Path(__file__).resolve().parent / "__no_config__.json"
 
 import pytest  # noqa: E402

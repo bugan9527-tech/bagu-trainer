@@ -9,8 +9,9 @@ import threading
 import uuid
 from pathlib import Path
 from multiprocessing.connection import Client, Listener
+from .config import USER_DATA_ROOT
 
-RUNTIME = Path(__file__).resolve().parent.parent / "data" / ".desktop-runtime"
+RUNTIME = Path(USER_DATA_ROOT) / "runtime"
 WINDOW_COMMANDS = frozenset({"_show_dashboard", "_desktop_status"})
 
 

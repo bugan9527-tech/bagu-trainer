@@ -71,7 +71,7 @@ def test_first_build_without_existing_bank_profiles_or_fallbacks(tmp_path):
         "查询可以利用索引缩小扫描范围。维护索引需要存储空间，"
         "插入和更新数据也可能增加索引维护成本，因此应结合查询条件选择索引。\n",
         encoding="utf-8")
-    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1", BAGU_USER_DATA_DIR=str(tmp_path))
     for arguments in (
         ["scripts/dedupe_questions.py", "--repos", "JavaGuide"],
         ["scripts/import_questions.py"],

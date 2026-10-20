@@ -25,8 +25,10 @@ def relocated_project(tmp_path):
 def test_example_config_uses_relocated_install_from_another_cwd(tmp_path):
     project = relocated_project(tmp_path)
     shutil.copy2(ROOT / "config.example.json", project / "config.json")
-    (project / "data").mkdir()
-    (project / "data" / "questions.json").write_text("[]\n", encoding="utf-8")
+    user = tmp_path / "用户 Local AppData" / "BaguTrainer"
+    (user / "data").mkdir(parents=True)
+    shutil.copy2(ROOT / "config.example.json", user / "config.json")
+    (user / "data" / "questions.json").write_text("[]\n", encoding="utf-8")
     elsewhere = tmp_path / "unrelated directory"
     elsewhere.mkdir()
     probe = """
@@ -45,18 +47,18 @@ print(json.dumps({
 }))
 """
     # The subprocess imports only the copied package and never starts the desktop.
-    env = dict(os.environ, PYTHONPATH=str(project), PYTHONIOENCODING="utf-8")
+    env = dict(os.environ, PYTHONPATH=str(project), PYTHONIOENCODING="utf-8", BAGU_USER_DATA_DIR=str(user))
     result = subprocess.run([sys.executable, "-B", "-c", probe], cwd=elsewhere,
                             env=env, capture_output=True, text=True,
                             encoding="utf-8", timeout=30)
     assert result.returncode == 0, result.stderr
     observed = json.loads(result.stdout)
     assert Path(observed["project"]) == project
-    assert Path(observed["config"]) == project / "config.json"
-    assert [Path(p) for p in observed["roots"]] == [project]
+    assert Path(observed["config"]) == user / "config.json"
+    assert observed["roots"] == []
     assert observed["trae"] == observed["expected_trae"]
-    assert Path(observed["db"]) == project / "data" / "trainer.db"
-    assert Path(observed["runtime"]) == project / "data" / ".desktop-runtime"
+    assert Path(observed["db"]) == user / "data" / "trainer.db"
+    assert Path(observed["runtime"]) == user / "runtime"
     assert not (project / "data" / "trainer.db").exists()
 
 

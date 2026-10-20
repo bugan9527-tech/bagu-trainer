@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""配置加载：项目根下 config.json（可选）。
+"""配置加载：LOCALAPPDATA/BaguTrainer 下 config.json（可选）。
 不存在时用默认值；LLM 未配置时合成出题不可用（仅题库已验证选择题可出），
 其余知识点返回明确 unavailable（不静默、不出空题）。
 
@@ -12,12 +12,24 @@ import sys
 import tempfile
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "config.json"
+from .paths import RESOURCE_ROOT, USER_ROOT
+
+PROJECT_ROOT = RESOURCE_ROOT  # Read-only resources; retained for callers using this name.
+USER_DATA_ROOT = USER_ROOT
+CONFIG_PATH = USER_DATA_ROOT / "config.json"
+
+
+def data_dir():
+    return Path(USER_DATA_ROOT) / "data"
+
+
+def db_path(value=""):
+    path = Path(value).expanduser() if value else Path("data") / "trainer.db"
+    return path if path.is_absolute() else Path(USER_DATA_ROOT) / path
 
 DEFAULTS = {
     "trae_home": str(Path.home() / ".trae-cn"),
-    "project_roots": [str(PROJECT_ROOT)],
+    "project_roots": [],
     "max_quizzes_per_hit": 1,
     "session_recent_minutes": 180,
     "session_ingest": False,         # 会话摄取默认关闭：无法可靠判断项目归属时绝不读会话
@@ -27,7 +39,7 @@ DEFAULTS = {
     "max_pending_quizzes": 20,     # pending 队列容量上限，超量淘汰最旧
     "max_quizzes": 200,            # 内存保留 quiz 总数上限，超量淘汰最旧
     "seen_hash_capacity": 1000,    # 去重指纹容量上限，超量淘汰最旧指纹
-    "db_path": "",                 # 学习数据 SQLite 路径；空=默认 PROJECT_ROOT/data/trainer.db（相对路径按项目根解析）
+    "db_path": "",                 # 空=用户目录/data/trainer.db；相对路径按用户数据目录解析
 }
 
 
@@ -42,10 +54,22 @@ def load_config() -> dict:
     return cfg
 
 
+def read_user_config() -> dict:
+    """Strict read for editors: keep empty/false fields and reject broken files."""
+    path = Path(CONFIG_PATH)
+    if not path.exists():
+        return {}
+    user = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(user, dict):
+        raise ValueError("config.json 必须是 JSON 对象")
+    return user
+
+
 def _write_config_atomic(cfg: dict) -> None:
     """在同目录写临时文件并原子替换，避免配置只写了一半。"""
     payload = json.dumps(cfg, ensure_ascii=False, indent=2)
     target = Path(CONFIG_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = None
     try:
         fd, temp_name = tempfile.mkstemp(
@@ -76,7 +100,9 @@ def update_llm(llm: dict, *, clear_api_key: bool = False) -> str:
     key = (llm.get("api_key") or "").strip()
     if key and clear_api_key:
         raise ValueError("api_key 与 clear_api_key=True 不能同时使用")
-    cfg = load_config()
+    # Saving a model must not invent watched projects or replace an explicit
+    # empty/false setting with runtime defaults, especially during first run.
+    cfg = read_user_config()
     if key:
         stored = secrets.save_api_key(key)
         if stored == "fallback":

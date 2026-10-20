@@ -9,6 +9,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="AI 八股训练器桌面版")
     parser.add_argument("--background", action="store_true", help="登录时最小化启动")
     parser.add_argument("--check-runtime", action="store_true", help="验证窗口运行环境后退出")
+    parser.add_argument("--configure", action="store_true", help="打开模型配置窗口")
+    parser.add_argument("--migrate-from", help="从旧版项目目录复制配置、题库和学习记录")
+    parser.add_argument("--check-package", metavar="REPORT", help="验证便携运行环境并写入诊断 JSON")
+    parser.add_argument("--install-startup", action="store_true", help="启用登录自启动")
+    parser.add_argument("--uninstall-startup", action="store_true", help="取消登录自启动")
+    parser.add_argument("--startup-directory", help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
     if os.name != "nt":
         raise SystemExit("桌面自启动当前仅支持 Windows")
@@ -21,6 +27,21 @@ def main(argv=None):
         root.update_idletasks()
         root.destroy()
         return 0
+    if options.configure:
+        from .settings_window import build_window
+        build_window().mainloop()
+        return 0
+    if options.install_startup or options.uninstall_startup:
+        from . import login_startup
+        if options.uninstall_startup:
+            login_startup.uninstall(options.startup_directory)
+        else:
+            login_startup.install(options.startup_directory)
+        return 0
+    if options.check_package and not options.migrate_from:
+        from .runtime import package_report
+        package_report(options.check_package)
+        return 0
     from .desktop_instance import OwnerLock, WindowBroker, remote_call
     owner = OwnerLock()
     if not owner.acquire():
@@ -32,14 +53,19 @@ def main(argv=None):
         return 0
     bridge = None
     try:
-        # Lazy import: the singleton lock is acquired before loading the engine.
-        from . import engine
-        from .desktop_monitor import DesktopMonitor
-        monitor = DesktopMonitor(engine)
-        app = DesktopApp(monitor, options.background)
-        bridge = WindowBroker(monitor.window_command, owner)
+        if options.migrate_from:
+            from .migration import migrate_legacy
+            migrate_legacy(options.migrate_from)
+        if options.check_package:
+            from .runtime import package_report
+            package_report(options.check_package)
+            return 0
+        # The broker also activates setup while configuration/engine is not ready.
+        from .startup import StartupCoordinator
+        coordinator = StartupCoordinator()
+        bridge = WindowBroker(coordinator.window_command, owner)
         bridge.start()
-        app.run()
+        coordinator.run(options.background)
     finally:
         if bridge is not None:
             bridge.close()
@@ -49,21 +75,21 @@ def main(argv=None):
 
 
 class DesktopApp:
-    def __init__(self, monitor, background=False):
+    def __init__(self, monitor, background=False, events=None):
         from .tk_runtime import prepare_tk
         prepare_tk()
         import tkinter as tk
         from tkinter import ttk
         self.tk, self.ttk = tk, ttk
         self.monitor = monitor
-        self.events = queue.Queue()
+        self.events = events if events is not None else queue.Queue()
         self.monitor.ui_post = self.events.put
         self.jobs = queue.Queue()
         self.stop = threading.Event()
         self.root = tk.Tk()
         self.root.title("AI 八股训练器")
-        self.root.geometry("560x290")
-        self.root.minsize(480, 270)
+        self.root.geometry("560x330")
+        self.root.minsize(480, 320)
         self.root.option_add("*Font", ("Microsoft YaHei UI", 10))
         self.popup = None
         self.answer = tk.StringVar(self.root)
@@ -81,6 +107,11 @@ class DesktopApp:
         self.pause_button = ttk.Button(row, text="暂停监听", command=self._pause)
         self.pause_button.pack(side="left", padx=6)
         ttk.Button(panel, text="配置出题模型", command=lambda: self.jobs.put(("configure", None))).pack(anchor="w", pady=8)
+        login = self.tk.Menu(self.root, tearoff=False)
+        login.add_command(label="启用登录自启动", command=lambda: self.jobs.put(("startup", True)))
+        login.add_command(label="取消登录自启动", command=lambda: self.jobs.put(("startup", False)))
+        menu = ttk.Menubutton(panel, text="登录自启动", menu=login)
+        menu.pack(anchor="w")
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.after(200, self._drain)
         self.root.after_idle(self.root.focus_set)
@@ -110,6 +141,10 @@ class DesktopApp:
                             self.events.put(("status", "当前没有已展示的待答题。"))
                     elif name == "configure":
                         self.monitor.engine.open_config_window()
+                    elif name == "startup":
+                        from . import login_startup
+                        login_startup.install() if value else login_startup.uninstall()
+                        self.events.put(("status", "已启用登录自启动。" if value else "已取消登录自启动。"))
                     elif name == "add_project":
                         from .desktop_monitor import add_project
                         add_project(value)

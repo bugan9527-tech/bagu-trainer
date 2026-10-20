@@ -15,9 +15,9 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from .config import PROJECT_ROOT
+from .config import data_dir
 
-DEFAULT_CONCEPTS_PATH = PROJECT_ROOT / "data" / "question_concepts.json"
+DEFAULT_CONCEPTS_PATH = data_dir() / "question_concepts.json"
 
 PROFILE_KEYS = (
     "concept_terms",
@@ -31,14 +31,20 @@ MAX_TERMS = 10
 MAX_SUMMARY_CHARS = 300
 
 
-@lru_cache(maxsize=4)
 def load_concept_profiles(path=None) -> dict:
     """按题目 ID 加载概念档案；任何失败都返回空 dict（调用方无需 try）。
 
     进程内缓存：同一个进程里 Matcher 多次初始化 / 多个 Matcher 实例
     共享一次 JSON 解析（5443 份档案约数 MB，重复解析会拖慢构建）。
     """
-    path = Path(path) if path is not None else DEFAULT_CONCEPTS_PATH
+    from .bank_storage import active_bank_dir
+    path = Path(path) if path is not None else active_bank_dir() / "question_concepts.json"
+    return _load_concept_profiles(str(path))
+
+
+@lru_cache(maxsize=4)
+def _load_concept_profiles(path) -> dict:
+    path = Path(path)
     if not path.exists():
         return {}
     try:
@@ -47,6 +53,10 @@ def load_concept_profiles(path=None) -> dict:
         return {}
     profiles = data.get("profiles") or {}
     return {str(qid): p for qid, p in profiles.items() if isinstance(p, dict)}
+
+
+load_concept_profiles.cache_clear = _load_concept_profiles.cache_clear
+load_concept_profiles.cache_info = _load_concept_profiles.cache_info
 
 
 def validate_profiles(question_ids, profiles) -> tuple:

@@ -21,6 +21,7 @@ id_ed25519
 __pycache__/
 *.py[cod]
 .venv/
+.venv-build/
 venv/
 ENV/
 .pytest_cache/
@@ -44,6 +45,10 @@ coverage.xml
 *.sqlite3
 *.sqlite3-*
 /data/.desktop-runtime/
+/data/.bank-builds/
+/data/banks/
+/data/active-bank.json
+/data/onboarding.json
 
 # 题库下载副本和中间产物；下载、导入脚本仍保留
 /interview-banks/repos/
@@ -62,6 +67,7 @@ coverage.xml
 # 本地实验、生成文档和截图
 /scratch/
 /output/
+/validation/
 /.screenshots/
 /AI_八股训练器题库目录_*.docx
 

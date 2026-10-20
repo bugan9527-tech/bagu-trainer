@@ -17,7 +17,8 @@ foreach ($repository in $Repositories) {
     throw "Unknown source: $repository. See interview-banks/sources.json."
   }
 }
-$reposDir = Join-Path $projectRoot "interview-banks/repos"
+$userDirectory = if ($env:BAGU_USER_DATA_DIR) { $env:BAGU_USER_DATA_DIR } else { Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'BaguTrainer' }
+$reposDir = Join-Path $userDirectory "interview-banks/repos"
 New-Item -ItemType Directory -Force -Path $reposDir | Out-Null
 $gitOptions = @()
 if ($Proxy) {

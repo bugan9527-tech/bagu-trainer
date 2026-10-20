@@ -5,6 +5,16 @@ from pathlib import Path
 
 
 def prepare_tk():
+    if getattr(sys, "frozen", False):
+        # PyInstaller's _tkinter hook collects these directories and DLLs.
+        root = Path(sys._MEIPASS)
+        for name, directory in (("TCL_LIBRARY", "_tcl_data"), ("TK_LIBRARY", "_tk_data")):
+            path = root / directory
+            if not path.is_dir():
+                raise RuntimeError("打包的 Tcl/Tk 资源不完整")
+            os.environ[name] = str(path)
+        os.chdir(root)
+        return
     # This helper is used only by dedicated GUI processes before their workers
     # start. Project/config/database paths are absolute. A stable interpreter cwd
     # avoids Tcl's path-normalization failures with redirected profile folders.
