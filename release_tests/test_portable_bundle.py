@@ -184,13 +184,8 @@ def test_native_startup_shortcut_points_to_exe(tmp_path):
     invoke(exe, env, "--install-startup", "--startup-directory", startup)
     shortcut = startup / "BaguTrainer.lnk"
     assert shortcut.is_file()
-    quoted = "'" + str(shortcut).replace("'", "''") + "'"
-    inspect = ("[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-               "$s=(New-Object -ComObject WScript.Shell).CreateShortcut(" + quoted + "); "
-               "@{target=$s.TargetPath; arguments=$s.Arguments; cwd=$s.WorkingDirectory} | ConvertTo-Json -Compress")
-    inspected = subprocess.run(["powershell.exe", "-NoProfile", "-Command", inspect],
-                               capture_output=True, text=True, encoding="utf-8", timeout=15, check=True)
-    details = json.loads(inspected.stdout.lstrip("\ufeff"))
+    from bagu_trainer.login_startup import read_shortcut
+    details = read_shortcut(shortcut)
     assert Path(details["target"]) == exe
     assert details["arguments"] == "--background"
     assert Path(details["cwd"]) == installation

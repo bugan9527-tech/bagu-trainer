@@ -2,6 +2,7 @@
 import ctypes
 import os
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import paths
@@ -18,25 +19,16 @@ def shortcut_directory():
     return Path(buffer.value)
 
 
-def install(directory=None):
+@contextmanager
+def _shell_link():
     if os.name != "nt":
         raise OSError("登录自启动仅支持 Windows")
-    destination = Path(directory) if directory else shortcut_directory()
-    if not destination.is_dir():
-        raise OSError("自启动目录不存在")
-    target = Path(paths.command()[0])
-    arguments = "--background" if paths.FROZEN else '-B "' + str(paths.RESOURCE_ROOT / "scripts" / "start_desktop.py") + '" --background'
-    if not paths.FROZEN:
-        target = target.with_name("pythonw.exe")
-    if not target.is_file():
-        raise OSError("找不到自启动可执行文件")
     # IShellLinkW / IPersistFile vtables, with pointer-sized calls on x64.
     ole = ctypes.OleDLL("ole32")
     hr = ole.CoInitializeEx(None, 2)
     if hr not in (0, 1):
         raise OSError("COM 初始化失败")
     link, persist = ctypes.c_void_p(), ctypes.c_void_p()
-    temporary = destination / (".bagu-" + uuid.uuid4().hex + ".lnk")
     def call(pointer, index, types, *args):
         table = ctypes.cast(pointer, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
         result = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, *types)(table[index])(pointer, *args)
@@ -47,22 +39,50 @@ def install(directory=None):
         result = ole.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid), ctypes.byref(link))
         if result < 0:
             raise OSError("无法创建 Windows 快捷方式")
-        call(link, 20, [ctypes.c_wchar_p], str(target))
-        call(link, 11, [ctypes.c_wchar_p], arguments)
-        call(link, 9, [ctypes.c_wchar_p], str(paths.INSTALL_ROOT))
-        call(link, 7, [ctypes.c_wchar_p], "AI 八股训练器 · 登录时后台启动")
-        call(link, 15, [ctypes.c_int], 7)
         persist_iid = _guid("0000010B-0000-0000-C000-000000000046")
         call(link, 0, [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)], ctypes.byref(persist_iid), ctypes.byref(persist))
-        call(persist, 6, [ctypes.c_wchar_p, ctypes.c_int], str(temporary), 1)
-        os.replace(temporary, destination / "BaguTrainer.lnk")
+        yield link, persist, call
     finally:
         for pointer in (persist, link):
             if pointer:
                 call(pointer, 2, [])
         ole.CoUninitialize()
+
+
+def install(directory=None):
+    destination = Path(directory) if directory else shortcut_directory()
+    if not destination.is_dir():
+        raise OSError("自启动目录不存在")
+    target = Path(paths.command()[0])
+    arguments = "--background" if paths.FROZEN else '-B "' + str(paths.RESOURCE_ROOT / "scripts" / "start_desktop.py") + '" --background'
+    if not paths.FROZEN:
+        target = target.with_name("pythonw.exe")
+    if not target.is_file():
+        raise OSError("找不到自启动可执行文件")
+    temporary = destination / (".bagu-" + uuid.uuid4().hex + ".lnk")
+    try:
+        with _shell_link() as (link, persist, call):
+            call(link, 20, [ctypes.c_wchar_p], str(target))
+            call(link, 11, [ctypes.c_wchar_p], arguments)
+            call(link, 9, [ctypes.c_wchar_p], str(paths.INSTALL_ROOT))
+            call(link, 7, [ctypes.c_wchar_p], "AI 八股训练器 · 登录时后台启动")
+            call(link, 15, [ctypes.c_int], 7)
+            call(persist, 6, [ctypes.c_wchar_p, ctypes.c_int], str(temporary), 1)
+        os.replace(temporary, destination / "BaguTrainer.lnk")
+    finally:
         temporary.unlink(missing_ok=True)
     return destination / "BaguTrainer.lnk"
+
+
+def read_shortcut(path):
+    """Read .lnk metadata with Unicode COM; WScript.Shell can lose non-ACP paths."""
+    with _shell_link() as (link, persist, call):
+        call(persist, 5, [ctypes.c_wchar_p, ctypes.c_uint], str(Path(path).resolve(strict=True)), 0)
+        target, arguments, cwd = (ctypes.create_unicode_buffer(32768) for _ in range(3))
+        call(link, 3, [ctypes.c_wchar_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint], target, 32768, None, 4)
+        call(link, 10, [ctypes.c_wchar_p, ctypes.c_int], arguments, 32768)
+        call(link, 8, [ctypes.c_wchar_p, ctypes.c_int], cwd, 32768)
+        return {"target": target.value, "arguments": arguments.value, "cwd": cwd.value}
 
 
 def uninstall(directory=None):

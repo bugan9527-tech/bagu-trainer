@@ -9,6 +9,7 @@
 """
 import argparse
 import json
+import logging
 import re
 import unicodedata
 from collections import defaultdict
@@ -286,17 +287,17 @@ def extract_sources(selected, repos_dir, out_dir, *, checkpoint=lambda: None, fe
         walk_repo(ent, repo, repos_dir, checkpoint)
         repo_stats[repo] = len(ent)
         all_entries.extend(ent)
-        print("[extract] %-32s %6d" % (repo, len(ent)))
+        logging.getLogger(__name__).info("[extract] %-32s %6d", repo, len(ent))
 
     # Daily-Interview-Question 的题目主体在 GitHub Issues 中，用 gh api 抓取
     n_issues = fetch_issues(all_entries) if fetch_issues is not None else 0
     if n_issues:
         repo_stats["Daily-Interview-Question"] += n_issues
-        print("[issues] Daily-Interview-Question  %6d" % n_issues)
+        logging.getLogger(__name__).info("[issues] Daily-Interview-Question %6d", n_issues)
 
-    print("[total] raw entries = %d" % len(all_entries))
+    logging.getLogger(__name__).info("[total] raw entries = %d", len(all_entries))
     kept, removed = dedupe(all_entries, checkpoint)
-    print("[dedupe] kept = %d, removed = %d" % (len(kept), len(removed)))
+    logging.getLogger(__name__).info("[dedupe] kept = %d, removed = %d", len(kept), len(removed))
 
     # 每仓库去重后的题目清单
     per_repo = defaultdict(list)
@@ -371,6 +372,6 @@ def extract_sources(selected, repos_dir, out_dir, *, checkpoint=lambda: None, fe
                 "text": r["text"], "dup_of_repo": r["dup_of"]["repo"],
                 "dup_of_text": r["dup_of"]["text"],
             }, ensure_ascii=False) + "\n")
-    print("[done] outputs ->", out_dir)
+    logging.getLogger(__name__).info("[done] outputs -> %s", out_dir)
 
     return export

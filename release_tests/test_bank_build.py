@@ -376,7 +376,8 @@ def crash(event):
 BankBuildService(root, opener=opener).build(['Snailclimb/JavaGuide'], progress=crash)
 '''
     result = subprocess.run([sys.executable, "-B", "-c", probe, str(installed.project)],
-                            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=20)
+                            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
+                            env=dict(os.environ, PYTHONUTF8="0", PYTHONIOENCODING="cp1252:strict"), timeout=20)
     assert result.returncode == 73, result.stderr
     assert {p: p.read_bytes() for p in original} == original
     assert not (installed.data / "active-bank.json").exists()

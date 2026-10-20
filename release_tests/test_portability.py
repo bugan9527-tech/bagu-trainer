@@ -85,17 +85,8 @@ def test_startup_uses_selected_python_after_relocation(tmp_path, explicit):
     assert result.returncode == 0, result.stdout + result.stderr
     shortcut = startup / "BaguTrainer.lnk"
     assert shortcut.is_file()
-    # Inspect the temporary shortcut without opening it or starting the desktop app.
-    quoted_shortcut = "'" + str(shortcut).replace("'", "''") + "'"
-    inspect = (
-        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut(" + quoted_shortcut + "); "
-        "@{target=$s.TargetPath; arguments=$s.Arguments; cwd=$s.WorkingDirectory} | ConvertTo-Json -Compress"
-    )
-    inspected = subprocess.run(["powershell.exe", "-NoProfile", "-Command", inspect],
-                               capture_output=True, text=True, encoding="utf-8", timeout=15)
-    assert inspected.returncode == 0, inspected.stderr
-    details = json.loads(inspected.stdout.lstrip("\ufeff"))
+    from bagu_trainer.login_startup import read_shortcut
+    details = read_shortcut(shortcut)
     expected_python = Path(sys.executable) if explicit else project / ".venv" / "Scripts" / "python.exe"
     assert Path(details["target"]).resolve() == expected_python.with_name("pythonw.exe").resolve()
     assert Path(details["cwd"]) == project

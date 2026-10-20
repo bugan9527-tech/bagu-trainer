@@ -42,20 +42,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Install requirements.txt and enable Python tki
 & $resolvedPython -B $entryPoint --check-runtime
 if ($LASTEXITCODE -ne 0) { throw 'The desktop window could not initialize. Startup was not installed.' }
 if (-not (Test-Path -LiteralPath $StartupDirectory)) { throw 'Startup directory does not exist.' }
-$shellObject = New-Object -ComObject WScript.Shell
-$temporaryShortcut = Join-Path ([IO.Path]::GetTempPath()) ('bagu-startup-' + [guid]::NewGuid().ToString('N') + '.lnk')
-try {
-    $shortcut = $shellObject.CreateShortcut($temporaryShortcut)
-    $shortcut.TargetPath = $pythonwExe
-    $shortcut.Arguments = '-B "' + $entryPoint + '" --background'
-    $shortcut.WorkingDirectory = $projectDirectory
-    $shortcut.WindowStyle = 7
-    $shortcut.Description = 'AI interview practice: watch code changes and display quizzes'
-    $shortcut.Save()
-    Copy-Item -LiteralPath $temporaryShortcut -Destination $shortcutPath -Force
-} finally {
-    if (Test-Path -LiteralPath $temporaryShortcut) { Remove-Item -LiteralPath $temporaryShortcut }
-}
+# The same Unicode IShellLinkW implementation is used by source and EXE modes;
+# WScript.Shell may roundtrip Chinese paths through the host ANSI code page.
+& $resolvedPython -B $entryPoint --install-startup --startup-directory $StartupDirectory
+if ($LASTEXITCODE -ne 0) { throw 'Could not create the Unicode startup shortcut.' }
 Write-Output ('Windows login startup enabled: ' + $shortcutPath)
 if (-not $NoStart) {
     Start-Process -FilePath $pythonwExe -ArgumentList @('-B', ('"' + $entryPoint + '"'), '--background') -WorkingDirectory $projectDirectory -WindowStyle Hidden

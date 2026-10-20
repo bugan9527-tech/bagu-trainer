@@ -62,6 +62,10 @@ git diff --check
 
 工作流支持 `workflow_dispatch`；PR 只构建/测试。手动运行且所有检查通过后，独立 job 才有
 Release 写权限并上传草稿。官方 `actionlint 1.7.12` 本地检查通过；云端 run 和草稿链接以实际创建结果为准。
+首次 windows-2022 执行发现西文代码页下的编码问题：内部提取器打印中文路径会抛出
+`UnicodeEncodeError`，旧 `WScript.Shell` 快捷方式读写不能可靠往返中文路径。
+已将内部构建输出改为日志，源码及 EXE 统一使用原生 `IShellLinkW`，测试也改为 Unicode 读取；
+构建中断用例显式使用 `cp1252:strict` 重现非中文环境。修复后的云端结果以对应 run 为准。
 手动按钮需要工作流进入默认分支，依据 [GitHub 官方规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 
 - **尚未在未安装 Python/Git 的全新 Windows 上执行。** 已提供 `.wsb` 和无需额外开发工具的引导/验收包，待具备 Sandbox 或干净 VM 的机器执行。
