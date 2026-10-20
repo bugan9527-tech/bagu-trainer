@@ -1,0 +1,15 @@
+{
+  "trae_home": "",
+  "project_roots": [],
+  "max_quizzes_per_hit": 1,
+  "session_recent_minutes": 180,
+  "session_ingest": false,
+  "context_char_limit": 4000,
+  "db_path": "data/trainer.db",
+  "llm": {
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "gpt-4o-mini",
+    "timeout_sec": 30
+  }
+}

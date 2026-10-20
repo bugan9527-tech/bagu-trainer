@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "audited_on": "2026-10-20",
+  "scope": "Local snapshots only; metadata is not a grant of permission. Content-specific notices and third-party references still require review.",
+  "sources": [
+    {
+      "repository": "CyC2018/CS-Notes",
+      "directory": "CS-Notes",
+      "url": "https://github.com/CyC2018/CS-Notes",
+      "audited_commit": "b70121d377cb6005eb65f12b098cd5decd905669",
+      "observed_license": "CC-BY-NC-SA-4.0",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/CyC2018/CS-Notes/blob/b70121d377cb6005eb65f12b098cd5decd905669/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "Snailclimb/JavaGuide",
+      "directory": "JavaGuide",
+      "url": "https://github.com/Snailclimb/JavaGuide",
+      "audited_commit": "50f02a5984c062fe7221629d0a6a40ec15c26fd7",
+      "observed_license": "Apache-2.0",
+      "evidence_path": "LICENSE",
+      "evidence_url": "https://github.com/Snailclimb/JavaGuide/blob/50f02a5984c062fe7221629d0a6a40ec15c26fd7/LICENSE",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "labuladong/fucking-algorithm",
+      "directory": "fucking-algorithm",
+      "url": "https://github.com/labuladong/fucking-algorithm",
+      "audited_commit": "b1f23cb9605f6146ff78bafad71e795176439b99",
+      "observed_license": "Unconfirmed",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/labuladong/fucking-algorithm/blob/b1f23cb9605f6146ff78bafad71e795176439b99/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "doocs/advanced-java",
+      "directory": "advanced-java",
+      "url": "https://github.com/doocs/advanced-java",
+      "audited_commit": "bf2f31459c1ae0b70f40c5a23104c98c1715cf50",
+      "observed_license": "CC-BY-SA-4.0",
+      "evidence_path": "LICENSE",
+      "evidence_url": "https://github.com/doocs/advanced-java/blob/bf2f31459c1ae0b70f40c5a23104c98c1715cf50/LICENSE",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "youngyangyang04/leetcode-master",
+      "directory": "leetcode-master",
+      "url": "https://github.com/youngyangyang04/leetcode-master",
+      "audited_commit": "b43def349578bdbda371f00da505d3099374910d",
+      "observed_license": "Custom attribution notice; permission scope unconfirmed",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/youngyangyang04/leetcode-master/blob/b43def349578bdbda371f00da505d3099374910d/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "xingshaocheng/architect-awesome",
+      "directory": "architect-awesome",
+      "url": "https://github.com/xingshaocheng/architect-awesome",
+      "audited_commit": "a9b92bd4a384fd3f620a553a377612983d1ecbad",
+      "observed_license": "CC-BY-NC-SA-4.0",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/xingshaocheng/architect-awesome/blob/a9b92bd4a384fd3f620a553a377612983d1ecbad/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "scutan90/DeepLearning-500-questions",
+      "directory": "DeepLearning-500-questions",
+      "url": "https://github.com/scutan90/DeepLearning-500-questions",
+      "audited_commit": "6087a06b112c3c28b885ab2f794535c19a9e4326",
+      "observed_license": "GPL-3.0; version scope requires review",
+      "evidence_path": "LICENSE",
+      "evidence_url": "https://github.com/scutan90/DeepLearning-500-questions/blob/6087a06b112c3c28b885ab2f794535c19a9e4326/LICENSE",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "azl397985856/leetcode",
+      "directory": "leetcode",
+      "url": "https://github.com/azl397985856/leetcode",
+      "audited_commit": "24b0b6284959e0f21539764a156595af7664b63f",
+      "observed_license": "CC-BY-NC-ND-4.0",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/azl397985856/leetcode/blob/24b0b6284959e0f21539764a156595af7664b63f/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "huihut/interview",
+      "directory": "interview",
+      "url": "https://github.com/huihut/interview",
+      "audited_commit": "7a7166804a0ffc8f156e906bf4c1a94bb9f6a94b",
+      "observed_license": "CC-BY-NC-SA-4.0",
+      "evidence_path": "LICENSE",
+      "evidence_url": "https://github.com/huihut/interview/blob/7a7166804a0ffc8f156e906bf4c1a94bb9f6a94b/LICENSE",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "0voice/interview_internal_reference",
+      "directory": "interview_internal_reference",
+      "url": "https://github.com/0voice/interview_internal_reference",
+      "audited_commit": "a549376da3ff8430a03e00ad7e1878ca00a063ad",
+      "observed_license": "Unconfirmed",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/0voice/interview_internal_reference/blob/a549376da3ff8430a03e00ad7e1878ca00a063ad/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "Advanced-Frontend/Daily-Interview-Question",
+      "directory": "Daily-Interview-Question",
+      "url": "https://github.com/Advanced-Frontend/Daily-Interview-Question",
+      "audited_commit": "46a268536dc0918c2dd466d1b8421f78f4d99c0d",
+      "observed_license": "Unconfirmed",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/Advanced-Frontend/Daily-Interview-Question/blob/46a268536dc0918c2dd466d1b8421f78f4d99c0d/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "haizlin/fe-interview",
+      "directory": "fe-interview",
+      "url": "https://github.com/haizlin/fe-interview",
+      "audited_commit": "79bab2c2a203705e1201051ae8c80b752a3d439e",
+      "observed_license": "MIT",
+      "evidence_path": "LICENSE",
+      "evidence_url": "https://github.com/haizlin/fe-interview/blob/79bab2c2a203705e1201051ae8c80b752a3d439e/LICENSE",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "InterviewMap/CS-Interview-Knowledge-Map",
+      "directory": "CS-Interview-Knowledge-Map",
+      "url": "https://github.com/InterviewMap/CS-Interview-Knowledge-Map",
+      "audited_commit": "1de2dc983ea06dc56f7011cc629e4dc35f99a9f0",
+      "observed_license": "MIT",
+      "evidence_path": "LICENSE",
+      "evidence_url": "https://github.com/InterviewMap/CS-Interview-Knowledge-Map/blob/1de2dc983ea06dc56f7011cc629e4dc35f99a9f0/LICENSE",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "taizilongxu/interview_python",
+      "directory": "interview_python",
+      "url": "https://github.com/taizilongxu/interview_python",
+      "audited_commit": "28fa4704a80ea1cc5bb8edfebe5c5b504e00f1c8",
+      "observed_license": "Unconfirmed",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/taizilongxu/interview_python/blob/28fa4704a80ea1cc5bb8edfebe5c5b504e00f1c8/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    },
+    {
+      "repository": "wdndev/llm_interview_note",
+      "directory": "llm_interview_note",
+      "url": "https://github.com/wdndev/llm_interview_note",
+      "audited_commit": "581d54dd9a72e1d0a4eb28ae50859db83901b783",
+      "observed_license": "Unconfirmed",
+      "evidence_path": "README.md",
+      "evidence_url": "https://github.com/wdndev/llm_interview_note/blob/581d54dd9a72e1d0a4eb28ae50859db83901b783/README.md",
+      "redistributed": false,
+      "review_status": "Not cleared for redistribution in this project"
+    }
+  ]
+}

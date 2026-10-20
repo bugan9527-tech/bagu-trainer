@@ -1,0 +1,76 @@
+# 本机配置和凭据；保留 config.example.json 及环境变量模板
+config.json
+config.local.json
+.env
+.env.*
+!.env.example
+!.env.template
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+/.trae/mcp.json
+
+# Python 缓存、虚拟环境和构建产物
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+/build/
+/dist/
+*.egg-info/
+
+# 本地学习记录、SQLite 辅助文件及桌面进程认证信息
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+/data/.desktop-runtime/
+
+# 题库下载副本和中间产物；下载、导入脚本仍保留
+/interview-banks/repos/
+/interview-banks/deduped/
+/data/*_backup*.json
+/data/knowledge_tag_report.csv
+/data/knowledge_tag_report.json
+/data/title_cleanup_report.json
+# 完整题库及衍生摘要只在本地构建，不随源码再分发（见 QUESTION_BANK.md）
+/data/questions.json
+/data/question_concepts.json
+/data/fallback_quizzes.json
+/data/concept_profile_report.json
+# 保留 data/mock/ 中的模拟输入；它们不是可独立运行的完整题库。
+
+# 本地实验、生成文档和截图
+/scratch/
+/output/
+/.screenshots/
+/AI_八股训练器题库目录_*.docx
+
+# 日志、临时文件和编辑器/操作系统杂项
+*.log
+*.tmp
+*.bak
+*.orig
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

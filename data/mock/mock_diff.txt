@@ -1,0 +1,30 @@
+diff --git a/app/api/product.py b/app/api/product.py
+index 1111111..2222222 100644
+--- a/app/api/product.py
++++ b/app/api/product.py
+@@ -20,6 +20,14 @@ def get_product(product_id: int):
+     product = fetch_from_db(product_id)
++    etag = f'"v{product.version}"'
++    if request.headers.get("If-None-Match") == etag:
++        return Response(status=304)
++    resp = jsonify(product)
++    resp.headers["ETag"] = etag
++    resp.headers["Cache-Control"] = "public, max-age=300"
+     return resp
+diff --git a/app/cache/client.py b/app/cache/client.py
+new file mode 100644
+--- /dev/null
++++ b/app/cache/client.py
+@@ -0,0 +1,12 @@
++import redis
++
++client = redis.Redis(host="localhost", port=6379, decode_responses=True)
++
++
++def get_cached(key):
++    """先查缓存，未命中回源。防止缓存穿透需要缓存空值"""
++    value = client.get(key)
++    if value is None:
++        value = load_from_db(key)
++        client.setex(key, ttl=30, value=value or "")
++    return value
