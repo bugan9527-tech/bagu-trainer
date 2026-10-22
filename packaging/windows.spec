@@ -1,18 +1,19 @@
 # PyInstaller onedir: resource allowlist only; no project-local user data.
 import sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, copy_metadata
 
 root = Path(SPECPATH).parent
 resources = root / "build" / "portable-resources"
 datas = [(str(root / name), str(Path(name).parent)) for name in (
     "LICENSE", "FIRST_USE.md", "QUESTION_BANK.md", "BANK_BUILD.md", "PORTABLE_README.md",
     "WINDOWS_PORTABLE.md", "DESKTOP_MODE.md", "KEY_MIGRATION.md", "STARTUP.md",
-    "VALIDATION.md", "CLEAN_WINDOWS_ACCEPTANCE.md",
+    "VALIDATION.md", "CLEAN_WINDOWS_ACCEPTANCE.md", "UI_DESIGN.md", "UI_LAYOUT.md", "UI_STATES.md", "UI_DISPLAY.md", "THIRD_PARTY_NOTICES.md",
     "interview-banks/sources.json", "interview-banks/README.md")]
 datas += [(str(resources / "licenses"), "licenses"),
           (str(resources / "THIRD_PARTY_NOTICES.txt"), ".")]
 datas += copy_metadata("keyring", recursive=True)
+datas += collect_data_files("ttkbootstrap") + copy_metadata("ttkbootstrap", recursive=True)
 hidden = collect_submodules("bagu_trainer") + ["keyring.backends.Windows", "keyring.backends.null",
                                               "keyring.backends.chainer", "keyring.backends.fail"]
 a = Analysis([str(root / "scripts" / "start_desktop.py")], pathex=[str(root)],

@@ -127,7 +127,8 @@ def test_expired_quiz_deterministically_cleaned(env):
     engine._state["quizzes"][qid] = {
         "kp_id": "test-kp-1", "kp_name": "测试知识点", "difficulty": "easy",
         "question": "Q", "options": {"A": "a", "B": "b", "C": "c", "D": "d"},
-        "answer": "A", "analysis": "p", "generated_by": "fake",
+        "answer": "A", "analysis": "p", "generated_by": "llm",
+        "grounding": type(env["gen"])().generate(env["matcher"].KP, "历史测试上下文")["grounding"],
         "_created_at": now - 7200, "_expires_at": now - 1, "_status": "delivered",
     }
     engine._state["pending"].append({
@@ -155,7 +156,8 @@ def test_over_capacity_deterministic_eviction(env, monkeypatch):
         engine._state["quizzes"][qid] = {
             "kp_id": "test-kp-1", "kp_name": "测试知识点", "difficulty": "easy",
             "question": "Q%d" % i, "options": {"A": "a", "B": "b", "C": "c", "D": "d"},
-            "answer": "A", "analysis": "p", "generated_by": "fake",
+            "answer": "A", "analysis": "p", "generated_by": "llm",
+            "grounding": type(env["gen"])().generate(env["matcher"].KP, "历史测试上下文")["grounding"],
             "_created_at": now - 100 + i, "_expires_at": now + 3600, "_status": "ready",
         }
         engine._state["pending"].append({

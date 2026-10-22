@@ -191,11 +191,23 @@ def test_update_llm_fallback_never_writes_plaintext(tmp_path, monkeypatch):
 # ============ 4. LLM 载荷脱敏 + 截断 + 异常脱敏 ============
 def _capture_urlopen(capture):
     def urlopen(req, timeout=None):
-        capture["payload"] = json.loads(req.data.decode("utf-8"))
+        payload = json.loads(req.data.decode("utf-8"))
+        is_review = "review_context_grounding" in payload["messages"][-1]["content"]
+        capture["review_payload" if is_review else "payload"] = payload
         capture["auth"] = req.headers.get("Authorization") or ""
+        if is_review:
+            content = json.dumps({"context_relevant": True, "source_supported": True,
+                "answer_unique": True, "no_answer_leak": True, "correct_answer": "A",
+                "reason": "上下文缓存穿透的处理需求有来源支持且答案唯一。"})
+        else:
+            candidate = json.loads(VALID_LLM_CONTENT)
+            candidate["grounding"] = {"context_quote": "缓存穿透场景。",
+                "source_quote": UNVERIFIED["source_excerpt"][:35],
+                "rationale": "上下文明确涉及缓存穿透，需要依据来源选取缓存空值的治理措施。"}
+            content = json.dumps(candidate, ensure_ascii=False)
         # 响应体必须是 OpenAI 兼容包装格式，content 才是试题 JSON
         return _FakeResp(json.dumps(
-            {"choices": [{"message": {"content": VALID_LLM_CONTENT}}]},
+            {"choices": [{"message": {"content": content}}]},
             ensure_ascii=False))
     return urlopen
 
@@ -203,7 +215,9 @@ def _capture_urlopen(capture):
 class _FakeResp:
     def __init__(self, text): self._t = text
 
-    def read(self): return self._t.encode("utf-8")
+    def read(self, size=-1):
+        body = self._t.encode("utf-8")
+        return body if size < 0 else body[:size]
 
     def __enter__(self): return self
 
@@ -219,11 +233,11 @@ def test_llm_payload_never_contains_secrets(monkeypatch):
     gen = qg.QuizGenerator(urlopen=_capture_urlopen(capture))
     context = ("上下文：当前 Key 是 sk-test-key-1111（不该外泄）；"
                '另有 api_key="%s"、Bearer %s、密码 password: %s。'
-               "缓存穿透场景。" % (FAKE_KEY, FAKE_TOKEN, FAKE_PASSWORD))
+               "\n缓存穿透场景。" % (FAKE_KEY, FAKE_TOKEN, FAKE_PASSWORD))
     context += "填充文本" * 800  # 超长：验证截断
     quiz = gen.generate(UNVERIFIED, context)
     assert quiz.get("available") is not False
-    body = json.dumps(capture["payload"], ensure_ascii=False)
+    body = json.dumps([capture["payload"], capture["review_payload"]], ensure_ascii=False)
     for bad in ("sk-test-key-1111", FAKE_KEY, FAKE_TOKEN, FAKE_PASSWORD):
         assert bad not in body, bad
     assert "[REDACTED]" in body

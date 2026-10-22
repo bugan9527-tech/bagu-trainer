@@ -6,6 +6,7 @@ import pytest
 
 import bagu_trainer.quiz_generator as qg
 import bagu_trainer.engine as engine
+import bagu_trainer.fallback_bank as fallback_archive
 from bagu_trainer.fallback_bank import (
     find_fallback,
     load_fallback_quizzes,
@@ -23,6 +24,27 @@ LONG_EXCERPT = (
     "关系，只读副本承担查询流量；实现时需要配置主从复制、处理复制延迟，"
     "并让应用根据一致性要求选择读主库还是读从库。"
 )
+
+
+@pytest.fixture(autouse=True)
+def synthetic_offline_archive(tmp_path, monkeypatch):
+    """Exercise the archival reader without an unpublished local question bank.
+
+    These self-authored records are test inputs only. The generator must still
+    reject every one when AI is unavailable; no production fallback is enabled.
+    """
+    items = []
+    for number in range(1, 21):
+        name = ("HTTP 幂等方法有哪些？" if number == 1 else
+                "缓存穿透是什么？" if number == 5 else f"合成资源治理示例 {number}")
+        items.append({"id": f"fallback-{number:03}", "knowledge_point": name, "question": name, "difficulty": "easy",
+                      "keywords": ["http", "幂等"] if number == 1 else [f"synthetic-concept-{number}"],
+                      "options": {"A": "采用经核对的处理方式", "B": "忽略全部处理要求", "C": "关闭所有数据服务", "D": "无限重复执行操作"},
+                      "answer": "A", "analysis": "自编合成归档解析，仅用于校验读取和 AI-only 准入。",
+                      "manual_verified": True, "verification_note": "自编测试样例，四个选项完整且互异。"})
+    path = tmp_path / "synthetic-fallbacks.json"
+    path.write_text(json.dumps(items, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(fallback_archive, "FALLBACK_PATH", path)
 
 
 def test_pure_link_is_not_usable():
@@ -158,8 +180,10 @@ def test_fallback_file_has_at_least_twenty_complete_quizzes():
         assert q.get("verification_note")
 
 
-def test_offline_generator_serves_verified_fallback(monkeypatch):
+def test_offline_generator_does_not_look_up_verified_fallback(monkeypatch):
     monkeypatch.setattr(qg, "load_config", lambda: {})
+    monkeypatch.setattr(qg.fallback_bank, "find_fallback",
+                        lambda *_: pytest.fail("Offline fallback lookup must not run"))
     item = load_fallback_quizzes()[0]
     kp = {
         "id": "bank-http-idempotent",
@@ -169,24 +193,18 @@ def test_offline_generator_serves_verified_fallback(monkeypatch):
         "keywords": item["keywords"],
     }
     quiz = qg.QuizGenerator().generate(kp, "")
-    assert quiz.get("available") is not False
-    assert quiz["generated_by"] == "fallback"
-    assert quiz["fallback_quiz_id"] == item["id"]
-    assert sorted(quiz["options"]) == ["A", "B", "C", "D"]
-    assert quiz["answer"] in ("A", "B", "C", "D")
-    assert quiz["analysis"].strip()
+    assert quiz["available"] is False
+    assert quiz["generated_by"] == "unavailable"
+    assert not {"question", "options", "answer", "analysis"} & quiz.keys()
 
 
-def test_all_fallback_quizzes_are_answerable(monkeypatch):
+def test_all_offline_quizzes_are_blocked_without_ai(monkeypatch):
     monkeypatch.setattr(qg, "load_config", lambda: {})
     gen = qg.QuizGenerator()
     for item in load_fallback_quizzes():
         quiz = gen.generate(item, "")
-        assert quiz.get("available") is not False
-        assert sorted(quiz["options"]) == ["A", "B", "C", "D"]
-        assert len(set(quiz["options"].values())) == 4
-        assert quiz["answer"] in ("A", "B", "C", "D")
-        assert str(quiz["analysis"]).strip()
+        assert quiz["available"] is False
+        assert not {"question", "options", "answer", "analysis"} & quiz.keys()
 
 
 def test_fallback_selection_is_relevant():
@@ -211,7 +229,7 @@ def test_fallback_selection_rejects_generic_question_words():
         assert find_fallback(kp) is None
 
 
-def test_create_quiz_tool_serves_fallback_id(env, monkeypatch):
+def test_manual_quiz_by_offline_id_still_requires_ai(env, monkeypatch):
     class EmptyKB:
         def get(self, qid):
             return None
@@ -220,16 +238,13 @@ def test_create_quiz_tool_serves_fallback_id(env, monkeypatch):
     monkeypatch.setattr(engine, "generator", qg.QuizGenerator())
     monkeypatch.setattr(qg, "load_config", lambda: {})
     result = engine.create_quiz("fallback-001", context="HTTP 并发场景")
-    assert result["ok"] is True
-    assert result["generated_by"] == "fallback"
-    assert sorted(result["options"]) == ["A", "B", "C", "D"]
-    internal = engine._state["quizzes"][result["quiz_id"]]
-    assert internal["answer"] in ("A", "B", "C", "D")
-    assert internal["analysis"].strip()
+    assert result["ok"] is False and "未配置 LLM" in result["reason"]
+    assert "options" not in result and "quiz_id" not in result
+    assert engine._state["quizzes"] == {}
 
 
-def test_startup_log_reports_offline_count(env, capsys):
+def test_startup_log_reports_ai_only_policy(env, capsys):
     engine._startup_log()
     err = capsys.readouterr().err
-    assert "已验证回退题:" in err
-    assert f"当前离线可出 {len(load_fallback_quizzes())} 道" in err
+    assert "所有新题须由 AI 生成" in err
+    assert "离线选择题回退已禁用" in err

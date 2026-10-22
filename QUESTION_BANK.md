@@ -1,12 +1,12 @@
 # 题库发布与本地构建
 
 源码和 Windows 便携版默认将运行数据写入 `%LOCALAPPDATA%\BaguTrainer\`。
-本文本地构建的 `data/` 和下载副本均在用户目录中；仓库里的 `data/mock/` 仍只是模拟输入。
+本文本地构建的 `data/` 和下载副本均在用户目录中；自动化测试使用临时合成夹具。
 便携版仅附来源清单和声明，程序资源位于只读 `_internal`，详见 [使用说明](PORTABLE_README.md)。
 
 ## 本次发布方案
 
-GitHub 仓库发布训练器源码、导入/去重/标签/概念构建脚本、模拟输入及来源清单。
+GitHub 仓库发布训练器源码、导入/去重/标签/概念构建脚本、合成测试及来源清单。
 第三方正文及其衍生题库由使用者选择来源后在本地构建，不随源码仓库、Release
 附件、安装包、容器镜像或演示文档一起发布。源码的许可证也不替代上游内容许可。
 
@@ -14,7 +14,6 @@ GitHub 仓库发布训练器源码、导入/去重/标签/概念构建脚本、�
 | --- | --- |
 | `bagu_trainer/`、`scripts/`、`tests/` | 随源码发布 |
 | `interview-banks/sources.json`、`interview-banks/README.md` | 发布来源地址、检查版本及许可证据 |
-| `data/mock/` | 发布模拟输入；它不是完整题库，也不提供人工验证题 |
 | `interview-banks/repos/`、`interview-banks/deduped/` | 本地下载、提取，不提交 |
 | `data/questions.json` | 本地构建，不提交 |
 | `data/banks/`、`data/.bank-builds/`、`data/active-bank.json` | 桌面下载、版本题库、临时数据和当前指针，均不提交、不打入发布包 |
@@ -82,7 +81,7 @@ python -B scripts/start_desktop.py
 
 源码版没有附带的人工验证离线回退题。导入主题库后，按
 [桌面使用说明](DESKTOP_MODE.md) 配置模型，再生成情景题；未配置模型或来源不足时
-允许返回不可出题。`data/mock/` 不会替代题库、模型或人工验证。
+允许返回不可出题。测试夹具不会替代实际题库、模型或内容验证。
 
 ## 已有用户与测试
 

@@ -48,6 +48,32 @@ def archive_bytes(entries=None, compression=zipfile.ZIP_DEFLATED):
     return result
 
 
+def test_reference_heading_without_question_words_is_searchable(installed, http_archive):
+    http_archive.body = archive_bytes([("snapshot/index.md", MARKDOWN.replace(
+        "什么是数据库索引？", "数据库索引结构"))])
+    result = BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY])
+    bank = KnowledgeBase(result.directory / "questions.json")
+    assert result.questions == 1
+    assert bank.all()[0]["knowledge_point"] == "数据库索引结构"
+    assert bank.all()[0]["usable_excerpt"]
+    from bagu_trainer.matcher import Matcher
+    assert Matcher(bank).rank("数据库索引结构：查询利用索引缩小扫描范围，更新维护索引增加存储成本")
+
+
+def test_code_only_reference_does_not_abort_entire_bank_build(installed, http_archive):
+    http_archive.body = archive_bytes([
+        ("snapshot/index.md", MARKDOWN),
+        ("snapshot/dp.md", "# 动态规划\n\n```java\nint[] dp = new int[target];\n```\n"),
+    ])
+    result = BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY])
+    bank = KnowledgeBase(result.directory / "questions.json")
+    assert result.questions == 2
+    item = next(q for q in bank.all() if q["knowledge_point"] == "动态规划")
+    assert item["usable_excerpt"] is False  # Still forbidden as AI grounding.
+    profiles = json.loads((result.directory / "question_concepts.json").read_text(encoding="utf-8"))
+    assert len(profiles["profiles"][item["id"]]["concept_terms"]) >= 3
+
+
 @pytest.fixture
 def installed(tmp_path, monkeypatch):
     project = tmp_path / "本机 安装"
@@ -284,16 +310,112 @@ def test_unsafe_zip_paths_are_rejected(tmp_path, path):
     assert not (tmp_path / "escape.txt").exists()
 
 
-def test_zip_symlink_and_case_collision_are_rejected(tmp_path):
+def test_zip_symlink_and_exact_duplicate_are_rejected(tmp_path):
     symlink = zipfile.ZipInfo("snapshot/link")
     symlink.create_system = 3
     symlink.external_attr = (stat.S_IFLNK | 0o777) << 16
     for index, entries in enumerate(([(symlink, "../../outside")],
-                                     [("snapshot/A.md", "a"), ("snapshot/a.md", "b")])):
+                                     [("snapshot/A.md", "a"), ("snapshot/A.md", "b")])):
         archive = tmp_path / f"bad{index}.zip"
-        archive.write_bytes(archive_bytes(entries))
+        if index == 1:
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                archive.write_bytes(archive_bytes(entries))
+        else:
+            archive.write_bytes(archive_bytes(entries))
         with pytest.raises(BuildError):
             safe_extract(archive, tmp_path / f"out{index}", BuildControl())
+
+
+@pytest.mark.parametrize("entries", [
+    [("snapshot/spring/Async.md", "upper"), ("snapshot/spring/async.md", "lower")],
+    [("snapshot/Docs/", ""), ("snapshot/Docs/A.md", "upper"),
+     ("snapshot/docs/", ""), ("snapshot/docs/A.md", "lower")],
+    [("snapshot/A", "file"), ("snapshot/a/B.md", "child")],
+])
+def test_case_distinct_paths_survive_on_windows_and_ignore_zip_order(tmp_path, entries):
+    results = []
+    for index, ordered in enumerate((entries, list(reversed(entries)))):
+        archive = tmp_path / f"case{index}.zip"
+        archive.write_bytes(archive_bytes(ordered))
+        output = tmp_path / f"out{index}"
+        aliases = safe_extract(archive, output, BuildControl())
+        stored = []
+        for name, content in entries:
+            if name.endswith("/"):
+                continue
+            original = name.removeprefix("snapshot/")
+            relative = aliases.get(original, original)
+            assert (output / relative).read_text(encoding="utf-8") == content
+            stored.append(relative.casefold())
+        assert len(set(stored)) == len(stored)
+        results.append(aliases)
+    assert results[0] == results[1]
+
+
+def test_generated_alias_cannot_overwrite_an_existing_archive_path(tmp_path):
+    digest = hashlib.sha256(b"A.md").hexdigest()[:12]
+    occupied = f"A.__bagu_case_{digest}.md"
+    entries = [("snapshot/A.md", "upper"), ("snapshot/a.md", "lower"),
+               (f"snapshot/{occupied}", "existing")]
+    archive = tmp_path / "case.zip"
+    archive.write_bytes(archive_bytes(entries))
+    output = tmp_path / "output"
+    aliases = safe_extract(archive, output, BuildControl())
+    assert (output / occupied).read_text() == "existing"
+    assert (output / aliases["A.md"]).read_text() == "upper"
+    assert (output / aliases["a.md"]).read_text() == "lower"
+
+
+@pytest.mark.parametrize("entries", [
+    [("snapshot/a", "file"), ("snapshot/a/b.md", "child")],
+    [("snapshot/a/", ""), ("snapshot/a", "file")],
+])
+def test_exact_file_directory_conflicts_are_rejected_before_writing(tmp_path, entries):
+    archive = tmp_path / "bad.zip"
+    archive.write_bytes(archive_bytes(entries))
+    output = tmp_path / "output"
+    with pytest.raises(BuildError, match="文件和目录|重复路径"):
+        safe_extract(archive, output, BuildControl())
+    assert not list(output.rglob("*"))
+
+
+def test_case_distinct_source_build_preserves_body_provenance_and_stable_ids(installed, http_archive):
+    other = ("# 数据库事务如何保证原子性？\n\n"
+             "数据库事务通过日志记录和回滚机制保证原子性。一个事务中的操作要么全部成功，"
+             "要么全部撤销，发生故障时可以根据事务日志恢复数据，避免只完成部分写入。\n")
+    entries = [("snapshot/spring/Async.md", MARKDOWN), ("snapshot/spring/async.md", other)]
+    service = BankBuildService(installed.project, opener=http_archive.opener)
+    ids = []
+    for ordered in (entries, list(reversed(entries))):
+        http_archive.body = archive_bytes(ordered)
+        result = service.build([REPOSITORY])
+        bank = json.loads((result.directory / "questions.json").read_text(encoding="utf-8"))
+        assert result.questions == 2
+        by_path = {q["excerpt_source"]: q for q in bank}
+        for path, marker in [("JavaGuide/spring/Async.md", "维护索引"),
+                             ("JavaGuide/spring/async.md", "回滚机制")]:
+            assert marker in by_path[path]["source_excerpt"]
+            assert by_path[path]["source_paths"] == [path]
+            assert by_path[path]["usable_excerpt"]
+        assert all(".__bagu_case_" not in str(q["source_paths"]) for q in bank)
+        provenance = json.loads((result.directory / "sources.json").read_text(encoding="utf-8"))
+        aliases = provenance["sources"][0]["path_aliases"]
+        assert set(aliases) == {"spring/Async.md", "spring/async.md"}
+        assert all((result.directory / "repos" / "JavaGuide" / stored).is_file()
+                   for stored in aliases.values())
+        ids.append({q["id"] for q in bank})
+    assert ids[0] == ids[1]
+
+
+def test_identical_case_distinct_documents_deduplicate_stably(installed, http_archive):
+    entries = [("snapshot/spring/Async.md", MARKDOWN), ("snapshot/spring/async.md", MARKDOWN)]
+    banks = []
+    for ordered in (entries, list(reversed(entries))):
+        http_archive.body = archive_bytes(ordered)
+        result = BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY])
+        assert result.questions == 1
+        banks.append(json.loads((result.directory / "questions.json").read_text(encoding="utf-8")))
+    assert banks[0] == banks[1]
 
 
 @pytest.mark.parametrize("limits", [ArchiveLimits(download_bytes=10), ArchiveLimits(file_bytes=10),

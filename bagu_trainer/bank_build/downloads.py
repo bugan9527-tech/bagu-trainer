@@ -6,6 +6,7 @@ import stat
 import urllib.error
 import urllib.request
 import zipfile
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -88,8 +89,51 @@ def download_archive(source, destination, control, *, opener=None, retries=2,
 _DEVICE = re.compile(r"^(?:con|prn|aux|nul|conin\$|conout\$|clock\$|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)", re.I)
 
 
+def _portable_paths(validated, control):
+    """Give case-distinct Git paths distinct disk names, independent of ZIP order."""
+    nodes = {(): True}
+    for member, relative in validated:
+        parts = relative.parts if relative != Path() else ()
+        for depth in range(1, len(parts) + 1):
+            control.check()
+            logical = parts[:depth]
+            is_dir = depth < len(parts) or member.is_dir()
+            if logical in nodes and nodes[logical] != is_dir:
+                raise BuildError("unpack", "ZIP 同一路径同时声明为文件和目录。")
+            nodes[logical] = is_dir
+    children = defaultdict(list)
+    for logical in nodes:
+        if logical:
+            children[logical[:-1]].append(logical)
+    physical = {(): Path()}
+    for parent in sorted(children, key=lambda parts: (len(parts), parts)):
+        siblings = children[parent]
+        groups = defaultdict(list)
+        for logical in siblings:
+            groups[logical[-1].casefold()].append(logical)
+        reserved = set(groups)
+        for logical in sorted(siblings):
+            control.check()
+            name = logical[-1]
+            if len(groups[name.casefold()]) > 1:
+                suffix = Path(name).suffix
+                stem = name[:-len(suffix)] if suffix else name
+                digest = hashlib.sha256("/".join(logical).encode("utf-8")).hexdigest()[:12]
+                attempt = 0
+                while True:
+                    counter = f"-{attempt}" if attempt else ""
+                    candidate = f"{stem}.__bagu_case_{digest}{counter}{suffix}"
+                    if candidate.casefold() not in reserved:
+                        break
+                    attempt += 1
+                name = candidate
+                reserved.add(name.casefold())
+            physical[logical] = physical[parent] / name
+    return physical
+
+
 def safe_extract(archive, destination, control, *, limits=None):
-    """Strip one archive root; never use ZipFile.extract/extractall."""
+    """Extract safely; return original -> stored aliases for case-distinct files."""
     limits = limits or ArchiveLimits()
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=False)
@@ -119,18 +163,21 @@ def safe_extract(archive, destination, control, *, limits=None):
                 if parts[0] != root or (len(parts) == 1 and not member.is_dir()):
                     raise BuildError("unpack", "ZIP 必须包含单一来源根目录。")
                 relative = Path(*parts[1:])
-                key = str(relative).casefold()
+                key = relative.as_posix()
                 if key in seen:
-                    raise BuildError("unpack", "ZIP 包含重复或大小写冲突路径。")
+                    raise BuildError("unpack", "ZIP 包含重复路径。")
                 seen.add(key)
                 expanded += member.file_size
                 if (member.file_size > limits.file_bytes or expanded > limits.unpack_bytes
                         or member.file_size > max(1, member.compress_size) * limits.compression_ratio):
                     raise BuildError("unpack", "ZIP 解压大小或压缩比超出限制。")
                 validated.append((member, relative))
+            physical = _portable_paths(validated, control)
+            aliases = {}
             for index, (member, relative) in enumerate(validated, 1):
                 control.check()
-                target = destination / relative
+                stored = physical[relative.parts if relative != Path() else ()]
+                target = destination / stored
                 target.resolve().relative_to(destination.resolve())
                 if member.is_dir():
                     target.mkdir(parents=True, exist_ok=True)
@@ -149,6 +196,9 @@ def safe_extract(archive, destination, control, *, limits=None):
                             output.write(block)
                     if count != member.file_size:
                         raise BuildError("unpack", "ZIP 内容不完整。")
+                    if stored != relative:
+                        aliases[relative.as_posix()] = stored.as_posix()
                 control.emit("unpack", "正在安全解压来源文件", index, len(validated))
+            return aliases
     except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as error:
         raise BuildError("unpack", "ZIP 已损坏或使用不支持的压缩方式。") from error

@@ -5,6 +5,8 @@ DesktopMonitor owns change detection and DesktopApp owns interaction.
 """
 import collections
 import hashlib
+import json
+import ntpath
 import os
 import subprocess
 import sys
@@ -18,7 +20,8 @@ from .config import PROJECT_ROOT, load_config
 from .diff_reader import DiffReader
 from .knowledge_base import KnowledgeBase
 from .matcher import Matcher
-from .quiz_generator import QuizGenerator, get_verified_fallback, verified_fallback_count
+from .quiz_generator import QuizGenerator, get_verified_fallback
+from .quiz_validation import has_passed_review
 from .scheduler import next_state
 from .scorer import Scorer
 from .session_reader import entries_to_text, find_trae_home, read_recent_entries
@@ -83,6 +86,15 @@ _STATE_LOCK = threading.RLock()
 # watch 模式监听器按项目根目录跨调用复用（快照不持久会永远检测不到变更）
 _diff_readers = {}
 
+
+def reload_bank():
+    """Use the newly activated bank without replacing pending/history state."""
+    global kb, matcher
+    updated = KnowledgeBase()
+    updated_matcher = Matcher(updated)
+    with _STATE_LOCK:
+        kb, matcher = updated, updated_matcher
+
 def _open_config_window() -> bool:
     """以独立进程弹出 AI 接口配置窗口（tkinter 在独立进程运行）"""
     try:
@@ -100,9 +112,8 @@ def _open_config_window() -> bool:
 
 def _startup_log():
     """Print local engine status without transport setup instructions or secrets."""
-    count = verified_fallback_count()
     print(f"[bagu-trainer] 桌面学习引擎：{len(kb.all())} 个知识点", file=sys.stderr)
-    print(f"[bagu-trainer] 已验证回退题: {count} 道（当前离线可出 {count} 道）", file=sys.stderr)
+    print("[bagu-trainer] 所有新题须由 AI 生成；离线选择题回退已禁用", file=sys.stderr)
     print(f"[bagu-trainer] 学习数据: {_db_path()}", file=sys.stderr)
 
 
@@ -116,7 +127,6 @@ def _public_quiz(quiz_id: str, quiz: dict, project_root=None) -> dict:
         "question": quiz.get("question"),
         "options": quiz.get("options"),
         "generated_by": quiz.get("generated_by"),
-        "fallback_reason": quiz.get("fallback_reason"),
     }
     if quiz.get("excerpt_source"):
         out["source_ref"] = quiz["excerpt_source"]
@@ -131,6 +141,17 @@ def _public_quiz(quiz_id: str, quiz: dict, project_root=None) -> dict:
 def _quiz_snapshot(quiz: dict) -> dict:
     """落库快照：剔除内部 _ 前缀字段（保留题目/选项/答案/解析等作答所需内容）"""
     return {k: v for k, v in quiz.items() if not str(k).startswith("_")}
+
+
+def _generation_failure(quiz: dict, *, require_review=False):
+    """Enforce the AI-only display policy for fresh and persisted questions."""
+    if quiz.get("available") is False:
+        return quiz.get("unavailable_reason") or "题目生成失败"
+    if quiz.get("generated_by") != "llm":
+        return "仅允许展示 AI 生成的题目；离线选择题及来源不明的旧题不再展示。"
+    if require_review and not has_passed_review(quiz):
+        return "新题缺少通过的上下文关联性审核记录，请重试生成。"
+    return None
 
 
 def _pending_kp_ids_locked(project_root: str) -> set:
@@ -162,6 +183,10 @@ def _hydrate_pending_locked(store):
         if qid in _state["quizzes"]:
             continue
         quiz = dict(row["snapshot"])
+        if _generation_failure(quiz, require_review=not quiz.get("review")):
+            # Keep the snapshot and all learning history; retire only delivery.
+            store.set_status(qid, "expired")
+            continue
         quiz.update({"_status": row["status"],
                      "_created_at": row["created_at"],
                      "_expires_at": row["expires_at"]})
@@ -295,14 +320,14 @@ def _public_pending(entry: dict) -> dict:
 
 
 def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict,
-                             source_summary: str = ""):
+                             source_summary: str = "", *, retry_failed_ids=()):
     """匹配知识点并生成题目（调用方必须已持 _STATE_LOCK）。
     返回 (matches, generated, skipped, unavailable)：matches 为匹配详情列表
     [{question, score, hits, confidence, margin}]；generated 为可作答的公开题目列表，
     skipped 为因相同上下文已出过题被去重跳过、或同一知识点冷却（未作答/未到复习期）
-    而跳过的数量（不重复计费），unavailable 为生成失败（无 LLM/校验失败/来源缺失
-    且无已验证回退）的明确原因列表。
-    生成失败的题绝不进入 pending/对外输出（不允许出现无选项/无答案的题目）。
+    而跳过的数量（不重复计费），unavailable 为生成失败（无 LLM/校验失败/来源缺失）
+    或非 AI 产物被拦截的明确原因列表。
+    生成失败或非 AI 生成的题绝不进入 pending/对外输出。
     生成成功的题同时落库（status=ready），保证重启后可继续作答。"""
     project_root = _normalize_project_root(project_root)
     ranked = matcher.rank(ctx, top_n=top_n)
@@ -312,10 +337,14 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
     pending_kps = _pending_kp_ids_locked(project_root)
     for r in ranked:
         q, score, hits = r["question"], r["score"], r["hits"]
+        # Only an explicit desktop retry supplies IDs from the previous failed
+        # result. Successful items retain their fingerprint and pending cooldown.
+        if retry_failed_ids and q["id"] not in retry_failed_ids:
+            continue
         matches.append({"question": q, "score": score, "hits": hits,
                         "confidence": r["confidence"], "margin": r["margin"]})
         key = _match_hash(project_root, q["id"], ctx)
-        if not _mark_seen_locked(key, caps["seen_cap"]):
+        if not _mark_seen_locked(key, caps["seen_cap"]) and q["id"] not in retry_failed_ids:
             skipped += 1
             continue
         # 同 kp 冷却：有未作答题，或未到复习期，都不重复出题（避免短时间重复）
@@ -326,12 +355,16 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
         if st and st.get("next_review_at") and st["next_review_at"] > now:
             skipped += 1
             continue
-        quiz = generator.generate(q, ctx)
-        if quiz.get("available") is False:
+        try:
+            quiz = generator.generate(q, ctx)
+        except Exception as error:
+            quiz = {"available": False, "unavailable_reason": f"出题失败（{type(error).__name__}），请检查模型配置后重试。"}
+        failure = _generation_failure(quiz, require_review=True)
+        if failure:
             unavailable.append({
                 "kp_id": q["id"],
                 "knowledge_point": q["knowledge_point"],
-                "reason": quiz.get("unavailable_reason") or "未知生成失败原因",
+                "reason": failure,
             })
             continue
         quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
@@ -390,7 +423,10 @@ def _cleanup_locked(caps: dict):
     store = _get_store_locked()
     # 1) 到期未作答：pending -> expired（写通 DB），quiz 一并移除
     for p in _state["pending"]:
-        if p["status"] in ("ready", "delivered") and p["expires_at"] <= now:
+        quiz = _state["quizzes"].get(p["quiz_id"], {})
+        if p["status"] in ("ready", "delivered") and (
+                p["expires_at"] <= now or
+                _generation_failure(quiz, require_review=not quiz.get("review"))):
             p["status"] = "expired"
             store.set_status(p["quiz_id"], "expired")
     for p in [x for x in _state["pending"] if x["status"] == "expired"]:
@@ -407,18 +443,21 @@ def _cleanup_locked(caps: dict):
     # 3) 已作答记录从 pending 移除（quiz 留待容量淘汰）
     _state["pending"] = [x for x in _state["pending"] if x["status"] != "answered"]
     # 4) pending 超量：按 created_at 最旧确定性淘汰（连带 quiz）
-    if len(_state["pending"]) > caps["max_pending"]:
+    automatic = [p for p in _state["pending"] if not _state["quizzes"].get(p["quiz_id"], {}).get("manual_review")]
+    if len(automatic) > caps["max_pending"]:
         _state["pending"].sort(key=lambda p: (p["created_at"], p["quiz_id"]))
-        drop = _state["pending"][: len(_state["pending"]) - caps["max_pending"]]
+        drop = sorted(automatic, key=lambda p: (p["created_at"], p["quiz_id"]))[:len(automatic) - caps["max_pending"]]
         for p in drop:
             _state["quizzes"].pop(p["quiz_id"], None)
-        _state["pending"] = _state["pending"][len(drop):]
+        drop_ids = {p["quiz_id"] for p in drop}
+        _state["pending"] = [p for p in _state["pending"] if p["quiz_id"] not in drop_ids]
     # 5) quizzes 超量：按 _created_at 最旧确定性淘汰（连带 pending 引用）
-    if len(_state["quizzes"]) > caps["max_quizzes"]:
-        ordered = sorted(_state["quizzes"].items(),
+    automatic_quizzes = [(qid, q) for qid, q in _state["quizzes"].items() if not q.get("manual_review")]
+    if len(automatic_quizzes) > caps["max_quizzes"]:
+        ordered = sorted(automatic_quizzes,
                          key=lambda kv: (kv[1].get("_created_at", 0.0), kv[0]))
         drop_ids = {qid for qid, _ in
-                    ordered[: len(_state["quizzes"]) - caps["max_quizzes"]]}
+                    ordered[:len(automatic_quizzes) - caps["max_quizzes"]]}
         for qid in drop_ids:
             _state["quizzes"].pop(qid, None)
         _state["pending"] = [x for x in _state["pending"]
@@ -476,7 +515,7 @@ def _deliver_due_review_locked(root: str, prefer, only_prefer: bool, caps: dict)
 
     规则：当前项目未作答 pending 中的 kp 跳过（避免同一题重复推送）；
     其他项目的未作答 pending 不参与本项目的冷却。学习历史/复习计划按知识点
-    全局共享，但这里只可从已作答快照重建题目，不会直接搬运其他项目 pending。
+    全局共享，但这里只可从已作答的 AI 快照重建题目，不会交付旧离线题或搬运其他项目 pending。
     only_prefer=True 时只在 prefer 集合内出题（「上下文相关的到期复习」优先）；
     否则 prefer 内 kp 排前、其余兜底（保证错题总会回来）。
     """
@@ -501,6 +540,10 @@ def _deliver_due_review_locked(root: str, prefer, only_prefer: bool, caps: dict)
         if not hist:
             continue  # 快照缺失（不应发生）时跳过该 kp，尝试下一个
         quiz = dict(hist["snapshot"])
+        if _generation_failure(quiz):
+            continue  # Retain attempts/schedules, but never replay offline snapshots.
+        for field in ("manual_review", "retry_of_attempt_id", "retry_of_quiz_id"):
+            quiz.pop(field, None)
         quiz["review"] = True
         quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
                      "_status": "delivered"})
@@ -542,7 +585,7 @@ def list_knowledge_points(tag: str = "") -> dict:
             or tag == k.get("knowledge_domain")
         ]
     return {"total": len(kps), "knowledge_points": kps,
-            "verified_fallback_count": verified_fallback_count(),
+            "generation_policy": "llm_only",
             "hint": "调用 create_quiz(knowledge_point_id, context) 针对某知识点出题"}
 
 
@@ -662,7 +705,7 @@ def open_config_window() -> dict:
 def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
     """按知识点 ID 生成一道题。context 可附带当前场景（如相关代码片段），未提供时用会话记录。
     传入的 context 在进入 LLM 前统一脱敏（密钥/令牌自动替换为 [REDACTED]）并限制长度。
-    生成失败（未配置 LLM、LLM 输出校验失败、来源正文缺失且无已验证选择题回退）时
+    生成失败（未配置 LLM、LLM 输出校验失败、来源正文缺失）时
     返回 ok=False 与明确原因，绝不返回无选项/无答案的题目。"""
     q = kb.get(knowledge_point_id) or get_verified_fallback(knowledge_point_id)
     if not q:
@@ -675,9 +718,10 @@ def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
     else:
         context = _collect_context("", "")["context"]
     quiz = generator.generate(q, context)
-    if quiz.get("available") is False:
+    failure = _generation_failure(quiz, require_review=True)
+    if failure:
         return {"ok": False, "knowledge_point_id": knowledge_point_id,
-                "reason": quiz.get("unavailable_reason") or "题目生成失败",
+                "reason": failure,
                 "note": "不提供无法作答的题目。可在主窗口配置出题模型后重试"}
     quiz_id = uuid.uuid4().hex[:8]
     with _STATE_LOCK:
@@ -715,6 +759,10 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
         if quiz.get("_status") == "answered":
             return {"ok": False,
                     "note": f"quiz_id {quiz_id} 已作答，重复提交已拒绝（不重复计数）"}
+        failure = _generation_failure(quiz, require_review=not quiz.get("review"))
+        if failure:
+            _cleanup_locked(_caps())
+            return {"ok": False, "note": failure}
         if (quiz.get("_expires_at") or 0) <= now:
             _get_store_locked().set_status(quiz_id, "expired")
             _state["quizzes"].pop(quiz_id, None)
@@ -726,9 +774,12 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
         prev = store.concept_state(quiz.get("kp_id"))
         state = next_state(grade["correct"], prev, now)
         # 单事务：attempt + concept_state + quiz 状态
-        store.record_attempt(
+        recorded = store.record_attempt(
             quiz_id, quiz.get("kp_id") or "", grade["your_answer"],
-            grade["normalized_answer"], grade["correct"], now, state)
+            grade["normalized_answer"], grade["correct"], now, state, once=True)
+        if recorded is False:
+            quiz["_status"] = "answered"
+            return {"ok": False, "note": "该题已作答，重复提交已拒绝（不重复计数）"}
         for p in _state["pending"]:
             if p["quiz_id"] == quiz_id:
                 p["status"] = "answered"
@@ -743,6 +794,91 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
             "mastery": state["mastery"],
         },
     }
+
+
+def _history_path():
+    return _store.path if _store is not None else _db_path()
+
+
+def history_time(timestamp):
+    from datetime import datetime, timezone
+    try:
+        return datetime.fromtimestamp(float(timestamp), timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
+    except (ValueError, TypeError, OverflowError, OSError):
+        return "旧记录未提供有效时间"
+
+
+def get_answer_history(**filters):
+    """Read-only, deliberately independent of _STATE_LOCK and current bank."""
+    try:
+        result = Store.history_page(_history_path(), **filters)
+        for item in result["items"]:
+            item["time_text"] = history_time(item["answered_at"])
+            item["project_name"] = ntpath.basename(item["project_root"].rstrip("/\\")) or "未记录项目"
+            item["result_text"] = "答对" if item["correct"] else "答错"
+        return {"ok": True, **result}
+    except Exception as error:
+        return {"ok": False, "note": f"查询失败（{type(error).__name__}），请重试。"}
+
+
+def _repractice_failure(snapshot):
+    failure = _generation_failure(snapshot)  # same admission policy as due review
+    if failure:
+        return failure
+    if not isinstance(snapshot.get("question"), str) or not snapshot["question"].strip():
+        return "旧快照缺少完整题干，无法重练。"
+    options = snapshot.get("options")
+    if not isinstance(options, dict) or any(not isinstance(options.get(k), str) or not options[k].strip() for k in "ABCD"):
+        return "旧快照缺少完整的四个选项，无法重练。"
+    if snapshot.get("answer") not in tuple("ABCD"):
+        return "旧快照缺少有效的正确答案，无法重练。"
+    if not isinstance(snapshot.get("analysis"), str) or not snapshot["analysis"].strip():
+        return "旧快照缺少解析，无法重练。"
+    if QuizGenerator._parse_quiz(json.dumps(snapshot, ensure_ascii=False)) is None:
+        return "旧快照未通过现有题目校验（题干长度、四个不同选项或答案格式），无法重练。"
+    return None
+
+
+def get_answer_detail(attempt_id):
+    try:
+        row = Store.history_detail(_history_path(), int(attempt_id))
+        if row is None:
+            return {"ok": False, "note": "这条作答记录已不存在，请返回列表刷新。"}
+        reason = _repractice_failure(row["snapshot"])
+        return {"ok": True, **row, "time_text": history_time(row["answered_at"]),
+                "retry_reason": reason, "can_retry": reason is None}
+    except Exception as error:
+        return {"ok": False, "note": f"详情查询失败（{type(error).__name__}），请重试。"}
+
+
+def repractice_attempt(attempt_id):
+    """Clone a historical AI snapshot, never collect context or consult the bank.
+
+    One unfinished retry per original attempt also deduplicates separate UI
+    requests and survives restarts. Persist before publishing in-memory state.
+    """
+    with _STATE_LOCK:
+        detail = get_answer_detail(attempt_id)
+        if not detail.get("ok") or not detail.get("can_retry"):
+            return {"ok": False, "note": detail.get("retry_reason") or detail.get("note")}
+        store = _get_store_locked()
+        now, caps = _now(), _caps()
+        row = store.unfinished_repractice(int(attempt_id), now)
+        if row is None:
+            quiz = dict(detail["snapshot"])
+            quiz.update(review=True, manual_review=True, retry_of_attempt_id=int(attempt_id),
+                        retry_of_quiz_id=detail["quiz_id"])
+            quiz["kp_id"] = detail.get("kp_id") or quiz.get("kp_id") or ""
+            qid = uuid.uuid4().hex
+            store.create_quiz(qid, quiz["kp_id"], quiz, "delivered", detail.get("project_root"),
+                              detail.get("source_summary"), now, now + caps["ttl"], delivered_at=now)
+            row = store.get_quiz(qid)
+        qid, quiz = row["quiz_id"], dict(row["snapshot"])
+        quiz.update(_status=row["status"], _created_at=row["created_at"], _expires_at=row["expires_at"])
+        _state["quizzes"][qid] = quiz
+        if not any(p["quiz_id"] == qid for p in _state["pending"]):
+            _state["pending"].append({**row, **_public_quiz(qid, quiz, row["project_root"])})
+        return {"ok": True, "quiz": {**_public_quiz(qid, quiz, row["project_root"]), "manual_review": True}}
 
 
 def get_learning_stats() -> dict:

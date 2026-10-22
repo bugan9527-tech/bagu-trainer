@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""AI 接口配置窗口（零依赖，tkinter 内置）。
+"""AI 接口配置窗口（独立 Tk/Toplevel），复用公共 ModelPanel。
 
 打开方式:
   1. 桌面主窗口点击「配置出题模型」
@@ -8,150 +8,180 @@
 填写 base_url / api_key / model / timeout，「测试连接」验证 key 后「保存」，
 写入用户数据目录 config.json 并即时生效（出题器每次读最新配置，无需重启）。
 """
-import json
-import sys
-from pathlib import Path
-
-
-from bagu_trainer.tk_runtime import prepare_tk
+from bagu_trainer.tk_runtime import prepare_tk, create_root
 prepare_tk()
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
-from bagu_trainer import secrets                          # noqa: E402
-from bagu_trainer.config import CONFIG_PATH, load_config, update_llm      # noqa: E402
-from bagu_trainer.quiz_generator import (                                   # noqa: E402
-    test_llm,
-    verified_fallback_count,
-)
+from bagu_trainer.ui_theme import apply_theme, SPACE, TITLE, MUTED
+from bagu_trainer.ui_layout import wrapped_label
+from bagu_trainer.model_panel import ModelPanel
 
-PRESET_MODELS = ["deepseek-chat", "gpt-4o-mini", "deepseek-reasoner", "qwen-plus", "moonshot-v1-8k"]
-PRESET_URLS = {
-    "DeepSeek": "https://api.deepseek.com/v1",
-    "OpenAI": "https://api.openai.com/v1",
-    "Moonshot": "https://api.moonshot.cn/v1",
-    "通义千问": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-}
+
+class ModelSettingsWindow:
+    """Own Tk on the caller thread; the panel's workers communicate via a queue."""
+
+    def __init__(self, parent=None):
+        self.root = tk.Toplevel(parent) if parent is not None else create_root()
+        self.theme = apply_theme(self.root)
+        px = self.theme.px
+        self.root.title("AI 八股训练器 · AI 接口配置")
+        self.theme.window(self.root, (760, 760), (560, 540))
+
+        panel = ttk.Frame(self.root, padding=px(SPACE.xl))
+        panel.pack(fill="both", expand=True)
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(2, weight=1)
+        wrapped_label(panel, self.theme, text="模型连接", style=TITLE).grid(row=0, column=0, sticky="ew")
+        wrapped_label(panel, self.theme, text="先测试当前配置，再保存生效。新题需经过 AI 生成与关联审核，共用所填超时；失败可重试，不展示离线选择题。",
+                      style=MUTED).grid(row=1, column=0, sticky="ew", pady=px((SPACE.sm, SPACE.lg)))
+
+        self.panel_widget = ModelPanel(panel, self.theme)
+        self.panel_widget.grid(row=2, column=0, sticky="nsew")
+
+        # Expose the legacy attribute names so existing callers/tests keep working.
+        self.status = self.panel_widget.status
+        self.save_state = self.panel_widget.save_state
+        self.result_heading = self.panel_widget.result_heading
+        self.operation_hint = self.panel_widget.operation_hint
+        self.test_button = self.panel_widget.test_button
+        self.save_button = self.panel_widget.save_button
+        self.cancel_button = self.panel_widget.cancel_button
+        self.progress = self.panel_widget.progress
+        self.entries = self.panel_widget.entries
+        self.variable_traces = self.panel_widget.variable_traces
+        self.form_view = self.panel_widget.form_view
+        self.status_area = self.panel_widget.status_area
+        self.provider = self.panel_widget.provider
+        self.provider_var = self.panel_widget.provider_var
+        self.base_url = self.panel_widget.base_url
+        self.model_name = self.panel_widget.model_name
+        self.api_key = self.panel_widget.api_key
+        self.timeout = self.panel_widget.timeout
+        self.worker = None
+
+        # Legacy alias variables used by tests (url_var/model_var/key_var/timeout_var).
+        self.url_var = self.panel_widget.base_url
+        self.model_var = self.panel_widget.model_name
+        self.key_var = self.panel_widget.api_key
+        self.timeout_var = self.panel_widget.timeout
+
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
+        self._closing_via_panel = False
+        self.panel_widget.bind("<Destroy>", self._panel_destroyed, add="+")
+
+    def _panel_destroyed(self, event):
+        # Only tear down the root when the panel was closed by our own flow.
+        # An external root.destroy() tears the root down itself, and calling
+        # destroy() again inside that recursion raises a Tcl error.
+        if event.widget is not self.panel_widget or not self._closing_via_panel:
+            return
+        self._closing_via_panel = False
+        try:
+            if self.root.winfo_exists():
+                self.root.destroy()
+        except Exception:
+            pass
+
+    @property
+    def closing(self):
+        return self.panel_widget.closing
+
+    @closing.setter
+    def closing(self, value):
+        self.panel_widget.closing = value
+
+    @property
+    def closed(self):
+        return self.panel_widget.closed
+
+    @closed.setter
+    def closed(self, value):
+        self.panel_widget.closed = value
+
+    def _signature(self):
+        return self.panel_widget._signature()
+
+    @staticmethod
+    def _settings(signature):
+        return ModelPanel._settings(signature)
+
+    def _test(self):
+        self.panel_widget._test()
+        self.worker = self.panel_widget.worker
+
+    def _save(self):
+        self.panel_widget._save()
+        self.worker = self.panel_widget.worker
+
+    def _cancel_test(self):
+        self.panel_widget._cancel_test()
+
+    @property
+    def busy(self):
+        return self.panel_widget.busy
+
+    @property
+    def verified(self):
+        return self.panel_widget.verified
+
+    @verified.setter
+    def verified(self, value):
+        self.panel_widget.verified = value
+
+    @property
+    def test_signature(self):
+        return self.panel_widget.test_signature
+
+    @test_signature.setter
+    def test_signature(self, value):
+        self.panel_widget.test_signature = value
+
+    @property
+    def cancel(self):
+        return self.panel_widget.cancel
+
+    @property
+    def task(self):
+        return self.panel_widget.task
+
+    @property
+    def test_failed(self):
+        return self.panel_widget.test_failed
+
+    @test_failed.setter
+    def test_failed(self, value):
+        self.panel_widget.test_failed = value
+
+    @property
+    def revision(self):
+        return self.panel_widget.revision
+
+    @revision.setter
+    def revision(self, value):
+        self.panel_widget.revision = value
+
+    @property
+    def events(self):
+        return self.panel_widget.events
+
+    def _close(self):
+        # Delegate entirely to the panel's close-wait logic: a running save
+        # completes first (closing stays True, closed stays False), otherwise
+        # the panel is destroyed immediately.  When the panel finishes tearing
+        # down we destroy the owning root (Toplevel or standalone Tk).
+        self._closing_via_panel = True
+        self.panel_widget.close()
+
+    def _destroyed(self, event):
+        # Kept for parity; the panel handles its own teardown.
+        pass
 
 
 def build_window(parent=None):
-    root = tk.Toplevel(parent) if parent is not None else tk.Tk()
-    root.title("AI 八股训练器 · AI 接口配置")
-    root.geometry("560x430")
-    root.resizable(False, False)
-
-    cfg = load_config()
-    llm = cfg.get("llm")
-    llm = dict(llm) if isinstance(llm, dict) else {}
-    if not isinstance(llm.get("api_key", ""), str):
-        llm["api_key"] = ""
-    fallback_total = verified_fallback_count()
-    # Key 从凭据管理器/环境变量解析（config.json 不再保存明文）；仅用于本地回显，掩码显示
-    current_key = secrets.resolve_api_key(llm)
-
-    pad = {"padx": 12, "pady": 6}
-    frm = ttk.Frame(root, padding=16)
-    frm.pack(fill="both", expand=True)
-
-    ttk.Label(frm, text=f"用大模型把「AI 当前干的活」+题库来源正文合成情景题。"
-                        f"当前已验证回退题 {fallback_total} 道：不填 Key 时离线可出这 "
-                        f"{fallback_total} 道带四选项、答案和解析的题，其余知识点会明确"
-                        "提示不可用（推荐填写 API Key）。",
-              foreground="#666").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
-
-    # 快捷服务商
-    ttk.Label(frm, text="快捷选择").grid(row=1, column=0, sticky="w", **pad)
-    provider_var = tk.StringVar()
-    combo = ttk.Combobox(frm, textvariable=provider_var, state="readonly",
-                         values=list(PRESET_URLS.keys()), width=14)
-    combo.grid(row=1, column=1, columnspan=2, sticky="we", **pad)
-
-    def on_provider(_e=None):
-        if provider_var.get() in PRESET_URLS:
-            url_var.set(PRESET_URLS[provider_var.get()])
-    combo.bind("<<ComboboxSelected>>", on_provider)
-
-    # 接口地址
-    ttk.Label(frm, text="接口地址 base_url").grid(row=2, column=0, sticky="w", **pad)
-    url_var = tk.StringVar(value=llm.get("base_url", "https://api.deepseek.com/v1"))
-    ttk.Entry(frm, textvariable=url_var, width=46).grid(row=2, column=1, columnspan=2, sticky="we", **pad)
-
-    # API Key
-    ttk.Label(frm, text="API Key").grid(row=3, column=0, sticky="w", **pad)
-    key_var = tk.StringVar(value=current_key)
-    key_entry = ttk.Entry(frm, textvariable=key_var, width=35, show="*")
-    key_entry.grid(row=3, column=1, sticky="we", **pad)
-    show_var = tk.BooleanVar(value=False)
-
-    def toggle_show():
-        key_entry.configure(show="" if show_var.get() else "*")
-    ttk.Checkbutton(frm, text="显示", variable=show_var, command=toggle_show).grid(row=3, column=2, sticky="w")
-
-    # 模型名
-    ttk.Label(frm, text="模型名 model").grid(row=4, column=0, sticky="w", **pad)
-    model_var = tk.StringVar(value=llm.get("model", "deepseek-chat"))
-    model_combo = ttk.Combobox(frm, textvariable=model_var, values=PRESET_MODELS, width=30)
-    model_combo.grid(row=4, column=1, columnspan=2, sticky="we", **pad)
-
-    # 超时
-    ttk.Label(frm, text="超时(秒)").grid(row=5, column=0, sticky="w", **pad)
-    timeout_var = tk.StringVar(value=str(llm.get("timeout_sec", 60)))
-    ttk.Entry(frm, textvariable=timeout_var, width=10).grid(row=5, column=1, sticky="w", **pad)
-
-    status = ttk.Label(frm, text="", foreground="#006600", wraplength=500)
-    status.grid(row=6, column=0, columnspan=3, sticky="we", **pad)
-
-    def get_llm() -> dict:
-        return {
-            "base_url": url_var.get().strip(),
-            "api_key": key_var.get().strip(),
-            "model": model_var.get().strip() or "deepseek-chat",
-            "timeout_sec": int(timeout_var.get() or 60),
-        }
-
-    def on_save():
-        try:
-            llm_cfg = get_llm()
-        except ValueError:
-            messagebox.showerror("错误", "超时必须是数字")
-            return
-        try:
-            stored = update_llm(llm_cfg)
-        except Exception as error:
-            messagebox.showerror("保存失败", f"配置未能保存（{type(error).__name__}），请修复后重试。", parent=root)
-            return
-        if stored == "fallback":
-            messagebox.showwarning(
-                "未保存 Key",
-                "系统凭据管理器不可用，Key 未保存（不会明文写入 config.json）。\n"
-                "请改设环境变量 BAGU_LLM_API_KEY。")
-        status.configure(text="已保存，即时生效：Key 存于系统凭据管理器（config.json 不含明文）。"
-                              f"下次出题会优先校验来源正文并生成情景题；离线仍有 "
-                              f"{verified_fallback_count()} 道已验证题。", foreground="#006600")
-
-    def on_test():
-        try:
-            llm_cfg = get_llm()
-        except ValueError:
-            return messagebox.showerror("错误", "超时必须是数字")
-        status.configure(text="正在测试连接…", foreground="#333")
-        root.update()
-        result = test_llm(llm_cfg["base_url"], llm_cfg["api_key"],
-                          llm_cfg["model"], min(llm_cfg["timeout_sec"], 15))
-        ok = result.startswith(("连接成功", "HTTP 200"))
-        status.configure(text=f"测试结果: {result}", foreground="#006600" if ok else "#aa0000")
-
-    btns = ttk.Frame(frm)
-    btns.grid(row=7, column=0, columnspan=3, sticky="e", pady=(12, 0))
-    ttk.Button(btns, text="测试连接", command=on_test).pack(side="left", padx=6)
-    ttk.Button(btns, text="保存", command=on_save).pack(side="left")
-
-    if current_key:
-        status.configure(text=f"已检测到现有配置（Key 已从凭据管理器/环境变量载入，掩码显示），"
-                              f"当前离线可出 {verified_fallback_count()} 道已验证题。",
-                         foreground="#333")
-    return root
+    # Preserve the historical entry point and its Tk/Toplevel return value.
+    return ModelSettingsWindow(parent).root
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ id_dsa
 id_ecdsa
 id_ed25519
 /.trae/
+/.workbuddy/
 
 # Python 缓存、虚拟环境和构建产物
 __pycache__/
@@ -38,6 +39,13 @@ coverage.xml
 *.egg-info/
 
 # 本地学习记录、SQLite 辅助文件及桌面进程认证信息
+/data/
+/runtime/
+/logs/
+/profiles/
+/user-data/
+/window.json
+/onboarding.json
 *.db
 *.db-*
 *.sqlite
@@ -62,7 +70,7 @@ coverage.xml
 /data/question_concepts.json
 /data/fallback_quizzes.json
 /data/concept_profile_report.json
-# 保留 data/mock/ 中的模拟输入；它们不是可独立运行的完整题库。
+# 测试使用临时合成夹具，不依赖项目中的本机题库或旧演示输入。
 
 # 本地实验、生成文档和截图
 /scratch/

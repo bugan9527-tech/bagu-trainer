@@ -11,12 +11,46 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Text.RegularExpressions;
+using System.Collections.Generic;
+using System.Web.Script.Serialization;
 
 public class BaguAcceptanceMock {
     readonly TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
-    readonly string probe, quiz;
-    int probes, quizzes, rejected;
-    public BaguAcceptanceMock(string probeBody, string quizBody) { probe=probeBody; quiz=quizBody; }
+    readonly string probe, quiz, review;
+    int probes, quizzes, reviews, rejected;
+    public BaguAcceptanceMock(string probeBody, string quizBody, string reviewBody) { probe=probeBody; quiz=quizBody; review=reviewBody; }
+    string GroundedQuiz(string body) {
+        var json = new JavaScriptSerializer();
+        var request = (Dictionary<string, object>)json.DeserializeObject(body);
+        var messages = (object[])request["messages"];
+        var message = (Dictionary<string, object>)messages[messages.Length-1];
+        string text = (string)message["content"], marker = "AI 当前工作上下文：\n";
+        int contextStart = text.IndexOf(marker, StringComparison.Ordinal);
+        int sourceStart = text.IndexOf("\"\"\"\n", StringComparison.Ordinal) + 4;
+        int sourceEnd = text.IndexOf("\n\"\"\"", sourceStart, StringComparison.Ordinal);
+        if(contextStart < 0 || sourceStart < 4 || sourceEnd < sourceStart) throw new FormatException();
+        string context = text.Substring(contextStart+marker.Length);
+        string source = text.Substring(sourceStart,sourceEnd-sourceStart);
+        string quote = context;
+        foreach(string line in context.Split('\n')) {
+            if(line.Trim().Length > 4 && !line.StartsWith("---") && !line.StartsWith("+++") &&
+               !line.StartsWith("diff ") && !line.StartsWith("@@") && !line.StartsWith("index ")) {
+                quote=line.Trim(); break;
+            }
+        }
+        var wrapper = (Dictionary<string, object>)json.DeserializeObject(quiz);
+        var choices = (object[])wrapper["choices"];
+        var choice = (Dictionary<string, object>)choices[0];
+        var content = (Dictionary<string, object>)choice["message"];
+        var question = (Dictionary<string, object>)json.DeserializeObject((string)content["content"]);
+        question["grounding"] = new Dictionary<string, object> {
+            {"context_quote",quote.Substring(0,Math.Min(160,quote.Length))},
+            {"source_quote",source.Substring(0,Math.Min(120,source.Length))},
+            {"rationale","本地传输验收固定说明：查询改动需要结合来源材料讨论索引对扫描范围的影响。"}
+        };
+        content["content"]=json.Serialize(question);
+        return json.Serialize(wrapper);
+    }
     public int Start() {
         listener.Start();
         new Thread(() => { while(true) { var client=listener.AcceptTcpClient();
@@ -35,7 +69,7 @@ public class BaguAcceptanceMock {
                 }
                 string headers=header.ToString(), response; int status=200;
                 if(headers.StartsWith("GET /status ")) {
-                    response="{\"probes\":"+probes+",\"quizzes\":"+quizzes+",\"rejected\":"+rejected+"}";
+                    response="{\"probes\":"+probes+",\"quizzes\":"+quizzes+",\"reviews\":"+reviews+",\"rejected\":"+rejected+"}";
                 } else if(!headers.StartsWith("POST /v1/chat/completions ")) {
                     status=404; response="{\"error\":\"wrong endpoint\"}";
                 } else {
@@ -50,7 +84,8 @@ public class BaguAcceptanceMock {
                     } else if(!Regex.IsMatch(body,"\"model\"\\s*:\\s*\"local-model\"")) {
                         Interlocked.Increment(ref rejected); status=404; response="{\"error\":\"fixture model not found\"}";
                     } else if(body.Contains("\"max_tokens\"")) { Interlocked.Increment(ref probes); response=probe; }
-                    else { Interlocked.Increment(ref quizzes); response=quiz; }
+                    else if(body.Contains("review_context_grounding")) { Interlocked.Increment(ref reviews); response=review; }
+                    else { Interlocked.Increment(ref quizzes); response=GroundedQuiz(body); }
                 }
                 byte[] payload=Encoding.UTF8.GetBytes(response);
                 byte[] prefix=Encoding.ASCII.GetBytes("HTTP/1.1 "+status+" Result\r\nContent-Type: application/json; charset=utf-8\r\nConnection: close\r\nContent-Length: "+payload.Length+"\r\n\r\n");
@@ -60,7 +95,7 @@ public class BaguAcceptanceMock {
     }
 }
 '@
-Add-Type -TypeDefinition $source
+Add-Type -TypeDefinition $source -ReferencedAssemblies 'System.dll','System.Core.dll','System.Web.Extensions.dll'
 $question = @{
     question = '数据库查询需要减少扫描的数据量，依据来源中的索引原理，应优先采用哪种措施？'
     options = @{A='结合查询条件建立合适索引';B='删除所有索引以加速查询';C='每次查询扫描所有记录';D='仅改变变量命名'}
@@ -69,7 +104,10 @@ $question = @{
 } | ConvertTo-Json -Depth 6 -Compress
 $probe = @{choices=@(@{message=@{content='OK'}})} | ConvertTo-Json -Depth 6 -Compress
 $quiz = @{choices=@(@{message=@{content=$question}})} | ConvertTo-Json -Depth 6 -Compress
-$server = New-Object BaguAcceptanceMock($probe, $quiz)
+$reviewContent = @{context_relevant=$true;source_supported=$true;answer_unique=$true;no_answer_leak=$true;
+    correct_answer='A';reason='本地模拟审核固定响应：用于检查协议与调用链，不代表真实模型质量。'} | ConvertTo-Json -Compress
+$review = @{choices=@(@{message=@{content=$reviewContent}})} | ConvertTo-Json -Depth 6 -Compress
+$server = New-Object BaguAcceptanceMock($probe, $quiz, $review)
 $port = $server.Start()
 $ready = @{base_url="http://127.0.0.1:$port/v1";model='local-model';fixture_key='acceptance-local-only-not-a-secret';pid=$PID}
 $ready | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $OutputDirectory 'mock.json') -Encoding UTF8

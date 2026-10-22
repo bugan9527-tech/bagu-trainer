@@ -151,19 +151,31 @@ class BankBuildService:
         from ..concepts import validate_profiles
 
         provenance = []
+        path_aliases = {}
         for source in sources:
             archive = staging / (source.directory + ".zip")
             provenance.append(download_archive(source, archive, control, opener=self.opener,
                 retries=retries, request_timeout=request_timeout, limits=self.limits))
             control.phase("unpack", f"安全解压 {source.repository}")
-            safe_extract(archive, staging / "repos" / source.directory, control, limits=self.limits)
+            try:
+                aliases = safe_extract(archive, staging / "repos" / source.directory,
+                                       control, limits=self.limits)
+            except (BuildCancelled, BuildTimeout):
+                raise
+            except BuildError as error:
+                raise BuildError(error.stage, f"{source.repository}: {error}") from error
+            provenance[-1]["path_aliases"] = aliases
+            path_aliases.update({f"{source.directory}/{original}": f"{source.directory}/{stored}"
+                                 for original, stored in aliases.items()})
             archive.unlink()
         control.phase("extract", "提取题目并去重")
         export = extract_sources([source.directory for source in sources], staging / "repos",
-                                  staging / "extracted", checkpoint=control.check)
+                                  staging / "extracted", checkpoint=control.check,
+                                  path_aliases=path_aliases)
         control.phase("import", "导入题目并提取来源正文", len(export))
         bank, extraction = build_bank(export, staging / "repos", 1500,
-                                      checkpoint=control.ticker("import", len(export)), stable_ids=True)
+                                      checkpoint=control.ticker("import", len(export)), stable_ids=True,
+                                      path_aliases=path_aliases)
         if not bank:
             raise BuildError("import", "所选 ZIP 中没有可用题目，请选择包含题目正文的来源后重试。")
         control.phase("tag", "构建知识标签", len(bank))

@@ -120,6 +120,67 @@ def test_incremental_reader_captures_file_tail_and_excludes_secrets(tmp_path):
     assert "-value = 'redis cache'" in reader.watch_changes()["diff_text"]
 
 
+def test_desktop_detects_edit_committed_between_polls(env, tmp_path):
+    project = tmp_path / "committed-project"
+    project.mkdir()
+    reader = ActivityDiffReader(str(project))
+    try:
+        assert reader._run_git(["init"]).returncode == 0
+    except FileNotFoundError:
+        pytest.skip("Git is not installed")
+    source = project / "缓存.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    def commit():
+        assert reader._run_git(["add", "."]).returncode == 0
+        result = reader._run_git(["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                                  "-c", "commit.gpgsign=false", "commit", "-m", "test"])
+        assert result.returncode == 0, result.stderr
+    commit()
+    env["cfg"]["project_roots"] = [str(project)]
+    monitor = DesktopMonitor(engine, quiet_seconds=0)
+    monitor.poll()
+    source.write_text("value = 'redis cache'\n", encoding="utf-8")
+    commit()
+    assert reader._run_git(["status", "--porcelain"]).stdout == ""
+    assert monitor.poll()["state"] == "quiz_ready"
+    assert "+value = 'redis cache'" in env["gen"].last_ctx
+    monitor.poll()
+    assert env["gen"].calls == 1
+
+
+def test_desktop_old_large_diff_cannot_hide_new_edits(tmp_path, monkeypatch):
+    (tmp_path / "old.py").write_text("# old change\n" * 1000, encoding="utf-8")
+    source = tmp_path / "new.py"
+    source.write_text("value = 1\n", encoding="utf-8")
+    reader = ActivityDiffReader(str(tmp_path))
+    monkeypatch.setattr(reader, "_run_git", lambda *_: pytest.fail("Desktop scans must not depend on Git output"))
+    assert reader.changes()["diff_text"] == ""
+    source.write_text("value = 'redis cache'\n", encoding="utf-8")
+    result = reader.changes()
+    assert result["files"] == ["new.py"]
+    assert "+value = 'redis cache'" in result["diff_text"]
+    assert reader.changes()["diff_text"] == ""
+
+
+def test_no_match_and_cooldown_have_distinct_diagnostics(env, monkeypatch, caplog):
+    monitor = DesktopMonitor(engine, quiet_seconds=0)
+    events = []
+    monitor.ui_post = events.append
+    root = str(engine.PROJECT_ROOT)
+    info = activity("redis private-code-marker")
+    with caplog.at_level("INFO", logger="bagu-trainer"):
+        assert monitor._generate(root, info) == "quiz_ready"
+        assert monitor._generate(root, info) == "watching"
+        assert "跳过" in events[-1][1]["reason"]
+        monkeypatch.setattr(env["matcher"], "rank", lambda *_, **__: [])
+        assert monitor._generate(root, info) == "watching"
+    assert "未匹配" in events[-1][1]["reason"]
+    assert "未调用 AI" in events[-1][1]["reason"]
+    assert "matched=0" in caplog.text
+    assert "private-code-marker" not in caplog.text
+    assert env["gen"].calls == 1
+
+
 def test_git_reader_includes_untracked_source_only(tmp_path, monkeypatch):
     from types import SimpleNamespace
     (tmp_path / "new.py").write_text("redis cache", encoding="utf-8")
@@ -235,19 +296,20 @@ def test_desktop_ui_can_show_answer_and_feedback(env, monkeypatch):
         app._show_quiz({"quiz_id": "preview", "question": "Which option is correct?",
                         "options": {letter: letter * 20 for letter in "ABCD"},
                         "knowledge_point": "Example", "project_root": "test"})
-        app.popup.withdraw()
+        practice = app._page_frame("practice")
+        app._navigate_page("practice")
         app.root.update_idletasks()
-        app._submit("preview")
+        assert app.practice.submit() is False  # no answer chosen
         assert app.jobs.empty()
         app.answer.set("A")
-        app._submit("preview")
+        assert app.practice.submit() is True
         assert app.jobs.get_nowait() == ("submit", ("preview", "A"))
-        app._submit("preview")
-        assert app.jobs.empty()  # Keyboard shortcuts cannot enqueue a duplicate submit.
-        app._show_grade({"ok": True, "correct": True, "correct_answer": "A",
-                         "analysis": "Example explanation", "schedule": {"interval_days": 1}})
+        assert app.practice.submit() is False  # Keyboard shortcuts cannot enqueue a duplicate submit.
+        assert app.jobs.empty()
+        app.practice.apply_grade({"ok": True, "correct": True, "correct_answer": "A",
+                                  "analysis": "Example explanation", "schedule": {"interval_days": 1}})
         assert "Example explanation" in app.feedback.get()
-        assert all(button.instate(["disabled"]) for button in app.option_buttons)
+        assert all(button.instate(["disabled"]) for button in practice.option_buttons)
         assert monitor.window_command("_show_dashboard", {})["ok"]
         app._drain()
         assert monitor.window_command("_desktop_status", {})["window_state"] == "normal"

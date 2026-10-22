@@ -132,15 +132,20 @@ def _record_usable(q: dict) -> bool:
 
 
 def build_bank(export: list, repos_root, excerpt_limit: int, *,
-               checkpoint=lambda: None, stable_ids=False) -> tuple:
+               checkpoint=lambda: None, stable_ids=False, path_aliases=None) -> tuple:
     """从 export 构建题库；返回 (bank, 逐条提取统计)。"""
     bank = []
     stat = {"ok": 0, "missing": 0, "none": 0, "skipped_blank": 0,
             "usable": 0, "weak": 0, "exact": 0, "parent": 0,
             "title_rejected": 0, "title_cleanup": []}
-    excerpt_for_cached = functools.lru_cache(maxsize=None)(
-        lambda paths, title: excerpt_for_detailed(
-            str(repos_root), paths, title, excerpt_limit))
+    path_aliases = path_aliases or {}
+    original_paths = {stored: original for original, stored in path_aliases.items()}
+    @functools.lru_cache(maxsize=None)
+    def excerpt_for_cached(paths, title):
+        detail = excerpt_for_detailed(str(repos_root),
+            [path_aliases.get(path, path) for path in paths], title, excerpt_limit)
+        detail["used"] = original_paths.get(detail["used"], detail["used"])
+        return detail
     for i, e in enumerate(export, 1):
         checkpoint()
         raw_text = (e.get("question") or "").strip()

@@ -49,18 +49,49 @@ def package_report(destination):
     from . import config, paths
     from .bank_build.service import load_sources
     from .bank_storage import atomic_json
-    from .tk_runtime import prepare_tk
+    from .tk_runtime import prepare_tk, create_root
     from .version import __version__
     prepare_tk()
     import tkinter as tk
     import keyring
     import ssl
     import sqlite3
-    root = tk.Tk()
+    root = create_root()
     try:
+        from tkinter import ttk
+        from .ui_theme import apply_theme, COLORS, PRIMARY, SECONDARY, DANGER
+        from importlib.metadata import version
+        theme = apply_theme(root)
         root.withdraw()
+        widgets = [ttk.Button(root, text="主要操作 Primary", style=PRIMARY),
+                   ttk.Button(root, text="次要操作", style=SECONDARY),
+                   ttk.Button(root, text="危险操作", style=DANGER), ttk.Entry(root),
+                   ttk.Combobox(root, values=["中文模型 Model"]),
+                   ttk.Radiobutton(root, text="中文选项 Option"),
+                   ttk.Treeview(root), ttk.Progressbar(root), ttk.Scrollbar(root)]
+        for widget in widgets:
+            widget.pack()
         root.update_idletasks()
         tcl_version = str(root.tk.call("info", "patchlevel"))
+        ui_theme = theme.style.theme_use()
+        ui_font = theme.fonts["body"].actual("family")
+        ui_diagnostics = {
+            "widgets": [{"class": widget.winfo_class(), "width": widget.winfo_reqwidth(),
+                         "height": widget.winfo_reqheight()} for widget in widgets],
+            "fonts": {role: value.actual() for role, value in theme.fonts.items()},
+            "mixed_text_width": theme.fonts["body"].measure("中文 English 123，学习工具"),
+            "image_count": len(root.tk.call("image", "names")),
+            "tk_library": str(root.tk.call("set", "tk_library")),
+            "tcl_library": str(root.tk.call("info", "library")),
+            "visual_acceptance": "runtime diagnostics only; inspect captured windows separately",
+            "tk_init_retried": bool(getattr(root, "_bagu_tk_recovered", False)),
+        }
+        from .ui_icons import make_icon
+        from .ui_shell import AppShell
+        ui_diagnostics["navigation_icons"] = {}
+        for name, _ in AppShell.PAGES:
+            icon = make_icon(theme, name, COLORS.primary)
+            ui_diagnostics["navigation_icons"][name] = {"width": icon.width(), "height": icon.height()}
     finally:
         root.destroy()
     backend = keyring.get_keyring()
@@ -68,6 +99,9 @@ def package_report(destination):
               "resources": str(paths.RESOURCE_ROOT), "installation": str(paths.INSTALL_ROOT),
               "user_data": str(config.USER_DATA_ROOT), "config": str(config.CONFIG_PATH),
               "database": str(config.db_path()), "tcl_version": tcl_version,
+              "ui_theme": ui_theme, "ui_font": ui_font,
+              "ttkbootstrap": version("ttkbootstrap"), "pillow": version("pillow"),
+              "ui_diagnostics": ui_diagnostics,
               "keyring_backend": type(backend).__module__ + "." + type(backend).__name__,
               "sources": len(load_sources()), "sqlite": sqlite3.sqlite_version,
               "tls": ssl.OPENSSL_VERSION}

@@ -27,7 +27,12 @@ VERIFIED = {
     "answer": "A",
     "analysis": "缓存穿透指查询不存在的数据，可用空值缓存短 TTL 兜底。",
     "source_paths": ["r/cache.md"],
-    "source_excerpt": "缓存穿透指查询不存在的数据……",
+    "source_excerpt": (
+        "缓存穿透是查询不存在的数据，缓存中没有对应内容，请求会继续访问数据库。"
+        "如果相同的无效查询不断出现，可以缓存空结果并设置较短的过期时间，减少"
+        "数据库重复查询。也可以使用布隆过滤器提前过滤明显不存在的键，但仍需"
+        "处理过滤器的误判和数据更新，不能把过滤器判断当作数据存在的确凿证明。"
+    ),
     "excerpt_source": "r/cache.md",
 }
 
@@ -38,15 +43,25 @@ VALID_LLM_CONTENT = json.dumps({
     "options": {"A": "部署主从并建立复制", "B": "只扩容主库", "C": "关闭复制", "D": "删除从库"},
     "answer": "A",
     "analysis": "读写分离需要主从复制支撑，易错点是直接扩容主库。",
+    "grounding": {
+        "context_quote": "订单查询增加读写分离",
+        "source_quote": "主库负责写操作并维护复制关系",
+        "rationale": "订单查询要将读写请求分流，需要通过主从复制支持只读节点查询。",
+    },
 }, ensure_ascii=False)
+
+VALID_REVIEW = {"context_relevant": True, "source_supported": True,
+                "answer_unique": True, "no_answer_leak": True, "correct_answer": "A",
+                "reason": "当前订单查询场景与主从复制分流的依据相符，答案唯一。"}
 
 
 class FakeResp:
     def __init__(self, text):
         self._t = text
 
-    def read(self):
-        return self._t.encode("utf-8")
+    def read(self, size=-1):
+        body = self._t.encode("utf-8")
+        return body if size < 0 else body[:size]
 
     def __enter__(self):
         return self
@@ -58,14 +73,15 @@ class FakeResp:
 def make_urlopen(respond=None, error=None, capture=None):
     def urlopen(req, timeout=None):
         payload = json.loads(req.data.decode("utf-8"))
+        is_review = "review_context_grounding" in payload["messages"][-1]["content"]
         if capture is not None:
-            capture["payload"] = payload
+            capture["review_payload" if is_review else "payload"] = payload
         if error is not None:
             raise error
         if respond is None:
             raise AssertionError("不应发起的 LLM 调用")
         return FakeResp(json.dumps(
-            {"choices": [{"message": {"content": respond}}]},
+            {"choices": [{"message": {"content": json.dumps(VALID_REVIEW) if is_review else respond}}]},
             ensure_ascii=False))
 
     return urlopen
@@ -135,14 +151,14 @@ def test_no_llm_unverified_returns_unavailable(monkeypatch):
     assert "options" not in quiz and "answer" not in quiz  # 绝不返回空题
 
 
-def test_no_llm_verified_serves_fallback(monkeypatch):
+def test_no_llm_verified_quiz_is_not_served(monkeypatch):
     no_llm(monkeypatch)
     gen = qg.QuizGenerator(urlopen=make_urlopen())
     quiz = gen.generate(VERIFIED, "上下文")
-    assert quiz.get("available") is not False
-    assert quiz["generated_by"] == "fallback"
-    assert sorted(quiz["options"].keys()) == ["A", "B", "C", "D"]
-    assert quiz["answer"] == "A" and quiz["analysis"]
+    assert quiz["available"] is False
+    assert quiz["generated_by"] == "unavailable"
+    assert "未配置 LLM" in quiz["unavailable_reason"]
+    assert not {"question", "options", "answer", "analysis"} & quiz.keys()
 
 
 # ---- LLM 成功 + 提示词接地 ----
@@ -153,7 +169,7 @@ def test_llm_success_grounded_on_excerpt(monkeypatch):
     capture = {}
     gen = qg.QuizGenerator(urlopen=make_urlopen(respond=VALID_LLM_CONTENT,
                                                 capture=capture))
-    quiz = gen.generate(UNVERIFIED, "AI 正在改缓存代码")
+    quiz = gen.generate(UNVERIFIED, "为订单查询增加读写分离与主从复制")
     assert quiz.get("available") is not False
     assert quiz["generated_by"] == "llm"
     assert sorted(quiz["options"].keys()) == ["A", "B", "C", "D"]
@@ -161,6 +177,9 @@ def test_llm_success_grounded_on_excerpt(monkeypatch):
     sys_msg = capture["payload"]["messages"][0]["content"]
     user_msg = capture["payload"]["messages"][1]["content"]
     assert UNVERIFIED["source_excerpt"] in user_msg  # 来源片段作为事实依据
+    assert "订单查询增加读写分离" in user_msg
+    assert quiz["grounding"]["review"]["context_relevant"] is True
+    assert capture["review_payload"]["temperature"] == 0
     assert "不得暗示或暴露正确答案" in sys_msg
     assert quiz["answer"] in ("A", "B", "C", "D")
     # 题干不得以「答案是X」等形式泄露答案字母
@@ -194,14 +213,16 @@ def test_http_failure_reports_status_without_server_error_text(monkeypatch):
     assert "sk-private" not in str(quiz)
 
 
-def test_llm_timeout_verified_falls_back(monkeypatch):
+def test_llm_timeout_never_serves_verified_quiz(monkeypatch):
     llm = {"base_url": "https://fake.local/v1", "api_key": "sk-test",
            "model": "m", "timeout_sec": 5}
     with_llm(monkeypatch, llm)
-    gen = qg.QuizGenerator(urlopen=make_urlopen(error=TimeoutError("boom")))
+    capture = {}
+    gen = qg.QuizGenerator(urlopen=make_urlopen(error=TimeoutError("boom"), capture=capture))
     quiz = gen.generate(VERIFIED, "上下文")
-    assert quiz["generated_by"] == "fallback"
-    assert sorted(quiz["options"].keys()) == ["A", "B", "C", "D"]
+    assert capture  # Exercise a real generator request, not the excerpt gate.
+    assert quiz["available"] is False and "TimeoutError" in quiz["unavailable_reason"]
+    assert "options" not in quiz and "answer" not in quiz
 
 
 # ---- LLM 非法输出 ----
@@ -216,14 +237,14 @@ def test_llm_invalid_json_unavailable(monkeypatch):
     assert "options" not in quiz
 
 
-def test_llm_invalid_json_verified_falls_back(monkeypatch):
+def test_llm_invalid_json_never_serves_verified_quiz(monkeypatch):
     llm = {"base_url": "https://fake.local/v1", "api_key": "sk-test",
            "model": "m", "timeout_sec": 5}
     with_llm(monkeypatch, llm)
     gen = qg.QuizGenerator(urlopen=make_urlopen(respond="{broken"))
     quiz = gen.generate(VERIFIED, "上下文")
-    assert quiz["generated_by"] == "fallback"
-    assert quiz["answer"] == "A"
+    assert quiz["available"] is False and "校验失败" in quiz["unavailable_reason"]
+    assert "options" not in quiz and "answer" not in quiz
 
 
 # ---- 来源缺失：拒绝无依据合成 ----

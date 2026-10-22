@@ -2,6 +2,8 @@
 import hashlib
 import time
 import difflib
+import logging
+import threading
 from collections import OrderedDict
 from pathlib import Path
 from .diff_reader import DiffReader, DIFF_LIMIT, _file_allowed
@@ -32,6 +34,12 @@ class ActivityDiffReader(DiffReader):
             return path.read_text(encoding="utf-8", errors="ignore")
         except (OSError, ValueError):
             return ""
+
+    def changes(self):
+        # A Git working-tree diff is not an activity stream: commits can clear
+        # it between polls, and old large diffs can hide new edits after truncation.
+        # Compare files with our own startup baseline in Git projects as well.
+        return self.watch_changes()
 
     def watch_changes(self, recent_minutes=30):
         current = self._snapshot_files()
@@ -100,6 +108,9 @@ class DesktopMonitor:
         self.initialized = set()
         self.paused = False
         self.active = None
+        self.delivery_paused = threading.Event()
+        self.failed_generations = {}
+        self.generating = False
         self.ui_post = None
         self.ui_state = {"window_state": "starting"}
 
@@ -113,6 +124,7 @@ class DesktopMonitor:
             self.waiting.pop(removed, None)
             self.observed.pop(removed, None)
         self.initialized.intersection_update(roots)
+        self.failed_generations = {r: f for r, f in self.failed_generations.items() if r in roots}
         result = {"state": "watching", "projects": len(roots)}
         for root in roots:
             # All desktop activity shares the same scoped context and snapshot pipeline.
@@ -147,21 +159,70 @@ class DesktopMonitor:
                 continue
             self.waiting.pop(root, None)
             info = pending[1]
+            state = self._generate(root, info)
+            if state != "watching":
+                result["state"] = state
+        if result["state"] == "watching" and self.failed_generations:
+            result["state"] = "generation_unavailable"
+        return result
+
+    def _generate(self, root, info, failed_ids=()):
+        engine = self.engine
+        self.generating = True
+        if self.ui_post:
+            self.ui_post(("generation", {"busy": True, "project": root}))
+        try:
             with engine._STATE_LOCK:
                 caps = engine._caps()
-                _matches, generated, _skipped, unavailable = engine._generate_matches_locked(
+                kwargs = {"retry_failed_ids": failed_ids} if failed_ids else {}
+                matches, generated, skipped, unavailable = engine._generate_matches_locked(
                     info["context"], root, engine.cfg["max_quizzes_per_hit"], caps,
-                    " / ".join(info.get("sources") or [])[:200])
+                    " / ".join(info.get("sources") or [])[:200], **kwargs)
                 engine._cleanup_locked(caps)
             if unavailable:
-                result["state"] = "generation_unavailable"
-            elif generated:
-                result["state"] = "quiz_ready"
+                self.failed_generations[root] = (info, tuple(item["kp_id"] for item in unavailable))
+                reason = unavailable[0].get("reason") or "暂时无法出题，请检查模型配置后重试。"
+                state = "generation_unavailable"
+            else:
+                self.failed_generations.pop(root, None)
+                if generated:
+                    reason = "题目已准备好，可开始作答。"
+                elif not matches:
+                    reason = (f"已检测到代码改动，但未匹配到题库知识点（当前 {len(engine.kb.all())} 个）；"
+                              "未调用 AI。可更换或扩充题库来源。")
+                else:
+                    reason = f"已匹配知识点，其中 {skipped} 个因重复、待答或复习冷却跳过；未调用 AI。"
+                state = "quiz_ready" if generated else "watching"
+            # Counts only: never persist project code, prompts or credentials.
+            logging.getLogger("bagu-trainer").info(
+                "[monitor] checked files=%d context_chars=%d bank=%d matched=%d generated=%d skipped=%d unavailable=%d state=%s",
+                len((info.get("changes") or {}).get("files") or []), len(info["context"]),
+                len(engine.kb.all()), len(matches), len(generated), skipped, len(unavailable), state)
+            if self.ui_post:
+                self.ui_post(("generation", {"busy": False, "state": state, "reason": reason,
+                                              "retryable": bool(self.failed_generations)}))
+            return state
+        finally:
+            self.generating = False
+
+    def retry_generation(self):
+        """Explicit retry of failed items; preserve scope, dedupe and cooldown."""
+        if self.paused:
+            return {"state": "paused", "projects": 0}
+        engine = self.engine
+        roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
+        roots = {engine._normalize_project_root(r) for r in roots}
+        result = {"state": "watching", "projects": len(roots)}
+        for root, (info, failed_ids) in list(self.failed_generations.items()):
+            if root not in roots:
+                self.failed_generations.pop(root, None)
+                continue
+            result["state"] = self._generate(root, info, failed_ids)
         return result
 
     def take_quiz(self):
         """Only one automatic popup at a time; answered/delivered items are skipped."""
-        if self.paused or self.active:
+        if self.paused or self.active or self.delivery_paused.is_set():
             return None
         engine = self.engine
         with engine._STATE_LOCK:
@@ -177,6 +238,60 @@ class DesktopMonitor:
                 return engine._public_pending(pending)
         return None
 
+    def list_pending(self):
+        """Read-only pending list (待答列表): ready + delivered, unanswered, in
+        project scope (or manual), oldest first.  Viewing the list must NOT mark
+        anything delivered — it only reads the current state after cleanup.
+        Monitoring/automatic-delivery pauses do not hide existing practice.
+        Expiry and dedupe/cooldown rules are enforced by _cleanup_locked."""
+        engine = self.engine
+        with engine._STATE_LOCK:
+            engine._get_store_locked()
+            engine._cleanup_locked(engine._caps())
+            roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
+            scopes = {engine._normalize_project_root(r) for r in roots}
+            out = []
+            for pending in sorted(engine._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
+                if pending["status"] not in ("ready", "delivered"):
+                    continue
+                manual = bool(engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review"))
+                if pending["project_root"] not in scopes and not manual:
+                    continue
+                public = engine._public_pending(pending)
+                public["status"] = pending["status"]
+                public["manual_review"] = manual
+                out.append(public)
+            return out
+
+    def pending_count(self):
+        """待答题数：未作答且未过期的 ready+delivered 题数（含人工重练）。"""
+        return len(self.list_pending())
+
+    def enter_quiz(self, quiz_id):
+        """按题进入：显式选中一条待答题交付作答。仅当用户主动选择时才把
+        ready 题交付；返回公开题目，题不存在/过期/越权时返回 None。
+        主动进入不受监听暂停或自动推送暂停限制；自动交付由 take_quiz 控制。"""
+        engine = self.engine
+        with engine._STATE_LOCK:
+            engine._get_store_locked()
+            engine._cleanup_locked(engine._caps())
+            roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
+            scopes = {engine._normalize_project_root(r) for r in roots}
+            for pending in sorted(engine._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
+                if pending["quiz_id"] != quiz_id or pending["status"] not in ("ready", "delivered"):
+                    continue
+                manual = bool(engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review"))
+                if pending["project_root"] not in scopes and not manual:
+                    continue
+                if pending["status"] == "ready":
+                    engine._deliver_pending_locked(pending)
+                self.active = pending["quiz_id"]
+                public = engine._public_pending(pending)
+                if manual:
+                    public["manual_review"] = True
+                return public
+        return None
+
     def resume_quiz(self):
         engine = self.engine
         with engine._STATE_LOCK:
@@ -185,9 +300,10 @@ class DesktopMonitor:
             roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
             scopes = {engine._normalize_project_root(r) for r in roots}
             for pending in engine._state["pending"]:
-                if pending["status"] == "delivered" and pending["project_root"] in scopes:
+                manual = engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review")
+                if pending["status"] == "delivered" and (pending["project_root"] in scopes or manual):
                     self.active = pending["quiz_id"]
-                    return engine._public_pending(pending)
+                    return {**engine._public_pending(pending), **({"manual_review": True} if manual else {})}
         return None
 
     def window_command(self, name, arguments):

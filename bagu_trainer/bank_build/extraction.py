@@ -157,20 +157,22 @@ def extract_file(entries, repo: str, rel_path: str, text: str):
             collect_entry(entries, repo, rel_path, ln, "question", m.group(1))
 
 
-def walk_repo(entries, repo: str, repos_dir=None, checkpoint=lambda: None):
+def walk_repo(entries, repo: str, repos_dir=None, checkpoint=lambda: None, path_aliases=None):
     root = Path(repos_dir or REPOS_DIR) / repo
+    original_paths = {stored: original for original, stored in (path_aliases or {}).items()}
     if not root.is_dir():
         return
-    for p in root.rglob("*"):
+    for p in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
         checkpoint()
         if not p.is_file():
             continue
         if p.suffix.lower() not in TEXT_EXTS:
             continue
-        parts = set(p.parts) & SKIP_DIR_PARTS
-        if parts - {".git"} and any(x in p.parts for x in SKIP_DIR_PARTS):
-            continue
         rel = p.relative_to(root).as_posix()
+        logical = original_paths.get(f"{repo}/{rel}", f"{repo}/{rel}")
+        rel = logical[len(repo) + 1:]
+        if set(Path(rel).parts) & SKIP_DIR_PARTS:
+            continue
         try:
             raw = p.read_bytes()
         except Exception:
@@ -272,7 +274,8 @@ def main(argv=None, *, repos_dir=None, out_dir=None, fetch_daily_issues=None):
                            fetch_issues=fetch_daily_issues if args.fetch_issues else None)
 
 
-def extract_sources(selected, repos_dir, out_dir, *, checkpoint=lambda: None, fetch_issues=None):
+def extract_sources(selected, repos_dir, out_dir, *, checkpoint=lambda: None, fetch_issues=None,
+                    path_aliases=None):
     """Extract selected local snapshots without external tools or network access."""
     repos_dir, out_dir = Path(repos_dir), Path(out_dir)
     selected = set(selected)
@@ -284,7 +287,7 @@ def extract_sources(selected, repos_dir, out_dir, *, checkpoint=lambda: None, fe
     repo_stats = {}
     for repo in sorted(selected, key=lambda r: (-REPO_STARS.get(r, 0), r)):
         ent = []
-        walk_repo(ent, repo, repos_dir, checkpoint)
+        walk_repo(ent, repo, repos_dir, checkpoint, path_aliases)
         repo_stats[repo] = len(ent)
         all_entries.extend(ent)
         logging.getLogger(__name__).info("[extract] %-32s %6d", repo, len(ent))
@@ -321,9 +324,12 @@ def extract_sources(selected, repos_dir, out_dir, *, checkpoint=lambda: None, fe
     write_md(out_dir / "merged_knowledge.md", "面试知识点清单（%d 个来源去重合并）" % len(selected),
              sorted(knowledges, key=merge_sort_key))
 
-    # 与现有训练器同构的 JSON 导出（供后续导入）
+    # Both question and knowledge headings are searchable training material.
+    # Exporting only interrogative titles drops e.g. HTTP caching/connection
+    # pools from reference-style sources. Import still validates each title and
+    # excerpt before the generator may use it.
     export = []
-    for i, e in enumerate(sorted(questions, key=merge_sort_key), 1):
+    for i, e in enumerate(sorted(kept, key=merge_sort_key), 1):
         checkpoint()
         export.append({
             "id": "bank-%04d" % i,

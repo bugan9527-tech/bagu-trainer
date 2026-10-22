@@ -17,12 +17,27 @@ python -m venv .venv-build
 输出：
 
 - `dist/BaguTrainer/`：可直接启动的完整目录。
-- `dist/BaguTrainer-0.1.0-windows-x64.zip`：分发压缩包。
+- `dist/BaguTrainer-0.2.0-windows-x64.zip`：分发压缩包。
 - 同名 `.zip.sha256`：压缩包校验值。
 - 包内 `BUILD_MANIFEST.json`：架构、版本、构建依赖版本及逐文件 SHA256。
 
+本地验收可以指定独立输出目录，保留已有构建产物且不碰已安装客户端：
+
+```powershell
+$env:BAGU_USER_DATA_DIR = Join-Path $env:TEMP 'bagu-isolated-build'
+.\.venv-build\Scripts\python.exe scripts/build_portable.py --output-dir dist/ui-redesign-stage6
+$env:BAGU_PORTABLE_BUNDLE = "$PWD/dist/BaguTrainer"
+$env:BAGU_PORTABLE_ARCHIVE = "$PWD/dist/BaguTrainer-0.2.0-windows-x64.zip"
+python -m pytest release_tests tests -q -W error --junitxml=validation/stage6/full.xml
+.\.venv-build\Scripts\python.exe scripts/build_acceptance.py --verify --memory-credentials --output-dir dist/ui-redesign-stage6 --work validation/stage6/frozen
+```
+
+上述命令不调用 Release 脚本。工作区有未提交修改时 manifest 如实记录 `source_dirty=true`；`source_tree` 给出运行/构建源码（包括新增模块）的逐文件指纹，冻结驱动与生产包必须匹配。它是本地工作区验收包，不代表已满足干净提交的发布门禁。完整测试仍要求匹配器的只读历史题库基准，详情见 README。
+
 `packaging/windows.spec` 通过 `_tkinter` hook 收集 Tcl/Tk，通过显式 backend 和 distribution
 metadata 收集 Windows keyring；补充延迟导入的 engine。窗口模式不弹终端，不使用 UPX。
+公共桌面主题见 [UI_DESIGN.md](UI_DESIGN.md)。两个 spec 显式收集 ttkbootstrap 数据及递归 metadata，
+Pillow 由标准 hook 收集；主题和图像库的完整许可进入 `licenses/`，缺失时构建失败。
 构建脚本只收录白名单资源，生成 Python、Tk、keyring、运行及构建组件的许可和声明，
 在归档前拒绝配置、题库正文、SQLite、日志、源码脚本、测试和下载副本。
 题库仅收来源清单、固定版本与许可声明元信息，完整题库由用户首次使用时下载。
@@ -36,7 +51,7 @@ PR 只运行构建/测试，不获得 Release 写权限。手动运行要求文�
 依据 [GitHub 手动运行规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 
 ```powershell
-gh workflow run windows-portable.yml --ref main -f tag=v0.1.0
+gh workflow run windows-portable.yml --ref main -f tag=v0.2.0
 gh run list --workflow windows-portable.yml
 ```
 
@@ -61,8 +76,7 @@ gh run list --workflow windows-portable.yml
 .\.venv-build\Scripts\python.exe scripts/build_acceptance.py --verify --work build/native-acceptance
 ```
 
-工具真实创建向导和主窗口，以本地 HTTP 合成题库和模型完成首次使用、监听、弹题、判分、记录、
-重启及生产 EXE 换目录读取数据。默认使用隔离的原生 Windows 凭据；CI 加 `--memory-credentials` 并在报告标注。
+工具真实创建向导和主壳，以本地 HTTP 合成题库和模型完成首次使用、监听、出题/独立审核、内嵌练习、判分、历史快照、重练、幂等记录和重启。冻结驱动检查七页与图标、切页保留基线、新题不抢页；生产 EXE 单独检查主题/图标诊断、后台启动、单实例唤起和换目录读取临时学习数据。默认使用隔离的原生 Windows 凭据；本轮使用 `--memory-credentials`，不验证真实凭据库写入，并在报告标注。
 生成的 `BaguTrainerAcceptance-windows-x64.zip` 可在未安装 Python/Git 的机器运行。
 `.wsb`、人工复验和证据要求见 [CLEAN_WINDOWS_ACCEPTANCE.md](CLEAN_WINDOWS_ACCEPTANCE.md)。
 

@@ -69,8 +69,8 @@ def _q(qid, question, tags, **extra):
 
 
 @pytest.fixture(scope="module")
-def matcher():
-    kb = KnowledgeBase()
+def matcher(benchmark_root):
+    kb = KnowledgeBase(benchmark_root / "data" / "questions.json")
     t = time.perf_counter()
     m = Matcher(kb)
     m._build_secs = time.perf_counter() - t
@@ -305,9 +305,9 @@ def test_list_knowledge_points_filter_still_works(matcher):
 
 
 # ---- 概念档案数据完整性 ----
-def test_concept_profiles_complete_and_valid():
-    kb = KnowledgeBase()
-    profiles = load_concept_profiles()
+def test_concept_profiles_complete_and_valid(benchmark_root):
+    kb = KnowledgeBase(benchmark_root / "data" / "questions.json")
+    profiles = load_concept_profiles(benchmark_root / "data" / "question_concepts.json")
     stats, errors = validate_profiles([q["id"] for q in kb.all()], profiles)
     assert errors == []
     assert stats["covered"] == stats["total_questions"]
@@ -326,9 +326,9 @@ def test_concept_profiles_complete_and_valid():
     assert bad_terms == []
 
 
-def test_concept_profile_report_has_no_short_profiles():
+def test_concept_profile_report_has_no_short_profiles(benchmark_root):
     report = json.loads(
-        (PROJECT / "data" / "concept_profile_report.json").read_text(
+        (benchmark_root / "data" / "concept_profile_report.json").read_text(
             encoding="utf-8"
         )
     )

@@ -1,4 +1,5 @@
 """Build/audit a minimal Windows x64 onedir ZIP from an isolated build venv."""
+import argparse
 import hashlib
 import importlib.metadata as metadata
 import json
@@ -19,6 +20,7 @@ def prepare_notices():
     licenses = resources / "licenses"
     licenses.mkdir(parents=True, exist_ok=True)
     notices = ["BaguTrainer runtime components and bundled licenses", "",
+               "Desktop theme: ttkbootstrap; theme imaging: Pillow.",
                "Python's license also contains notices for its bundled OpenSSL, Tcl/Tk,",
                "SQLite and Microsoft runtime components. See Python-LICENSE.txt.", ""]
     shutil.copyfile(Path(sys.base_prefix) / "LICENSE.txt", licenses / "Python-LICENSE.txt")
@@ -27,6 +29,7 @@ def prepare_notices():
     # This is a dedicated venv with runtime + build tools only. Include licenses
     # for the bootloader/build tools too, rather than guessing what metadata is needed.
     versions = {}
+    ui_licenses = set()
     for distribution in sorted(metadata.distributions(), key=lambda item: item.metadata["Name"].lower()):
         name = distribution.metadata["Name"]
         if name.lower() in {"pip", "setuptools"}:
@@ -40,26 +43,45 @@ def prepare_notices():
                     destination = licenses / name / item.name
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(original, destination)
+                    ui_licenses.add(name.lower())
+    if not {"ttkbootstrap", "pillow"} <= ui_licenses:
+        raise RuntimeError("Desktop theme dependencies or their licenses are missing; install requirements-build.txt")
     (resources / "THIRD_PARTY_NOTICES.txt").write_text("\n".join(notices) + "\n", encoding="utf-8")
     return versions
 
 
 def audit(directory):
     forbidden = {"config.json", "questions.json", "question_concepts.json", "fallback_quizzes.json",
-                 "active-bank.json", "onboarding.json", "bridge-credentials.json"}
+                 "active-bank.json", "onboarding.json", "bridge-credentials.json", "window.json"}
     entries = []
     for file in sorted(directory.rglob("*")):
         relative = file.relative_to(directory)
         if file.is_file():
             if (file.name in forbidden or file.suffix.lower() in {".db", ".sqlite", ".sqlite3", ".log"}
-                    or set(relative.parts) & {"repos", "deduped", "tests", "release_tests", ".git", "scripts"}):
+                    or set(relative.parts) & {"repos", "deduped", "tests", "release_tests", ".git", "scripts",
+                                              "runtime", "logs", "profiles", "user-data", ".desktop-runtime"}):
                 raise RuntimeError("发布包包含禁止收录的文件：" + str(relative))
             entries.append({"path": relative.as_posix(), "bytes": file.stat().st_size,
                             "sha256": hashlib.sha256(file.read_bytes()).hexdigest()})
     return entries
 
 
+def source_provenance():
+    """Fingerprint runtime/build code, including current uncommitted modules."""
+    paths = [path for folder in ("bagu_trainer", "scripts", "packaging")
+             for path in (ROOT / folder).rglob("*") if path.suffix in {".py", ".spec"}]
+    paths.extend(ROOT.glob("requirements*.txt"))
+    files = {path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+             for path in sorted(paths)}
+    digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode("utf-8")).hexdigest()
+    return {"sha256": digest, "files": files}
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    options = parser.parse_args()
+    output = options.output_dir.resolve()
     if sys.platform != "win32" or struct.calcsize("P") != 8:
         raise SystemExit("Windows x64 Python is required")
     versions = prepare_notices()
@@ -67,17 +89,17 @@ def main():
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"],
                                         cwd=ROOT, text=True).strip())
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-                    "--distpath", str(ROOT / "dist"), "--workpath", str(ROOT / "build" / "pyinstaller"),
+                    "--distpath", str(output), "--workpath", str(ROOT / "build" / "pyinstaller"),
                     str(ROOT / "packaging" / "windows.spec")], check=True, cwd=ROOT)
-    bundle = ROOT / "dist" / "BaguTrainer"
+    bundle = output / "BaguTrainer"
     shutil.copyfile(ROOT / "PORTABLE_README.md", bundle / "使用说明.md")
     contents = audit(bundle)
     manifest = {"application": "BaguTrainer", "version": __version__, "architecture": "windows-x64",
                 "layout": "PyInstaller onedir", "python": sys.version, "dependencies": versions, "files": contents,
-                "source_commit": commit, "source_dirty": dirty}
+                "source_commit": commit, "source_dirty": dirty, "source_tree": source_provenance()}
     (bundle / "BUILD_MANIFEST.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     name = f"BaguTrainer-{__version__}-windows-x64"
-    archive = shutil.make_archive(str(ROOT / "dist" / name), "zip", bundle.parent, bundle.name)
+    archive = shutil.make_archive(str(output / name), "zip", bundle.parent, bundle.name)
     digest = hashlib.sha256(Path(archive).read_bytes()).hexdigest()
     Path(archive + ".sha256").write_text(digest + "  " + Path(archive).name + "\n", encoding="ascii")
     print(archive)

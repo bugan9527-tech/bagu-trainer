@@ -10,6 +10,7 @@ diff_text 会被截断，仅作为出题上下文片段。
     且截取片段前二次校验（防御性，杜绝黑名单文件内容进入上下文）
 """
 import re
+import os
 import subprocess
 import threading
 from pathlib import Path
@@ -52,8 +53,11 @@ class DiffReader:
         pythonw 无控制台时还须禁止子进程创建控制台，避免每次轮询闪黑窗。
         """
         return subprocess.run(
-            ["git"] + args, cwd=str(self.root),
-            capture_output=True, text=True,
+            # Git emits UTF-8 paths and source text regardless of Windows' ANSI
+            # code page. A decoding error in subprocess' reader thread leaves
+            # stdout as None and breaks every subsequent monitoring poll.
+            ["git", "-c", "core.quotepath=false"] + args, cwd=str(self.root),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
             stdin=subprocess.DEVNULL, timeout=10,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
@@ -136,17 +140,25 @@ class DiffReader:
 
     def _snapshot_files(self) -> dict:
         snap = {}
-        for p in self.root.rglob("*"):
-            if not p.is_file() or p.stat().st_size > MAX_FILE_BYTES:
-                continue
-            rel = p.relative_to(self.root)
-            if any(part in SKIP_DIRS or part.startswith(SKIP_PREFIX) for part in rel.parts):
-                continue
-            rel_str = str(rel)
-            if not _file_allowed(rel_str):  # 敏感/非白名单文件不进快照
-                continue
-            st = p.stat()
-            snap[rel_str] = (st.st_mtime_ns, st.st_size)
+        # Prune dependency/build trees before walking them; filtering rglob's
+        # results still traverses every node_modules/.git file on every poll.
+        for directory, subdirs, files in os.walk(self.root, followlinks=False):
+            subdirs[:] = [name for name in subdirs
+                          if name not in SKIP_DIRS and not name.startswith(SKIP_PREFIX)]
+            for name in files:
+                if name.startswith(SKIP_PREFIX):
+                    continue
+                p = Path(directory) / name
+                rel_str = str(p.relative_to(self.root))
+                if not _file_allowed(rel_str):
+                    continue
+                try:
+                    p.resolve().relative_to(self.root.resolve())
+                    st = p.stat()
+                    if p.is_file() and st.st_size <= MAX_FILE_BYTES:
+                        snap[rel_str] = (st.st_mtime_ns, st.st_size)
+                except (OSError, ValueError):
+                    continue  # Atomic saves/deletes can race with a scan.
         return snap
 
     def changes(self) -> dict:

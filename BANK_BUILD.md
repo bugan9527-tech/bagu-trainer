@@ -14,7 +14,10 @@
 2. 使用 Python 标准库发起 HTTPS 请求，通过 [GitHub ZIP 归档接口](https://docs.github.com/en/rest/repos/contents#download-a-repository-archive-zip)
    下载完整 commit 对应的 ZIP；重定向仅允许 GitHub 的 HTTPS 归档域名。
 3. 逐条验证并解压到独立临时目录。不使用 `extractall()`，拒绝路径越界、绝对路径、
-   Windows 设备名/ADS、大小写碰撞、符号链接、特殊文件和加密条目，读取时校验 ZIP CRC。
+   Windows 设备名/ADS、重复路径、文件与目录冲突、符号链接、特殊文件和加密条目，读取时校验 ZIP CRC。
+   Git 仓库中仅大小写不同的文件或目录使用确定性的本地别名分别保存，绝不互相覆盖；
+   来源路径、正文引用和题目 ID 仍使用原始路径。别名映射记录在 `sources.json` 的
+   各来源 `path_aliases` 中，结果不受 ZIP 条目顺序影响。
 4. 在进程内依次调用提取去重、来源正文导入、知识标签和概念构建函数；不抓取 Issues。
 5. 校验题库非空、ID 唯一及概念覆盖，原子写入各文件并回读核对。
 6. 将完整目录移入 `data/banks/<UUID>/`，最后原子替换 `data/active-bank.json`。
@@ -87,6 +90,9 @@ result = service.build(
 | `importer.build_bank(export, repos_root, excerpt_limit, checkpoint=..., stable_ids=...)` | 导入并提取来源正文，返回题库和统计 |
 | `tagging.tag_questions(questions, checkpoint=...)` | 在调用方题目记录上构建标签，返回报告 |
 | `profiles.build_profiles(questions, checkpoint=..., use_fallback=False)` | 在内存构建并验证概念档案及报告 |
+
+导出同时包含问句和普通知识点标题（例如“数据库索引结构”），不能仅按疑问词筛选；
+参考手册型来源的大多数标题不是问句。导入阶段继续校验标题及来源正文，出题前仍检查正文质量。
 
 原四个 `scripts/*.py` 入口仍可用，作为内部模块的薄适配器。旧命令行路径继续操作旧式
 `data/*.json`；它不会覆盖已启用的版本目录。旧下载 PowerShell 与可选 `gh --fetch-issues`

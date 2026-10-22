@@ -130,7 +130,9 @@ TAG_SYNONYMS = {
     "Java 基础": ("Java", "JVM", "面向对象"),
     "C/C++": ("C语言", "C++", "类型系统"),
     "Python": ("Python", "GIL", "迭代器"),
-    "动态规划": ("动态规划", "状态转移", "子问题"),
+    # "子问题" is rejected as a generic term; retain three valid technical
+    # anchors even for reference headings whose body contains only code.
+    "动态规划": ("动态规划", "状态转移", "最优子结构"),
     "图论与搜索": ("图论", "深度优先搜索", "广度优先搜索"),
     "排序与二分": ("排序", "二分查找", "时间复杂度"),
     "算法与数据结构": ("算法", "数据结构", "复杂度"),

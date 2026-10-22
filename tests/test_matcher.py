@@ -14,11 +14,11 @@ from eval_cases import NEGATIVE_CASES, POSITIVE_CASES
 
 
 @pytest.fixture(scope="module")
-def matcher():
+def matcher(benchmark_root):
     """真实题库上的 Matcher（构建一次，全模块复用）"""
     import time
     t = time.time()
-    m = Matcher(KnowledgeBase())
+    m = Matcher(KnowledgeBase(benchmark_root / "data" / "questions.json"))
     print(f"[perf] matcher 索引构建 {time.time() - t:.2f}s")
     return m
 

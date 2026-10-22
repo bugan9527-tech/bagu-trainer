@@ -47,7 +47,63 @@ CHANGE = ('# 数据库索引 查询优化 扫描范围 索引维护\n'
           'index = "CREATE INDEX customer_lookup ON orders(customer_id)"\n')
 QUESTION = {"question": "数据库查询需要减少扫描的数据量，应当如何结合查询条件优化索引？",
             "options": {"A": "结合查询条件建立合适索引", "B": "删除所有索引", "C": "总是全表扫描", "D": "只改变量名"},
-            "answer": "A", "analysis": "本地模拟解析：索引缩小扫描范围，同时增加存储与维护成本。"}
+            "answer": "A", "analysis": "本地模拟解析：索引缩小扫描范围，同时增加存储与维护成本。",
+            "grounding": {"context_quote": "数据库索引 查询优化 扫描范围 索引维护",
+                "source_quote": "数据库索引用额外的数据结构记录键值与数据位置的对应关系",
+                "rationale": "订单查询改动涉及索引与扫描范围，适合考查依据查询条件建立索引的取舍。"}}
+REVIEW = {"context_relevant": True, "source_supported": True, "answer_unique": True,
+          "no_answer_leak": True, "correct_answer": "A", "reason": "索引场景、引用依据和唯一答案均由本地固定验收响应确认。"}
+UPDATED_MODEL = "updated-local-model"
+
+
+def capture_window(work, name, *, root=None, pid=None):
+    """Owned windows only. A capture is evidence, never an automatic visual pass."""
+    record = {"name": name, "captured": False}
+    try:
+        import ctypes
+        from ctypes import wintypes
+        from PIL import ImageGrab
+        user32 = ctypes.windll.user32
+        user32.GetWindowThreadProcessId.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.DWORD))
+        user32.GetWindowTextW.argtypes = (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int)
+        user32.IsWindowVisible.argtypes = (wintypes.HWND,)
+        if root is not None:
+            root.update_idletasks()
+            root.update()  # process Configure/paint events after an explicit scroll
+            hwnd = int(root.tk.call("wm", "frame", root._w), 16)
+        else:
+            owned = []
+            callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+            @callback_type
+            def collect(hwnd, _):
+                owner = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+                if owner.value == pid and user32.IsWindowVisible(hwnd):
+                    title = ctypes.create_unicode_buffer(512)
+                    user32.GetWindowTextW(hwnd, title, len(title))
+                    if title.value == "AI 八股训练器":
+                        owned.append(hwnd)
+                return True
+            # The startup broker can report running just before the native
+            # window is mapped; wait for that owned window's first display.
+            deadline = time.monotonic() + 3
+            while not owned and time.monotonic() < deadline:
+                user32.EnumWindows(collect, 0)
+                if not owned:
+                    time.sleep(0.1)
+            check(owned, "No visible main window in owned production process")
+            hwnd = owned[0]
+        image = ImageGrab.grab(window=hwnd)
+        path = work / "screenshots" / (name + ".png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.save(path)
+        record.update(captured=True, path=str(path.relative_to(work)), size=list(image.size))
+        user32.GetDpiForWindow.argtypes = (wintypes.HWND,)
+        record["window_dpi"] = user32.GetDpiForWindow(hwnd)
+        record["windows_primary_scale_percent"] = ctypes.windll.shcore.GetScaleFactorForDevice(0)
+    except Exception as error:
+        record["error"] = type(error).__name__ + ": " + str(error)
+    return record
 
 
 def write_json(path, value):
@@ -83,15 +139,19 @@ def phase(options):
                 pass
         secrets._load_keyring = lambda: Credentials()
     work = options.work
+    from bagu_trainer import login_startup
+    login_startup.shortcut_directory = lambda: work / "临时 Startup"
     profile = config.USER_DATA_ROOT
     watched = work / "监听 项目"
-    errors, milestones = [], []
+    errors, milestones, screenshots, ui_pages = [], [], [], {}
+    def capture(name, root):
+        screenshots.append(capture_window(work, options.phase + "-" + name, root=root))
     old_wizard = first_use.FirstUseWizard.__init__
     old_dashboard = desktop.DesktopApp.__init__
     bank_service = BankBuildService(manifest=work / "fixture-sources.json",
         opener=lambda request, timeout: urllib.request.urlopen(options.base_url + "/bank.zip", timeout=timeout))
     def schedule(root, callback, cleanup):
-        deadline = time.monotonic() + 65
+        deadline = time.monotonic() + 95
         def tick():
             try:
                 check(time.monotonic() < deadline, "UI phase timed out; milestones=" + repr(milestones))
@@ -114,6 +174,7 @@ def phase(options):
             if stage[0] == 0:
                 check(app.step == "bank", "Expected bank step")
                 check("bagu_trainer.engine" not in sys.modules, "Engine loaded before readiness")
+                capture("wizard-bank", app.root)
                 app.bank_setup._start()
                 check("选择" in app.bank_setup.status.get(), "Missing selection guidance")
                 app.bank_setup.source_list.selection_set(REPOSITORY)
@@ -127,6 +188,13 @@ def phase(options):
                 check(app.step == "model", "Build did not advance wizard")
                 check((active_bank_dir() / "question_concepts.json").is_file(), "Concept build missing")
                 milestones.append("bank_download_extract_import_tag_concepts")
+                provenance = json.loads((active_bank_dir() / "sources.json").read_text(encoding="utf-8"))
+                aliases = provenance["sources"][0]["path_aliases"]
+                check(set(aliases) == {"docs/Async.md", "docs/async.md"}, "Case aliases missing")
+                for stored in aliases.values():
+                    check((active_bank_dir() / "repos" / "JavaGuide" / stored).read_text(encoding="utf-8") == TEXT,
+                          "Case-distinct source content lost")
+                milestones.append("bank_case_distinct_paths_preserved")
                 app.base_url.set("bad-url")
                 app.model_name.set("local-model")
                 app.api_key.set(KEY)
@@ -143,6 +211,7 @@ def phase(options):
                 app._test_model()
             elif stage[0] == 5:
                 check(app.verified is not None, "Valid local model did not pass test")
+                capture("wizard-model-verified", app.root)
                 app._next()
             elif stage[0] == 6:
                 check(app.step == "projects" and not app.api_key.get(), "Model was not saved securely")
@@ -150,6 +219,7 @@ def phase(options):
                 milestones.append("model_explicit_test_and_secure_save")
                 app.projects = [str(watched)]
                 app._render_projects()
+                capture("wizard-projects", app.root)
                 app._next()
             elif stage[0] == 7:
                 check(app.step == "finish", "Projects did not advance wizard")
@@ -163,49 +233,178 @@ def phase(options):
         old_dashboard(app, monitor, *args, **kwargs)
         stage = [0]
         first_quiz = [None]
+        review_retried = [False]
+        settings = [None]
+        previous_receipt = [None]
+        entered_pending = [False]
         def cleanup():
-            app.stop.set()
-            if app.popup is not None:
-                app.popup.destroy()
-            app.root.destroy()
+            if settings[0] is not None and not settings[0].closed:
+                settings[0]._close()
+            from tkinter import messagebox
+            previous = messagebox.askyesno
+            try:
+                messagebox.askyesno = lambda *args, **kwargs: True
+                app._close()
+            finally:
+                messagebox.askyesno = previous
         def step():
             engine = monitor.engine
             if options.phase == "restart":
                 if not monitor.initialized:
                     return False
-                check(app.popup is None, "Restart automatically repeated answered quiz")
+                check(app.practice.current is None, "Restart automatically repeated answered quiz")
                 state = database_state(config.db_path())
                 expected = json.loads((work / "first-state.json").read_text(encoding="utf-8"))
                 check(state == expected, "Restart/upgrade lost learning data")
                 check(all(Path(path).exists() for path in config.load_config()["project_roots"]), "Projects lost")
+                check(config.load_config()["llm"]["model"] == UPDATED_MODEL, "Updated model lost on restart")
+                from bagu_trainer import onboarding
+                check(onboarding.saved_model_verified(), "Saved settings verification receipt lost on restart")
                 milestones.append("restart_direct_main_and_history_restore")
+                milestones.append("updated_model_receipt_restored_without_network")
+                capture("main", app.root)
                 cleanup()
                 return True
             if stage[0] == 0:
                 if not monitor.initialized:
                     return False
                 milestones.append("watcher_baseline")
+                baselines = (set(monitor.initialized), dict(monitor.observed), dict(engine._diff_readers))
+                for key, _ in app.shell.PAGES:
+                    app._navigate_page(key)
+                    app.root.update_idletasks()
+                    frame = app.shell.current_frame
+                    check(app.shell.current_page == key and frame.master is app.content_host,
+                          "Page is not embedded: " + key)
+                    image_name = app.shell.buttons[key].cget("image")
+                    check(bool(image_name), "Missing frozen navigation icon: " + key)
+                    if key == "bank":
+                        check(bool(frame.sources), "Frozen bank page has no source manifest")
+                    ui_pages[key] = {"class": type(frame).__name__, "embedded": True, "icon": True}
+                    capture("page-" + key, app.root)
+                check(baselines == (set(monitor.initialized), dict(monitor.observed), dict(engine._diff_readers)),
+                      "Ordinary navigation rebuilt baselines")
+                milestones.append("seven_embedded_pages_icons_and_navigation_keep_baselines")
+                app._navigate_page("model")
+                capture("main-watching", app.root)
                 (watched / "query.py").write_text(CHANGE, encoding="utf-8")
                 stage[0] = 1
             elif stage[0] == 1:
-                if app.popup is None:
+                if app.practice.current is None:
+                    if app._pending_items and not entered_pending[0]:
+                        check(app.shell.current_page == "model", "New quiz stole the current page")
+                        milestones.append("new_quiz_updates_pending_without_stealing_page")
+                        entered_pending[0] = True
+                        app._navigate_page("practice")
+                        app._enter_pending(app._pending_items[0]["quiz_id"])
+                        return False
+                    if app.generation_retryable and not app.generation_busy and not review_retried[0]:
+                        check(app.retry_button.instate(["!disabled"]), "Rejected review cannot retry")
+                        check(not engine._state["pending"], "Rejected candidate entered pending")
+                        check(engine._store._conn.execute("SELECT count(*) FROM quizzes").fetchone()[0] == 0,
+                              "Rejected candidate was persisted as a quiz")
+                        milestones.append("rejected_review_blocks_popup_then_explicit_retry")
+                        review_retried[0] = True
+                        app.retry_button.invoke()
                     return False
-                check(app.submit_button.instate(["!disabled"]), "Popup cannot be answered")
+                app._navigate_page("practice")
+                practice = app._page_frame("practice")
+                check(practice.submit_button.instate(["!disabled"]), "Practice cannot be answered")
+                check(review_retried[0], "Rejected first review was not exercised")
+                check(engine._state["quizzes"][monitor.active]["grounding"]["review"]["context_relevant"],
+                      "Displayed quiz has no approved review")
+                capture("quiz", app.root)
                 first_quiz[0] = monitor.active
                 app.answer.set("B")
-                app._submit(first_quiz[0])
-                milestones.append("real_file_change_debounce_model_popup")
+                assert app.practice.submit()
+                milestones.append("real_file_change_debounce_embedded_practice")
                 stage[0] = 2
             elif stage[0] == 2:
                 if "已记录作答" not in app.feedback.get():
                     return False
                 check("回答错误" in app.feedback.get() and "正确答案：A" in app.feedback.get(), "Wrong grade/analysis")
-                app._submit(first_quiz[0])  # Disabled button prevents duplicate scoring.
+                assert not app.practice.submit()  # finished button prevents duplicate scoring.
                 state = database_state(config.db_path())
                 check(state["attempts"] == 1 and state["answered"] == 1, "Answer not persisted exactly once")
                 check(state["concepts"][0][1] == 1 and state["concepts"][0][2] == 0, "Concept state missing")
                 write_json(work / "first-state.json", state)
                 milestones.append("grade_analysis_and_sqlite_persistence")
+                practice = app._page_frame("practice")
+                app.root.update_idletasks()
+                practice.view._key_position(1)  # same explicit End action as a reader
+                capture("grade-and-review", app.root)
+                app.practice.dismiss()
+                from bagu_trainer import onboarding
+                from bagu_trainer.settings_window import ModelSettingsWindow
+                previous_receipt[0] = onboarding.read_state()["model_verification"]
+                settings[0] = ModelSettingsWindow(app.root)
+                settings[0].model_var.set(UPDATED_MODEL)
+                check(settings[0].save_button.instate(["disabled"]), "Edited model can save before testing")
+                settings[0]._save()
+                check(config.load_config()["llm"]["model"] == "local-model", "Untested edit was persisted")
+                capture("settings-edited-save-disabled", settings[0].root)
+                settings[0]._test()
+                stage[0] = 3
+            elif stage[0] == 3:
+                window = settings[0]
+                if window.busy:
+                    return False
+                check(window.verified is not None and window.save_button.instate(["!disabled"]), "Edited model did not pass explicit test")
+                capture("settings-tested", window.root)
+                window._save()
+                stage[0] = 4
+            elif stage[0] == 4:
+                window = settings[0]
+                if window.busy or app.pending_actions:
+                    return False
+                from bagu_trainer import onboarding
+                check(config.load_config()["llm"]["model"] == UPDATED_MODEL, "Changed model was not saved")
+                check(onboarding.saved_model_verified(), "Updated configuration receipt is not valid")
+                check(onboarding.read_state()["model_verification"] != previous_receipt[0], "Model edit kept old receipt")
+                check(not window.key_var.get(), "Key input not cleared after save")
+                check(database_state(config.db_path()) == json.loads((work / "first-state.json").read_text(encoding="utf-8")), "Model save changed learning history")
+                milestones.append("settings_edit_retest_save_and_updated_receipt")
+                capture("settings-saved", window.root)
+                window._close()
+                settings[0] = None
+                app._navigate_page("history")
+                stage[0] = 5
+            elif stage[0] == 5:
+                page = app.history_page
+                if page is None or page.total != 1:
+                    return False
+                check(len(page.tree.get_children()) == 1, "History did not show the persisted attempt")
+                page.open_selected()
+                stage[0] = 6
+            elif stage[0] == 6:
+                page = app.history_page
+                if not hasattr(page, "retry_button"):
+                    return False
+                capture("history-snapshot", app.root)
+                check(page.retry_button.instate(["!disabled"]), "AI snapshot cannot be repracticed")
+                page.retry()
+                stage[0] = 7
+            elif stage[0] == 7:
+                if not app.practice.current or not app.practice.current.get("manual_review"):
+                    return False
+                check(app.shell.current_page == "practice", "Repractice did not enter embedded practice")
+                retry = engine._store.get_quiz(app.practice.quiz_id)
+                check(retry["snapshot"]["retry_of_quiz_id"] == first_quiz[0], "Repractice source association lost")
+                app.practice.choose("A")
+                check(app.practice.submit(), "Repractice cannot submit")
+                check(not app.practice.submit(), "Duplicate repractice submit accepted")
+                stage[0] = 8
+            elif stage[0] == 8:
+                if app.practice.submit_state != "finished":
+                    return False
+                check(engine._store.attempt_count(first_quiz[0]) == 1, "Original answer counted twice")
+                check(engine._store.attempt_count(app.practice.quiz_id) == 1, "Repractice counted twice")
+                state = database_state(config.db_path())
+                check(state["attempts"] == 2 and state["answered"] == 2, "History/repractice persistence missing")
+                write_json(work / "first-state.json", state)
+                milestones.append("history_snapshot_repractice_and_idempotent_second_answer")
+                capture("repractice-grade", app.root)
+                app.practice.dismiss()
                 cleanup()
                 return True
             return False
@@ -222,6 +421,7 @@ def phase(options):
     check(not errors, "; ".join(errors))
     check(milestones, "No acceptance milestones completed")
     write_json(work / (options.phase + "-result.json"), {"passed": True, "milestones": milestones,
+               "screenshots": screenshots, "ui_pages": ui_pages,
                "frozen": bool(getattr(sys, "frozen", False)), "credential_backend": "memory fixture" if options.memory_credentials else "Windows vault, isolated profile"})
 
 
@@ -236,7 +436,10 @@ def orchestrate(options):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
         output.writestr("snapshot/README.md", TEXT + "\n" + "\n\n".join("# " + title + "\n\n" + body for title, body in DISTRACTORS))
-    counts = {"downloads": 0, "probes": 0, "quizzes": 0, "rejected": 0}
+        output.writestr("snapshot/docs/Async.md", TEXT)
+        output.writestr("snapshot/docs/async.md", TEXT)
+    counts = {"downloads": 0, "probes": 0, "quizzes": 0, "reviews": 0, "rejected": 0}
+    models = []
     class Handler(BaseHTTPRequestHandler):
         def send(self, status, value):
             body = value if isinstance(value, bytes) else json.dumps(value, ensure_ascii=False).encode("utf-8")
@@ -252,7 +455,7 @@ def orchestrate(options):
             self.send(503, {}) if counts["downloads"] <= 3 else self.send(200, archive.getvalue())
         def do_POST(self):
             request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.path != "/v1/chat/completions" or request.get("model") != "local-model":
+            if self.path != "/v1/chat/completions" or request.get("model") not in {"local-model", UPDATED_MODEL}:
                 counts["rejected"] += 1
                 self.send(404, {})
                 return
@@ -260,8 +463,16 @@ def orchestrate(options):
                 self.send(401, {})
                 return
             is_probe = "max_tokens" in request
-            counts["probes" if is_probe else "quizzes"] += 1
-            self.send(200, {"choices": [{"message": {"content": "OK" if is_probe else json.dumps(QUESTION, ensure_ascii=False)}}]})
+            is_review = "review_context_grounding" in request["messages"][-1]["content"]
+            kind = "probe" if is_probe else "review" if is_review else "quiz"
+            models.append({"model": request["model"], "kind": kind})
+            counts[{"probe": "probes", "quiz": "quizzes", "review": "reviews"}[kind]] += 1
+            if is_review:
+                # The first audit rejects the candidate. Only an explicit desktop retry can recover.
+                content = json.dumps({**REVIEW, "context_relevant": counts["reviews"] > 1}, ensure_ascii=False)
+            else:
+                content = "OK" if is_probe else json.dumps(QUESTION, ensure_ascii=False)
+            self.send(200, {"choices": [{"message": {"content": content}}]})
         def log_message(self, *_):
             pass
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -283,13 +494,18 @@ def orchestrate(options):
             args = [*command, "--work", str(work), "--phase", name, "--base-url", base]
             if options.memory_credentials:
                 args.append("--memory-credentials")
-            result = subprocess.run(args, env=environment, capture_output=True, timeout=80)
+            result = subprocess.run(args, env=environment, capture_output=True, timeout=120)
             check(result.returncode == 0, f"{name} child failed: " + result.stderr.decode("utf-8", errors="replace")[-3000:])
             results[name] = json.loads((work / (name + "-result.json")).read_text(encoding="utf-8"))
             if name == "first":
                 bank_hashes = {str(p.relative_to(work)): hashlib.sha256(p.read_bytes()).hexdigest()
                                for p in (work / "用户 数据" / "data" / "banks").rglob("*") if p.is_file()}
-        check(counts == {"downloads": 4, "probes": 1, "quizzes": 1, "rejected": 1}, "Unexpected network requests or restart requested model")
+        expected_counts = {"downloads": 4, "probes": 2, "quizzes": 2, "reviews": 2, "rejected": 1}
+        check(counts == expected_counts, "Unexpected network requests or restart requested model")
+        check(models == [{"model": "local-model", "kind": "probe"}, {"model": "local-model", "kind": "quiz"},
+                         {"model": "local-model", "kind": "review"}, {"model": "local-model", "kind": "quiz"},
+                         {"model": "local-model", "kind": "review"},
+                         {"model": UPDATED_MODEL, "kind": "probe"}], "Model edit was not explicitly tested")
         check(all(hashlib.sha256((work / p).read_bytes()).hexdigest() == digest for p, digest in bank_hashes.items()), "Bank changed on restart")
         check(KEY not in (work / "用户 数据" / "config.json").read_text(encoding="utf-8"), "Plaintext fixture key in config")
         if options.production_exe:
@@ -298,21 +514,40 @@ def orchestrate(options):
             production_manifest = json.loads((options.production_exe.parent / "BUILD_MANIFEST.json").read_text(encoding="utf-8"))
             results["production_commit"] = production_manifest.get("source_commit")
             results["production_dirty"] = production_manifest.get("source_dirty")
+            results["production_source_tree"] = production_manifest.get("source_tree", {}).get("sha256")
+            if results.get("source_tree"):
+                check(results["source_tree"]["sha256"] == results["production_source_tree"],
+                      "Frozen driver and production code fingerprints differ")
             prod_env = dict(environment)
             if options.memory_credentials:
                 # Matches the verified receipt without touching a CI runner's vault.
                 prod_env["BAGU_LLM_API_KEY"] = KEY
             upgraded = work / "升级 后程序"
             shutil.copytree(options.production_exe.parent, upgraded)
-            def smoke(exe):
-                child = subprocess.Popen([str(exe)], env=prod_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            def smoke(exe, label, background=False):
+                child = subprocess.Popen([str(exe), *(["--background"] if background else [])], env=prod_env,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                activated = not background
                 try:
                     deadline = time.monotonic() + 15
                     while time.monotonic() < deadline:
                         check(child.poll() is None, "Production EXE unexpectedly exited")
                         try:
                             status = desktop_instance.remote_call("_desktop_status", {})
-                            if status.get("startup_state") == "running":
+                            if background and not activated and status.get("window_state") == "iconic":
+                                credentials = work / "用户 数据" / "runtime" / "bridge-credentials.json"
+                                original_credentials = credentials.read_bytes()
+                                activation = subprocess.run([str(exe)], env=prod_env, capture_output=True, timeout=20)
+                                check(activation.returncode == 0 and credentials.read_bytes() == original_credentials,
+                                      "Second instance replaced the existing owner")
+                                activated = True
+                                results["background_singleton_activation"] = True
+                            # The first UI poll proves mainloop has processed
+                            # the actual dashboard, beyond constructor/startup.
+                            if activated and status.get("startup_state") == "running" and status.get("window_state") == "normal":
+                                results.setdefault("production_screenshots", []).append(capture_window(work, label, pid=child.pid))
+                                check(json.loads((work / "用户 数据" / "config.json").read_text(encoding="utf-8"))["llm"]["model"] == UPDATED_MODEL,
+                                      "Production EXE lost updated settings")
                                 return
                         except (OSError, ValueError):
                             pass
@@ -322,12 +557,27 @@ def orchestrate(options):
                     if child.poll() is None:
                         child.terminate()
                     child.wait(timeout=10)
-            smoke(options.production_exe)
+            smoke(options.production_exe, "production-main-after-model-save")
             check(database_state(work / "用户 数据" / "data" / "trainer.db") == json.loads((work / "first-state.json").read_text(encoding="utf-8")), "Production EXE lost learning data")
-            smoke(upgraded / options.production_exe.name)
+            smoke(upgraded / options.production_exe.name, "production-upgraded-main")
             check(database_state(work / "用户 数据" / "data" / "trainer.db") == json.loads((work / "first-state.json").read_text(encoding="utf-8")), "Upgrade lost learning data")
+            smoke(options.production_exe, "production-background-activated", background=True)
+            for arguments in (("--check-runtime",), ("--check-package", str(work / "production-package.json"))):
+                result = subprocess.run([str(options.production_exe), *arguments], env=prod_env, capture_output=True, timeout=30)
+                check(result.returncode == 0, "Frozen command failed: " + arguments[0])
+            package = json.loads((work / "production-package.json").read_text(encoding="utf-8"))
+            check(package["frozen"] and package["ui_theme"] == "bagu-light", "Frozen theme/runtime check failed")
+            check(set(package["ui_diagnostics"]["navigation_icons"]) ==
+                  {"dashboard", "practice", "history", "projects", "bank", "model", "settings"},
+                  "Frozen navigation icon resources missing")
+            results["production_commands"] = {"check-runtime": True, "check-package": True,
+                                               "theme": package["ui_theme"], "navigation_icons": 7}
             results["production_exe"] = {"first_start": "running", "upgraded_start": "running", "history_retained": True}
+            results["updated_model_production_restart"] = {"model": UPDATED_MODEL, "direct_main": True,
+                                                          "no_new_model_requests": counts == expected_counts}
+        check(counts == expected_counts, "Production restart unexpectedly sent model requests")
         results["requests"] = counts
+        results["model_requests"] = models
         results["passed"] = True
         write_json(work / "ACCEPTANCE.json", results)
         print(json.dumps(results, ensure_ascii=True))

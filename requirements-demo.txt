@@ -1,2 +1,0 @@
-# Optional dependency for the standalone Redis demo in interface.py.
-redis>=5.0,<6

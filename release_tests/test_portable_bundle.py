@@ -20,8 +20,8 @@ from release_tests.test_migration import assert_history, legacy_project
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUNDLE = ROOT / "dist" / "BaguTrainer"
-ARCHIVE = ROOT / "dist" / f"BaguTrainer-{__version__}-windows-x64.zip"
+BUNDLE = Path(os.environ.get("BAGU_PORTABLE_BUNDLE", ROOT / "dist" / "BaguTrainer"))
+ARCHIVE = Path(os.environ.get("BAGU_PORTABLE_ARCHIVE", ROOT / "dist" / f"BaguTrainer-{__version__}-windows-x64.zip"))
 pytestmark = pytest.mark.skipif(sys.platform != "win32" or not (BUNDLE / "BaguTrainer.exe").is_file(),
                                 reason="build the Windows x64 onedir bundle first")
 
@@ -115,6 +115,10 @@ def test_bundle_inventory_contains_only_runtime_and_source_metadata():
     assert "_internal/interview-banks/sources.json" in files
     assert "_internal/licenses/Python-LICENSE.txt" in files
     assert "_internal/THIRD_PARTY_NOTICES.txt" in files
+    assert "_internal/UI_DISPLAY.md" in files
+    for dependency in ("ttkbootstrap", "pillow"):
+        assert any(path.lower().startswith("_internal/licenses/" + dependency + "/")
+                   and "license" in path.lower() for path in files)
     with zipfile.ZipFile(ARCHIVE) as archive:
         assert archive.testzip() is None
         archived_files = {name.removeprefix("BaguTrainer/"): hashlib.sha256(archive.read(name)).hexdigest()
@@ -155,6 +159,16 @@ def test_chinese_spaces_readonly_install_singleton_and_configuration(tmp_path, m
         assert Path(observed["resources"]) == installation / "_internal"
         assert observed["keyring_backend"] == "keyring.backends.Windows.WinVaultKeyring"
         assert observed["tcl_version"].startswith("8.6") and observed["sources"] > 0
+        assert observed["ui_theme"] == "bagu-light" and observed["ttkbootstrap"] == "1.20.4"
+        ui = observed["ui_diagnostics"]
+        assert isinstance(ui["tk_init_retried"], bool)
+        assert ui["mixed_text_width"] > 0 and ui["image_count"] > 0
+        assert set(ui["navigation_icons"]) == {"dashboard", "practice", "history", "projects", "bank", "model", "settings"}
+        assert all(icon["width"] > 0 and icon["height"] > 0 for icon in ui["navigation_icons"].values())
+        assert set(ui["fonts"]) == {"caption", "body", "section", "title"}
+        assert all(widget["width"] > 0 and widget["height"] > 0 for widget in ui["widgets"])
+        assert {widget["class"] for widget in ui["widgets"]} >= {"TButton", "TRadiobutton", "TCombobox", "Treeview"}
+        assert Path(ui["tk_library"]).is_relative_to(installation / "_internal")
         with running(exe, env) as first:
             status = await_state(first, "initialization")
             assert not status["checks"]["bank"]
