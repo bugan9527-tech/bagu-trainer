@@ -8,6 +8,28 @@ from release_tests.test_first_use import installation, wait_ui
 from release_tests.test_dashboard_navigation import dashboard, dispose
 
 
+def test_short_workspace_can_toggle_queue_without_hiding_reading_actions(installation, monkeypatch):
+    from release_tests.test_interaction_states import quiz
+    app, _ = dashboard(installation, monkeypatch)
+    try:
+        app._show_quiz(quiz("short-workspace"))
+        app._navigate_page("practice")
+        app.root.deiconify()
+        app.root.geometry("560x560")
+        app.root.update()
+        page = app._page_frame("practice")
+        assert page.compact_list and page.view.winfo_ismapped()
+        assert page.view.canvas.winfo_height() >= app.theme.px(96)
+        page.compact_toggle.invoke()
+        app.root.update()
+        assert page.list_column.winfo_ismapped() and not page.view.winfo_ismapped()
+        page.compact_toggle.invoke()
+        app.root.update()
+        assert page.view.winfo_ismapped() and page.submit_button.winfo_ismapped()
+    finally:
+        dispose(app)
+
+
 def test_project_apply_runs_on_data_only_worker_and_keeps_existing_baseline():
     events, jobs, stop = queue.Queue(), queue.Queue(), threading.Event()
     baseline = object()

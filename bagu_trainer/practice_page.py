@@ -25,7 +25,9 @@ class PracticePage(ttk.Frame):
         self.closed = False
         self.wide = False
         self.compact_list = False
+        self.compact_expanded = False
         self._pending = []
+        self._rendered_quiz_id = None
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -35,6 +37,7 @@ class PracticePage(ttk.Frame):
         self.workspace.columnconfigure(0, weight=1)
         self.workspace.rowconfigure(0, weight=1)
         self.workspace.bind("<Configure>", self._resize, add="+")
+        self.compact_toggle = ttk.Button(self.workspace, text="查看待答列表", command=self._toggle_compact)
 
         # -- pending list column ---------------------------------------------
         self.list_column = ttk.Frame(self.workspace)
@@ -143,6 +146,19 @@ class PracticePage(ttk.Frame):
             self.list_label.grid()
         self.workspace.columnconfigure(0, weight=0 if split else 1, uniform="practice" if split else "")
         self.workspace.columnconfigure(1, weight=1 if split else 0, uniform="practice" if split else "")
+        self.compact_toggle.grid_remove()
+        if self.compact_list and not split:
+            self.workspace.rowconfigure(0, weight=0)
+            self.workspace.rowconfigure(1, weight=1)
+            self.compact_toggle.configure(text="返回当前题目" if self.compact_expanded else f"查看待答列表（{len(self._pending)}）")
+            self.compact_toggle.grid(row=0, column=0, sticky="w", pady=(0, self.theme.px(SPACE.xs)))
+            if self.compact_expanded:
+                self.view.grid_remove()
+                self.list_column.grid(row=1, column=0, sticky="nsew", padx=0)
+            else:
+                self.list_column.grid_remove()
+                self.view.grid(row=1, column=0, sticky="nsew")
+            return
         if split:
             self.workspace.rowconfigure(0, weight=1)
             self.workspace.rowconfigure(1, weight=0)
@@ -151,8 +167,12 @@ class PracticePage(ttk.Frame):
         else:
             self.workspace.rowconfigure(0, weight=0)
             self.workspace.rowconfigure(1, weight=1)
-            self.list_column.grid(row=0, column=0, sticky="ew")
+            self.list_column.grid(row=0, column=0, sticky="ew", padx=0)
             self.view.grid(row=1, column=0, sticky="nsew")
+
+    def _toggle_compact(self):
+        self.compact_expanded = not self.compact_expanded
+        self._layout()
 
     # -- keyboard -------------------------------------------------------------
     def _bind_keys(self):
@@ -216,6 +236,8 @@ class PracticePage(ttk.Frame):
                     self.pending_list.selection_add(iid)
         self.summary.set(f"待答题 {len(items)} · 待复习 {due_reviews}")
         self._resize_from_pending()
+        if self.compact_list:
+            self._layout()
         self._sync_controls()
 
     def _resize_from_pending(self):
@@ -246,6 +268,7 @@ class PracticePage(ttk.Frame):
             return
         controller = self.controller
         quiz = controller.current
+        self._rendered_quiz_id = controller.quiz_id
         if quiz is None:
             self.question_heading.configure(text="当前题目")
             self.question_label.configure(text="当前没有待答题。")
@@ -290,6 +313,10 @@ class PracticePage(ttk.Frame):
         self.controller.dismiss()
 
     def _on_controller_changed(self):
+        if self._rendered_quiz_id != self.controller.quiz_id:
+            self.compact_expanded = False
+            if self.compact_list:
+                self._layout()
         self.refresh()
 
     def focus_target(self):

@@ -210,7 +210,9 @@ class PracticeController:
         days = schedule.get("interval_days", 0)
         next_time = schedule.get("next_review_at")
         if next_time is not None:
-            review = datetime.fromtimestamp(next_time, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M（北京时间）")
+            # Windows strftime uses the system locale; append Unicode outside
+            # the format string so English/code-page-limited hosts also work.
+            review = datetime.fromtimestamp(next_time, timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M") + "（北京时间）"
         else:
             review = "按已记录的复习间隔安排"
         answer = submitted_answer or grade.get("your_answer") or self.answer.get()

@@ -42,6 +42,7 @@ class ScrollableFrame(ttk.Frame):
         self.tab_widgets = set()
         self.region = None
         self.follow_end = False
+        self._reveal_target = None
         self.rowconfigure(0, weight=1)
         self.columnconfigure(0, weight=1)
         self.canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0,
@@ -109,6 +110,8 @@ class ScrollableFrame(ttk.Frame):
         # arrive after the key event, so keep following until the reader moves.
         if self.follow_end and self.canvas.yview()[1] < 1:
             self.canvas.yview_moveto(1)
+        elif not keep_end and self._reveal_target is not None:
+            self._scroll_widget_into_view(self._reveal_target)
 
     def request_layout(self):
         # A label's requested height can change without changing the allocated
@@ -131,6 +134,7 @@ class ScrollableFrame(ttk.Frame):
         target = self.winfo_containing(event.x_root, event.y_root)
         if (self._contains(target) and target.winfo_class() not in ("Text", "Treeview", "Listbox", "TCombobox")
                 and self.canvas.yview() != (0.0, 1.0)):
+            self._reveal_target = None
             self.follow_end = False
             self.canvas.yview_scroll(-int(event.delta / 120) or (-1 if event.delta > 0 else 1), "units")
             return "break"
@@ -159,11 +163,13 @@ class ScrollableFrame(ttk.Frame):
         return "break"
 
     def _key_scroll(self, amount, unit):
+        self._reveal_target = None
         self.follow_end = False
         self.canvas.yview_scroll(amount, unit)
         return "break"
 
     def _key_position(self, fraction):
+        self._reveal_target = None
         self.follow_end = fraction >= 1
         self.update_idletasks()
         self._resize()
@@ -171,22 +177,29 @@ class ScrollableFrame(ttk.Frame):
         return "break"
 
     def _scroll_to(self, *arguments):
+        self._reveal_target = None
         self.follow_end = False
         self.canvas.yview(*arguments)
 
     def reveal(self, widget):
         self.follow_end = False
+        self._reveal_target = widget
         self.update_idletasks()
         self._resize()
         self.update_idletasks()
+        self._scroll_widget_into_view(widget)
+
+    def _scroll_widget_into_view(self, widget):
+        if not widget.winfo_exists() or not widget.winfo_ismapped():
+            return
         y = widget.winfo_rooty() - self.body.winfo_rooty()
         top = self.canvas.canvasy(0)
         bottom = top + self.canvas.winfo_height()
-        height = max(1, self.body.winfo_height())
+        height = max(1, (self.region or (0, 0, 0, self.body.winfo_height()))[3])
         if y < top:
             self.canvas.yview_moveto(y / height)
         elif y + min(widget.winfo_height(), self.canvas.winfo_height()) > bottom:
-            self.canvas.yview_moveto(y / height)
+            self.canvas.yview_moveto((y + min(widget.winfo_height(), self.canvas.winfo_height()) - self.canvas.winfo_height()) / height)
 
     def _destroyed(self, event):
         if event.widget is self:
@@ -195,6 +208,7 @@ class ScrollableFrame(ttk.Frame):
             self.top.unbind("<MouseWheel>", self.wheel_binding)
             self.top.unbind("<FocusIn>", self.focus_binding)
             self.tab_widgets.clear()
+            self._reveal_target = None
             self.top = self.body = self.canvas = self.scrollbar = None
 
 

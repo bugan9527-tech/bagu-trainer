@@ -4,6 +4,29 @@ from types import SimpleNamespace
 
 import pytest
 
+
+def test_review_time_uses_ascii_format_on_english_windows(monkeypatch):
+    import bagu_trainer.practice_controller as module
+    original = module.datetime
+    class Moment:
+        def strftime(self, fmt):
+            assert fmt.isascii(), "Windows locale cannot encode Unicode strftime literals"
+            return original.fromtimestamp(1).strftime(fmt)
+    class Clock:
+        @staticmethod
+        def fromtimestamp(*args):
+            return Moment()
+    class Value:
+        def __init__(self): self.value = ""
+        def get(self): return self.value
+        def set(self, value): self.value = value
+    monkeypatch.setattr(module, "datetime", Clock)
+    ctl = module.PracticeController(Value(), Value(), Value())
+    ctl.deliver({"quiz_id": "locale-fixture"})
+    ctl.apply_grade({"ok": True, "correct": True, "correct_answer": "A", "analysis": "合成解析",
+                     "schedule": {"interval_days": 1, "next_review_at": 1}}, "A")
+    assert ctl.submit_state == "finished" and "北京时间" in ctl.feedback.get()
+
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk practice")
 
 

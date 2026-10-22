@@ -19,12 +19,12 @@ def create_root():
     except tk.TclError as error:
         import re
         message = str(error)
-        library = Path(os.environ.get("TK_LIBRARY", "")).resolve()
-        missing = re.findall(r'couldn\'t read file "([^"\n]+)": no such file or directory', message)
+        libraries = [Path(os.environ[name]).resolve() for name in ("TK_LIBRARY", "TCL_LIBRARY") if os.environ.get(name)]
+        missing = re.findall(r'couldn\'t read file "([^"\n]+)": (?:no such file or directory|No error)', message, re.IGNORECASE)
         recoverable = False
         for name in missing:
             path = Path(name).resolve()
-            if path.is_relative_to(library) and path.is_file():
+            if any(path.is_relative_to(library) for library in libraries) and path.is_file():
                 recoverable = True
         if not recoverable:
             raise

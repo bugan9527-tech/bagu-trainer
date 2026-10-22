@@ -297,7 +297,7 @@ class HistoryPage:
             self.retry_reason.set(reason or "使用该快照重新练习，不调用 AI。提交后才显示答案与解析。")
 
     def leave(self):
-        focus = self.root.focus_get()
+        focus = self.root.focus_get() or self.root.focus_lastfor()
         self.saved_focus = focus if focus and str(focus).startswith(str(self.frame) + ".") else None
         self.visible = False
         self.frame.pack_forget()
