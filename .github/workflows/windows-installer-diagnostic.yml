@@ -1,0 +1,61 @@
+name: Isolated installer diagnostics (no release)
+on:
+  push:
+    branches: ['codex/v0.3.0-release-acceptance']
+    paths:
+      - '.github/workflows/windows-installer-diagnostic.yml'
+      - 'packaging/windows-installer-lifecycle.iss'
+      - 'scripts/acceptance/installed_release.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose-install:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.10.11'
+          architecture: x64
+      - name: Isolate diagnostics
+        run: '"BAGU_USER_DATA_DIR=$env:RUNNER_TEMP/bagu-diagnostic-source" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+      - name: Dependencies
+        run: |
+          python -m venv .venv-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
+      - name: Build audited production payload
+        run: .\.venv-build\Scripts\python.exe scripts/build_portable.py --require-clean
+      - name: Prepare pinned tools
+        run: python scripts/prepare_installer_tools.py
+      - name: Compile separate frozen driver
+        run: .\.venv-build\Scripts\python.exe scripts/build_acceptance.py
+      - name: Build and inspect Setup
+        run: .\.venv-build\Scripts\python.exe scripts/build_installer.py --iscc 'build/installer-tools/inno/{app}/ISCC.exe' --innounp build/installer-tools/unpacker/innounp.exe
+      - name: Reproduce native installation in disposable runner
+        run: |
+          $version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv-build\Scripts\python.exe scripts/acceptance/installed_release.py --setup "dist/BaguTrainer-$version-windows-x64-Setup.exe" --work "$env:RUNNER_TEMP/bagu-installed-release"
+      - name: Preserve diagnostics only (never release assets)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: installer-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            validation/INSTALLED_ACCEPTANCE.json
+            ${{ runner.temp }}/bagu-installed-release/*.log
+            ${{ runner.temp }}/bagu-installed-release/screenshots/
+            ${{ runner.temp }}/bagu-installed-release/frozen/ERROR.json
+            ${{ runner.temp }}/bagu-installed-release/frozen/ACCEPTANCE.json
+          if-no-files-found: warn

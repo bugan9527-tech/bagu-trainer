@@ -226,8 +226,12 @@ function ValidInventory(List: TArrayOfString): Boolean;
 var I: Integer;
 begin
   Result := False;
-  for I := 0 to GetArrayLength(List) - 1 do
-    if not SafeRelative(List[I]) or not NoReparse(AddBackslash(ExpandConstant('{app}')) + List[I]) then exit;
+  for I := 0 to GetArrayLength(List) - 1 do begin
+    if not SafeRelative(List[I]) then begin Log('Unsafe inventory member: [' + List[I] + ']'); exit; end;
+    if not NoReparse(AddBackslash(ExpandConstant('{app}')) + List[I]) then begin
+      Log('Reparse path in inventory member: [' + List[I] + ']'); exit;
+    end;
+  end;
   Result := True;
 end;
 
