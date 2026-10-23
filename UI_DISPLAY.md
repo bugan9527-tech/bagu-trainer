@@ -9,6 +9,8 @@
 - 中文字体按 Microsoft YaHei UI、Microsoft YaHei、Noto Sans SC、Noto Sans CJK SC、Microsoft JhengHei UI、SimHei、SimSun 和 Tk 默认字体回退。
 - 中英混排、长题干、选项与解析按实际宽度换行；长地址和模型输入使用原生单行编辑。路径/表格允许横向滚动，正文允许滚动至末尾，提交/保存等关键动作保持可达。
 - 不用未映射时的 1 像素宽度重排长文本；调整布局时保留已明确滚至末尾的阅读意图。
+- 练习中心有待答题时，宽屏列表与答题区按 1:2 分配宽度，并分别保留 260/360 逻辑像素的最小宽度。
+  同一 uniform 分组两列均须使用正权重；切回上下布局时清除横向最小宽度，避免遗留占位。
 
 ## 键盘规则
 
@@ -26,6 +28,10 @@
 `python scripts/check_ui_display.py --output output/ui-redesign-stage6/display` 检查长内容、最小/最大窗口、字体回退、状态焦点和固定操作。两种工具只使用隔离配置；截图和回调异常分别进入 JSON 报告，不自动把截图成功当成视觉验收。
 
 `--tk-scale 1.25/1.5/2` 只改变 Tk 点换算，属于模拟。自动化覆盖四档缩放，不能替代 Windows 原生比例验收。
+
+`release_tests/test_practice_layout.py` 专门覆盖“待答列表非空 → 进入本题 → 四个选项可见并可选择/提交”，
+并检查宽屏、上下排列、紧凑列表切换及待答清空/恢复，避免只检查控制器切题成功而漏掉可见区域。
+显示脚本新增 `quiz-pending-split.png`，使用合成题目检查这一分栏场景，不写真实作答记录。
 
 ## 覆盖矩阵
 

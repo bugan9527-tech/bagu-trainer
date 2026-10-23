@@ -88,15 +88,15 @@ def _load_keyring():
         return None
 
 
-def resolve_api_key(llm_cfg: dict = None) -> str:
-    """返回当前生效的 API Key 来源（env > keyring > 旧配置文件），无则空串。
+def _resolve_api_key_with_source(llm_cfg: dict = None):
+    """内部返回 Key 与固定来源类型，沿用 env > keyring > 旧配置优先级。
 
     旧配置文件兜底仅作兼容读取，并打印一次性迁移提示；不删除旧 Key。
     """
     llm = llm_cfg or {}
     env_key = os.environ.get(ENV_KEY, "").strip()
     if env_key:
-        return _remember(env_key)
+        return _remember(env_key), "env"
     if not llm:
         from .config import load_config  # 延迟导入避免循环依赖
         llm = load_config().get("llm") or {}
@@ -105,7 +105,7 @@ def resolve_api_key(llm_cfg: dict = None) -> str:
         try:
             stored = keyring.get_password(KEYRING_SERVICE, KEYRING_USER) or ""
             if stored.strip():
-                return _remember(stored.strip())
+                return _remember(stored.strip()), "keyring"
         except Exception:
             pass  # 凭据库故障时继续走旧配置兜底
     legacy = (llm.get("api_key") or "").strip()
@@ -115,8 +115,18 @@ def resolve_api_key(llm_cfg: dict = None) -> str:
                    "建议迁移：设置环境变量 BAGU_LLM_API_KEY，或运行 "
                    "`python -m bagu_trainer.secrets migrate` 迁入凭据管理器；"
                    "迁移写入并回读校验成功后会安全清空 config.json 的该字段。")
-        return _remember(legacy)
-    return ""
+        return _remember(legacy), "legacy"
+    return "", "none"
+
+
+def resolve_api_key(llm_cfg: dict = None) -> str:
+    """Resolve using the existing env > Windows vault > legacy priority."""
+    return _resolve_api_key_with_source(llm_cfg)[0]
+
+
+def api_key_source(llm_cfg: dict = None) -> str:
+    """Return only a fixed source category; never return the credential to UI."""
+    return _resolve_api_key_with_source(llm_cfg)[1]
 
 
 def save_api_key(key: str) -> str:

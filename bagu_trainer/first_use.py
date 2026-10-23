@@ -10,8 +10,8 @@ from .ui_theme import apply_theme, SPACE, PRIMARY, DANGER, TITLE, MUTED, SECTION
 
 class FirstUseWizard:
     STEPS = ("bank", "model", "projects", "finish")
-    TITLES = {"bank": "选择来源并构建题库", "model": "配置并测试模型连接",
-              "projects": "选择监听项目", "finish": "准备完成，开始练习"}
+    TITLES = {"bank": "准备题库", "model": "配置模型",
+              "projects": "添加监听项目", "finish": "开始使用"}
 
     def __init__(self, coordinator, *, bank_service=None, model_opener=None,
                  root=None, start_step=None, on_return=None, content_host=None):
@@ -62,7 +62,7 @@ class FirstUseWizard:
         stepper = ttk.Frame(panel)
         stepper.grid(row=1, column=0, sticky="ew", pady=px((SPACE.md, SPACE.sm)))
         self.step_labels = []
-        for index, label in enumerate(("题库", "模型连接", "监听项目", "完成")):
+        for index, label in enumerate(self.TITLES.values()):
             stepper.columnconfigure(index, weight=1, uniform="step")
             item = wrapped_label(stepper, self.theme, text=f"{index + 1}  {label}", style="Step.TLabel")
             item.grid(row=0, column=index, sticky="ew", padx=px((0, SPACE.xs)))
@@ -263,7 +263,7 @@ class FirstUseWizard:
             self.heading.set(f"{index + 1}/4 · {self.TITLES[step]}")
         self.steps_text.set(f"第 {index + 1} / 4 步")
         self.step_progress.configure(value=index + 1)
-        for position, (label, title) in enumerate(zip(self.step_labels, ("题库", "模型连接", "监听项目", "完成"))):
+        for position, (label, title) in enumerate(zip(self.step_labels, self.TITLES.values())):
             label.configure(text=f"{position + 1}  {title}" + (" · 当前" if position == index else ""),
                             style="Current.Step.TLabel" if position == index else "Step.TLabel")
         self.start_button.configure(text={"bank": "使用就绪题库，下一步", "model": "保存并继续",
@@ -333,8 +333,7 @@ class FirstUseWizard:
         self.verified = None
         self.test_signature = None
         self.saved_signature = self._signature() if value.model_ready else None
-        self.key_hint.set("已检测到现有 Key；留空可沿用，保存时会写入 Windows 凭据管理器。" if value.has_key else
-                          "Key 仅保存到 Windows 凭据管理器，不写入日志或明文配置。")
+        self.model_view.show_key_source(value.key_source)
         self.projects = list(value.projects)
         self._render_projects()
         self._show(self.start_step if self.embedded else value.step)

@@ -1,4 +1,4 @@
-name: Windows x64 portable draft
+name: Windows x64 installer and portable draft
 
 on:
   pull_request:
@@ -9,12 +9,13 @@ on:
       - 'packaging/**'
       - 'release_tests/**'
       - 'requirements*.txt'
+      - '*.md'
+      - 'LICENSE'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag; must match bagu_trainer/version.py (for example v0.2.0)'
+        description: 'Release tag; must be v followed by the version in bagu_trainer/version.py'
         required: true
-        default: v0.2.0
         type: string
 
 permissions:
@@ -27,7 +28,10 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: windows-2022
-    timeout-minutes: 25
+    timeout-minutes: 40
+    env:
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+      PYTHONIOENCODING: utf-8
     outputs:
       tag: ${{ steps.metadata.outputs.tag }}
     defaults:
@@ -42,25 +46,63 @@ jobs:
         with:
           python-version: '3.10.11'
           architecture: x64
+      - name: Isolate source-test user data
+        run: '"BAGU_USER_DATA_DIR=$env:RUNNER_TEMP/bagu-source-tests" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
       - name: Install isolated build and test dependencies
         run: |
           python -m venv .venv-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Build audited onedir ZIP and SHA-256
-        run: .\.venv-build\Scripts\python.exe scripts/build_portable.py
+        run: .\.venv-build\Scripts\python.exe scripts/build_portable.py --require-clean
+      - name: Scan source without reading personal configuration or credential stores
+        run: python scripts/audit_release.py --source-only --output validation/source-privacy.json
+      - name: Prepare hash-pinned Inno Setup and archive inspector
+        run: python scripts/prepare_installer_tools.py
       - name: Test source workflows and the actual portable EXE
         run: python scripts/run_release_tests.py --output validation/release-tests.xml
       - name: Build and run the separate frozen acceptance driver
         run: |
           .\.venv-build\Scripts\python.exe scripts/build_acceptance.py --verify --memory-credentials --work build/frozen-acceptance
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item -LiteralPath build/frozen-acceptance/ACCEPTANCE.json -Destination validation/ACCEPTANCE.json
+      - name: Verify isolated cross-version installer lifecycle and foreign shortcuts
+        run: python scripts/acceptance/installer_lifecycle.py --iscc 'build/installer-tools/inno/{app}/ISCC.exe' --work build/installer-lifecycle-ci
+      - name: Build Setup from the same audited production directory and inspect every file
+        run: .\.venv-build\Scripts\python.exe scripts/build_installer.py --iscc 'build/installer-tools/inno/{app}/ISCC.exe' --innounp build/installer-tools/unpacker/innounp.exe --lifecycle-report build/installer-lifecycle-ci/INSTALLER_LIFECYCLE.json
+      - name: Install final Setup, test installed EXE, overwrite, shortcuts and uninstall
+        run: |
+          $version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv-build\Scripts\python.exe scripts/acceptance/installed_release.py --setup "dist/BaguTrainer-$version-windows-x64-Setup.exe" --work "$env:RUNNER_TEMP/bagu-installed-release" --output validation/INSTALLED_ACCEPTANCE.json
       - name: Prepare release notes and validate provenance
-        if: github.event_name == 'workflow_dispatch'
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if (-not $env:RELEASE_TAG) {
+            $version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $env:RELEASE_TAG = "v$version"
+          }
+          python scripts/release_portable.py --tag "$env:RELEASE_TAG" --evidence validation --output validation/public/RELEASE_NOTES.md --prepare-evidence
+      - name: Scan production payload, nested code, Setup, ZIP and sanitized attachments
+        run: |
+          $version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv-build\Scripts\python.exe scripts/audit_release.py --bundle dist/BaguTrainer --zip "dist/BaguTrainer-$version-windows-x64.zip" --setup "dist/BaguTrainer-$version-windows-x64-Setup.exe" --innounp build/installer-tools/unpacker/innounp.exe --attachments validation/public --output validation/public/PRIVACY_AUDIT.json
+      - name: Validate all gates including privacy before transferring release files
         id: metadata
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: python scripts/release_portable.py --tag "$env:RELEASE_TAG" --output validation/RELEASE_NOTES.md
+        run: |
+          if (-not $env:RELEASE_TAG) {
+            $version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $env:RELEASE_TAG = "v$version"
+          }
+          python scripts/release_portable.py --tag "$env:RELEASE_TAG" --evidence validation/public --metadata validation/public --output validation/public/RELEASE_NOTES.md
       - name: Preserve validation diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -69,18 +111,22 @@ jobs:
           path: |
             validation/
             build/pyinstaller/windows/warn-windows.txt
+            build/installer-lifecycle-ci/INSTALLER_LIFECYCLE.json
+            ${{ runner.temp }}/bagu-installed-release/*.log
+            ${{ runner.temp }}/bagu-installed-release/screenshots/
+            ${{ runner.temp }}/bagu-installed-release/frozen/screenshots/
           if-no-files-found: warn
           retention-days: 14
       - name: Transfer verified release files
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-portable-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-release-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             dist/BaguTrainer-*-windows-x64.zip
             dist/BaguTrainer-*-windows-x64.zip.sha256
-            validation/RELEASE_NOTES.md
-            validation/release-tests.xml
-            validation/ACCEPTANCE.json
+            dist/BaguTrainer-*-windows-x64-Setup.exe
+            dist/BaguTrainer-*-windows-x64-Setup.exe.sha256
+            validation/public/
           if-no-files-found: error
           retention-days: 14
       - name: Preserve clean Windows acceptance kit separately
@@ -120,11 +166,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          ARTIFACT_NAME: windows-portable-${{ github.run_id }}-${{ github.run_attempt }}
+          ARTIFACT_NAME: windows-release-${{ github.run_id }}-${{ github.run_attempt }}
         run: gh run download "$env:RUN_ID" --name "$env:ARTIFACT_NAME" --dir release-files
       - name: Create or update draft only; never publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ needs.build-and-test.outputs.tag }}
-        run: python scripts/release_portable.py --tag "$env:RELEASE_TAG" --dist release-files/dist --output release-files/validation/RELEASE_NOTES.md --publish-draft
+        run: python scripts/release_portable.py --tag "$env:RELEASE_TAG" --dist release-files/dist --evidence release-files/validation/public --metadata release-files/validation/public --output release-files/validation/public/RELEASE_NOTES.md --publish-draft

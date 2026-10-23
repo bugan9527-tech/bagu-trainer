@@ -144,8 +144,14 @@ class PracticePage(ttk.Frame):
         else:
             self.list_help.grid()
             self.list_label.grid()
-        self.workspace.columnconfigure(0, weight=0 if split else 1, uniform="practice" if split else "")
-        self.workspace.columnconfigure(1, weight=1 if split else 0, uniform="practice" if split else "")
+        # Uniform columns divide width in proportion to their weights. A zero
+        # weight lets the list's requested width push the reader out of view.
+        # Reserve usable widths for both panes and give the question twice the
+        # share; clear those minima when returning to the stacked layout.
+        self.workspace.columnconfigure(0, weight=1, minsize=self.theme.px(260) if split else 0,
+                                       uniform="practice" if split else "")
+        self.workspace.columnconfigure(1, weight=2 if split else 0, minsize=self.theme.px(360) if split else 0,
+                                       uniform="practice" if split else "")
         self.compact_toggle.grid_remove()
         if self.compact_list and not split:
             self.keyboard_hint.grid_remove()

@@ -149,11 +149,25 @@ def main():
             settings.root.state("zoomed")
             capture(settings.root, "settings-maximized", [settings.test_button, settings.save_button])
         finally:
-            settings._close()
+            # No test/save tasks exist in this capture tool. Destroy externally
+            # to avoid recursively destroying Tk during the panel's Destroy event.
+            settings.root.destroy()
         app = DesktopApp(SimpleNamespace(paused=False))
         app.root.report_callback_exception = errors
         try:
             app.root.geometry("%dx%d" % app.root.minsize())
+            app.show_restored_configuration()
+            capture(app.root, "desktop-restored-configuration", [app.view_data_button, app.edit_restored_button])
+            app.view_data_button.invoke()
+            settings_page = app._page_frame("settings")
+            settings_page.view.reveal(settings_page.open_data_button)
+            capture(app.root, "settings-data-locations", [settings_page.open_data_button, settings_page.model_button])
+            settings_page.model_button.invoke()
+            model_page = app._page_frame("model")
+            model_page.show_key_source("keyring")  # Display fixture only, no vault read.
+            model_page.form_view.reveal(model_page.key_hint_area)
+            capture(app.root, "model-key-source", [model_page.test_button, model_page.save_button])
+            app._navigate_page("dashboard")
             app._render_dashboard({"state": "watching", "projects": [path],
                 "stats": {"ok": True, "total_attempts": 1234, "accuracy": .875, "due_reviews": 16}})
             app.status.set(mixed * (1 if args.normal else 5))
@@ -169,6 +183,13 @@ def main():
             app._navigate_page("practice")
             app.root.update()
             practice = app._page_frame("practice")
+            # A nonempty list activates the wide split: without this fixture,
+            # screenshots miss regressions that push answer controls offscreen.
+            practice.set_pending([app.practice.current], 4)
+            app.root.state("normal")
+            app.root.geometry("1200x800+0+0")
+            capture(app.root, "quiz-pending-split", [practice.enter_button, *practice.option_buttons])
+            app.root.geometry("%dx%d" % app.root.minsize())
             capture(app.root, "quiz-question-small", [practice.submit_button, practice.dismiss_button])
             practice.view.canvas.focus_force()
             practice.view.canvas.event_generate("<End>")

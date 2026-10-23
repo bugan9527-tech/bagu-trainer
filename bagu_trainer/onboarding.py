@@ -224,6 +224,7 @@ class WizardSnapshot:
     timeout_sec: float
     has_key: bool
     projects: tuple
+    key_source: str = "none"
 
     @property
     def step(self):
@@ -235,12 +236,12 @@ def snapshot(report):
     llm = configuration.get("llm")
     llm = llm if isinstance(llm, dict) else {}
     try:
-        has_key = bool(secrets.resolve_api_key(llm))
-    except (TypeError, AttributeError):
-        has_key = False
+        key_source = secrets.api_key_source(llm)
+    except (ValueError, TypeError, AttributeError):
+        key_source = "none"
     roots = configuration.get("project_roots")
     roots = tuple(root for root in roots if isinstance(root, str)) if isinstance(roots, list) else ()
     checks = {item.name: item.ready for item in report.checks}
     return WizardSnapshot(checks.get("bank", False), saved_model_verified(configuration),
         checks.get("projects", False), str(llm.get("base_url") or ""), str(llm.get("model") or ""),
-        llm.get("timeout_sec") or 15, has_key, roots)
+        llm.get("timeout_sec") or 15, key_source != "none", roots, key_source)

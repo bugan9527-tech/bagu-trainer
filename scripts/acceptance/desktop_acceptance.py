@@ -24,6 +24,8 @@ from pathlib import Path
 if not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from scripts.acceptance.contract import complete_milestones
+
 KEY = "acceptance-local-only-not-a-secret"
 REPOSITORY = "Snailclimb/JavaGuide"
 TEXT = ("# 什么是数据库索引？\n\n数据库索引用额外的数据结构记录键值与数据位置的对应关系。"
@@ -56,7 +58,7 @@ REVIEW = {"context_relevant": True, "source_supported": True, "answer_unique": T
 UPDATED_MODEL = "updated-local-model"
 
 
-def capture_window(work, name, *, root=None, pid=None):
+def capture_window(work, name, *, root=None, pid=None, expected_title="AI 八股训练器"):
     """Owned windows only. A capture is evidence, never an automatic visual pass."""
     record = {"name": name, "captured": False}
     try:
@@ -81,7 +83,7 @@ def capture_window(work, name, *, root=None, pid=None):
                 if owner.value == pid and user32.IsWindowVisible(hwnd):
                     title = ctypes.create_unicode_buffer(512)
                     user32.GetWindowTextW(hwnd, title, len(title))
-                    if title.value == "AI 八股训练器":
+                    if title.value == expected_title:
                         owned.append(hwnd)
                 return True
             # The startup broker can report running just before the native
@@ -286,10 +288,16 @@ def phase(options):
                       "Ordinary navigation rebuilt baselines")
                 milestones.append("seven_embedded_pages_icons_and_navigation_keep_baselines")
                 app._navigate_page("model")
+                check(app.shell.current_page == "model" and monitor.delivery_paused.is_set(),
+                      "Acceptance did not enter model browsing before generation")
                 capture("main-watching", app.root)
                 (watched / "query.py").write_text(CHANGE, encoding="utf-8")
                 stage[0] = 1
             elif stage[0] == 1:
+                if not entered_pending[0]:
+                    check(app.shell.current_page == "model" and monitor.delivery_paused.is_set(),
+                          "Browsing changed before explicit pending entry: " + app.shell.current_page)
+                    check(app.practice.current is None, "Quiz delivered while model page is being browsed")
                 if app.practice.current is None:
                     if app._pending_items and not entered_pending[0]:
                         check(app.shell.current_page == "model", "New quiz stole the current page")
@@ -420,6 +428,7 @@ def phase(options):
                 engine._store.close()
     check(not errors, "; ".join(errors))
     check(milestones, "No acceptance milestones completed")
+    check(complete_milestones(options.phase, milestones), "Acceptance skipped a required milestone: " + repr(milestones))
     write_json(work / (options.phase + "-result.json"), {"passed": True, "milestones": milestones,
                "screenshots": screenshots, "ui_pages": ui_pages,
                "frozen": bool(getattr(sys, "frozen", False)), "credential_backend": "memory fixture" if options.memory_credentials else "Windows vault, isolated profile"})

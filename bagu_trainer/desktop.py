@@ -158,11 +158,10 @@ class DesktopApp:
         self.task_progress = ttk.Progressbar(self.status_area, mode="indeterminate")
         self.task_progress.grid(row=2, column=0, columnspan=2, sticky="ew", pady=px((SPACE.sm, 0)))
         self.task_progress.grid_remove()
-        content = self.dashboard_view.body
-        if compact:
-            content = ttk.Frame(content)
-            content.columnconfigure(0, weight=1)
-            content.grid(row=1, column=0, sticky="ew")
+        self.restored_notice = None
+        content = ttk.Frame(self.dashboard_view.body)
+        content.columnconfigure(0, weight=1)
+        content.grid(row=2, column=0, sticky="ew")
         wrapped_label(content, self.theme, text="当前项目", style=SECTION).grid(row=0, column=0, sticky="ew")
         wrapped_label(content, self.theme, textvariable=self.current_project, style=MUTED).grid(
             row=1, column=0, sticky="ew", pady=px((SPACE.sm, SPACE.sm)))
@@ -208,6 +207,24 @@ class DesktopApp:
         if background:
             cancel_timer(self.root, self.focus_timer)
             self.focus_timer = self.root.after(50, self.root.iconify)
+
+    def show_restored_configuration(self):
+        """Persistent local-restore notice, independent of changing worker status."""
+        if self.restored_notice is not None:
+            return
+        from .ui_layout import FlowActions, wrapped_label
+        notice = self.ttk.Frame(self.dashboard_view.body)
+        notice.grid(row=1, column=0, sticky="ew", pady=self.theme.px((0, SPACE.lg)))
+        notice.columnconfigure(0, weight=1)
+        self.restored_notice = notice
+        self.restored_message = window_var(notice, "已恢复当前 Windows 用户保存在本机的配置。")
+        wrapped_label(notice, self.theme, textvariable=self.restored_message).grid(row=0, column=0, sticky="ew")
+        actions = FlowActions(notice, self.theme)
+        actions.grid(row=1, column=0, sticky="ew", pady=self.theme.px((SPACE.sm, 0)))
+        self.view_data_button = actions.add(self.ttk.Button(actions, text="查看数据目录",
+                                             command=lambda: self._navigate_page("settings")))
+        self.edit_restored_button = actions.add(self.ttk.Button(actions, text="修改配置",
+                                                 command=lambda: self._navigate_page("model")))
 
     def run(self):
         self._start_worker()
@@ -276,7 +293,8 @@ class DesktopApp:
             return panel
         if page == "settings":
             from .settings_page import SettingsPage
-            panel = SettingsPage(self.content_host, self.theme, on_status=self._set_status)
+            panel = SettingsPage(self.content_host, self.theme, on_status=self._set_status,
+                                 on_navigate=self._navigate_page)
             return panel
         if page == "practice":
             from .practice_page import PracticePage

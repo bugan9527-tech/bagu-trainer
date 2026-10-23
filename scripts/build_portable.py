@@ -56,10 +56,20 @@ def audit(directory):
     entries = []
     for file in sorted(directory.rglob("*")):
         relative = file.relative_to(directory)
+        if file.is_symlink() or (file.lstat().st_file_attributes & 0x400 if os.name == "nt" else False):
+            raise RuntimeError("发布包包含禁止收录的链接：" + str(relative))
         if file.is_file():
-            if (file.name in forbidden or file.suffix.lower() in {".db", ".sqlite", ".sqlite3", ".log"}
-                    or set(relative.parts) & {"repos", "deduped", "tests", "release_tests", ".git", "scripts",
-                                              "runtime", "logs", "profiles", "user-data", ".desktop-runtime"}):
+            low = file.name.lower()
+            if (low in forbidden or low.startswith((".env", "config.", "acceptance", "bagutraineracceptance"))
+                    or low.startswith(("key.", "api-key", "api_key", "secret.", "secrets.", "credentials.", "token."))
+                    or low in {"installer_acceptance.json", "installer_lifecycle.json", "installed_acceptance.json",
+                               "installer_manifest.json", "release_validation.json", "release-tests.xml", "owner.lock"}
+                    or any(low.endswith(ext) or (ext + "-") in low or (ext + ".") in low
+                           for ext in (".db", ".sqlite", ".sqlite3", ".log"))
+                    or file.suffix.lower() in {".key", ".pem", ".p12", ".pfx", ".keystore", ".jks"}
+                    or low.startswith(("id_rsa", "id_ed25519"))
+                    or {part.lower() for part in relative.parts} & {"repos", "deduped", "tests", "release_tests", ".git", "scripts",
+                                              "runtime", "logs", "profiles", "user-data", ".desktop-runtime", "validation", "acceptance"}):
                 raise RuntimeError("发布包包含禁止收录的文件：" + str(relative))
             entries.append({"path": relative.as_posix(), "bytes": file.stat().st_size,
                             "sha256": hashlib.sha256(file.read_bytes()).hexdigest()})
@@ -69,7 +79,7 @@ def audit(directory):
 def source_provenance():
     """Fingerprint runtime/build code, including current uncommitted modules."""
     paths = [path for folder in ("bagu_trainer", "scripts", "packaging")
-             for path in (ROOT / folder).rglob("*") if path.suffix in {".py", ".spec"}]
+             for path in (ROOT / folder).rglob("*") if path.suffix in {".py", ".spec", ".iss", ".isl", ".ico", ".json"}]
     paths.extend(ROOT.glob("requirements*.txt"))
     files = {path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
              for path in sorted(paths)}
@@ -80,10 +90,14 @@ def source_provenance():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    parser.add_argument("--require-clean", action="store_true", help="Fail before building if tracked or untracked source changed")
     options = parser.parse_args()
     output = options.output_dir.resolve()
     if sys.platform != "win32" or struct.calcsize("P") != 8:
         raise SystemExit("Windows x64 Python is required")
+    if options.require_clean and subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True).strip():
+        raise ValueError("Release build requires a clean source checkout")
     versions = prepare_notices()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"],

@@ -17,7 +17,7 @@ python -m venv .venv-build
 输出：
 
 - `dist/BaguTrainer/`：可直接启动的完整目录。
-- `dist/BaguTrainer-0.2.0-windows-x64.zip`：分发压缩包。
+- `dist/BaguTrainer-0.3.0-windows-x64.zip`：分发压缩包，文件名版本由 `version.py` 生成。
 - 同名 `.zip.sha256`：压缩包校验值。
 - 包内 `BUILD_MANIFEST.json`：架构、版本、构建依赖版本及逐文件 SHA256。
 
@@ -27,7 +27,8 @@ python -m venv .venv-build
 $env:BAGU_USER_DATA_DIR = Join-Path $env:TEMP 'bagu-isolated-build'
 .\.venv-build\Scripts\python.exe scripts/build_portable.py --output-dir dist/ui-redesign-stage6
 $env:BAGU_PORTABLE_BUNDLE = "$PWD/dist/BaguTrainer"
-$env:BAGU_PORTABLE_ARCHIVE = "$PWD/dist/BaguTrainer-0.2.0-windows-x64.zip"
+$version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+$env:BAGU_PORTABLE_ARCHIVE = "$PWD/dist/BaguTrainer-$version-windows-x64.zip"
 python -m pytest release_tests tests -q -W error --junitxml=validation/stage6/full.xml
 .\.venv-build\Scripts\python.exe scripts/build_acceptance.py --verify --memory-credentials --output-dir dist/ui-redesign-stage6 --work validation/stage6/frozen
 ```
@@ -45,29 +46,58 @@ Pillow 由标准 hook 收集；主题和图像库的完整许可进入 `licenses
 ## GitHub Actions 和草稿 Release
 
 工作流：[windows-portable.yml](.github/workflows/windows-portable.yml)。
-进入默认分支后，在 Actions 选择 **Windows x64 portable draft → Run workflow**，选择分支，
-tag 必须为 `v` 加 `bagu_trainer/version.py` 的版本，版本变更时同步修改输入默认值。
+进入默认分支后，在 Actions 选择 **Windows x64 installer and portable draft → Run workflow**，选择分支，
+tag 必须为 `v` 加 `bagu_trainer/version.py` 的版本，输入没有另一个需要同步维护的版本默认值。
 PR 只运行构建/测试，不获得 Release 写权限。手动运行要求文件已在默认分支，
 依据 [GitHub 手动运行规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 
 ```powershell
-gh workflow run windows-portable.yml --ref main -f tag=v0.2.0
+gh workflow run windows-portable.yml --ref main -f tag=v0.3.0
 gh run list --workflow windows-portable.yml
 ```
 
-第一阶段在 `windows-2022` 使用独立 x64 环境生成 ZIP/SHA-256，执行 `release_tests`（含实际 EXE），
-再构建/运行单独冻结验收程序，全部通过才生成发布说明。
+第一阶段在 GitHub 托管的临时 `windows-2022` 上依次执行：
+
+1. 要求干净 checkout，仅构建一次生产 `dist/BaguTrainer`，生成 ZIP/SHA-256。
+2. 按 `packaging/installer-toolchain.json` 的 HTTPS 来源和 SHA-256 下载 Inno Setup 6.7.3、innounp；
+   解包工具而不安装，额外核对工具 EXE hash。不使用预装浮动版本或 `latest`。
+3. 执行全部 `release_tests`（含实际便携 EXE、隐私与发布拒绝用例），不允许失败或跳过；
+   构建/运行原独立冻结验收驱动，使用内存凭据与 localhost 模型。
+4. 隔离 AppId/目录夹具检查跨版本覆盖、占用等待、快捷方式归属、同名便携副本和卸载数据保留。
+5. 从同一个生产目录构建 Setup、逐文件解包核对并生成独立 SHA-256。
+6. 在临时 runner 按默认当前用户目录试装最终生产 Setup，个人数据指向临时独立 profile，
+   核对空配置首次引导、运行时维护阻止、重复安装、实际注册和开始菜单/桌面入口，
+   复用冻结驱动验证已安装 EXE，再验证同版覆盖、已启用自启动入口、数据保留和卸载。
+7. 以 `--prepare-evidence` 生成隐私扫描尚为 pending 的脱敏材料，扫描源码、载荷、嵌套归档、
+   Setup、ZIP 和附件，再核对扫描绑定的摘要。全部通过后才生成可交付总结果。
+
+`scripts/acceptance/installed_release.py` 只允许 `GITHUB_ACTIONS=true` 且
+`RUNNER_ENVIRONMENT=github-hosted` 的 Windows，拒绝开发机及自托管 runner；
+预先发现应用注册、默认数据目录或同名入口也拒绝执行。生产 AppId 的注册和真实 shell 目录
+仅存在于临时 runner；程序在该用户默认目录，学习数据在 `RUNNER_TEMP` 的独立目录，凭据为内存/空 backend，
+不调用真实模型或 Windows 凭据接口。本地使用 `installer_lifecycle.py` 的重定向夹具。
+
 第二阶段仅下载同一 run/attempt 的已验证附件，使用该 job 的 `GITHUB_TOKEN`（contents write、actions read）
-创建草稿并上传 ZIP、校验文件、JUnit、`ACCEPTANCE.json`，无需长期 PAT 或模型 Key secret。
+重新计算 ZIP/Setup hash，复核版本、提交、源码指纹、相同 payload manifest、完整验收与脱敏报告，
+再创建/更新草稿，无需长期 PAT 或模型 Key secret。
 构建 job 只有只读权限，checkout 不保留 Git 凭据；工作流不自动正式发布。
 
-`scripts/release_portable.py` 校验版本、归档和逐文件 SHA-256、干净源码提交、无跳过/失败的 JUnit
-及同提交冻结验收；拒绝向其他提交的 tag 或正式 Release 上传。
+草稿附件为 Setup、ZIP、各自 `.sha256`、脱敏 JUnit、`ACCEPTANCE.json`、
+`INSTALLED_ACCEPTANCE.json`、`INSTALLER_LIFECYCLE.json`、`INSTALLER_MANIFEST.json`、
+`RELEASE_VALIDATION.json`、`PRIVACY_AUDIT.json`。原始本机路径、机器名、测试 stdout、配置、凭据与验收驱动不上传 Release。
+原始诊断只保留在 Actions 诊断附件，不属于用户下载。
+
+`scripts/release_portable.py` 保留旧入口名称，负责双产物门禁；缺报告、错版本/提交/hash、
+脏源码、测试失败/跳过、冻结或安装未完成均阻止上传。跨版本由合成夹具验证，
+最终 Setup 实测的是同版覆盖，不将它描述成两版生产发布包的实测升级。
+仍拒绝向其他提交的 tag 或正式 Release 上传。
 同提交草稿可重跑并替换附件，上传中断仍保持草稿，重新运行即可重试；代码变化使用新版本标签。
-发布说明给出 ZIP/校验文件固定入口和首次使用步骤。草稿仅授权者可下载，公开固定链接在正式发布后
+发布说明突出 Setup 下载、把 ZIP 列为备选，并给出校验入口和首次使用步骤。
+维护者审阅报告和草稿附件后，必须在 GitHub 明确点击 **Publish release** 才会正式发布；
+本流程没有定时发布或自动转正式的路径。草稿仅授权者可下载，公开固定链接在正式发布后
 才生效，依据 [GitHub Release 可见性说明](https://docs.github.com/en/rest/releases/releases)。审阅草稿直接使用下方 Assets。
 
-诊断附件保留 14 天：`windows-validation-*`、`windows-portable-*`、`clean-windows-acceptance-*`。
+诊断附件保留 14 天：`windows-validation-*`、`windows-release-*`、`clean-windows-acceptance-*`。
 失败时下载 JUnit、错误报告和 PyInstaller 警告，修复后重跑；云端实际状态以 run 页面为准。
 
 ## 独立冻结验收

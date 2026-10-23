@@ -185,14 +185,25 @@ class ModelPanel(ttk.Frame):
         self.verified = None
         self.test_signature = None
         self.saved_signature = self._signature()
-        has_key = False
+        self.refresh_key_source(llm)
+
+    def show_key_source(self, source):
+        labels = {"env": "环境变量 BAGU_LLM_API_KEY（优先使用）",
+                  "keyring": "当前 Windows 用户的凭据管理器",
+                  "legacy": "旧版配置文件（兼容读取）", "none": "未配置"}
+        label = labels.get(source, labels["none"])
+        self.key_hint.set(f"当前生效 Key 来源：{label}。\n"
+                          "输入框不回填已保存的 Key；留空可沿用。")
+
+    def refresh_key_source(self, llm=None):
         try:
-            from . import secrets
-            has_key = bool(secrets.resolve_api_key(llm))
-        except (ValueError, TypeError, AttributeError):
-            has_key = False
-        self.key_hint.set("已检测到现有 Key；留空可沿用，保存时会写入 Windows 凭据管理器。" if has_key else
-                          "Key 仅保存到 Windows 凭据管理器，不写入日志或明文配置。")
+            from . import config, secrets
+            if llm is None:
+                llm = config.read_user_config().get("llm") or {}
+            source = secrets.api_key_source(llm)
+        except (OSError, ValueError, TypeError, AttributeError):
+            source = "none"
+        self.show_key_source(source)
 
     # -- event handling -------------------------------------------------------
     def _provider_changed(self, _event=None):
@@ -333,6 +344,7 @@ class ModelPanel(ttk.Frame):
             else:
                 self.verified = self.test_signature = None
                 self.api_key.set("")
+                self.refresh_key_source()
                 self.status.set("已保存并更新模型验证状态，即时生效；Key 输入框已清空。")
                 self.save_state.set("已保存 · 即时生效")
                 self.saved_signature = self._signature()

@@ -179,6 +179,9 @@ class StartupCoordinator:
 
     def run(self, background=False):
         engine = self.prepare()
+        # Capture before entering the wizard: completing new setup is not a
+        # restoration. Keep the local readiness gate and engine handoff intact.
+        restored = engine is not None and config.CONFIG_PATH.is_file()
         if engine is None:
             from .initialization import InitializationApp
             engine = InitializationApp(self).run()
@@ -189,6 +192,8 @@ class StartupCoordinator:
         from .desktop_monitor import DesktopMonitor
         monitor = DesktopMonitor(engine)
         app = DesktopApp(monitor, background, events=self.events)
+        if restored:
+            app.show_restored_configuration()
         self.monitor = monitor
         self.state = "running"
         try:

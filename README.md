@@ -10,23 +10,36 @@
 
 这是一个独立的 Windows 桌面程序：常驻侧栏与右侧工作区承载工作台、练习中心、答题记录、监听项目、题库管理、模型配置和应用设置七个页面。
 
-**Windows x64 便携版：解压完整目录，双击 `BaguTrainer.exe`。** 无需安装 Python、Git 或
-PowerShell；保留旁边的 `_internal`。使用、旧数据迁移和升级见 [便携版说明](PORTABLE_README.md)，
-构建与实际 EXE 验证见 [Windows 发布](WINDOWS_PORTABLE.md)。下方命令适用于源码运行。
+**普通用户推荐 Windows x64 安装版 `Setup.exe`**：中文向导、当前用户安装，默认无需管理员权限，
+可选桌面快捷方式。默认程序目录为 `%LOCALAPPDATA%\Programs\BaguTrainer`，个人数据继续在
+`%LOCALAPPDATA%\BaguTrainer`；升级和卸载保留数据与 Windows 凭据。
+无需安装 Python、Git、PowerShell 或配置 MCP。安装、升级及卸载见 [安装器说明](WINDOWS_INSTALLER.md)。
+
+**便携 ZIP 是另一个下载选项**：完整解压后双击 `BaguTrainer.exe`，保留旁边的 `_internal`。
+两种发行共用用户数据与单实例规则；便携使用说明见 [PORTABLE_README.md](PORTABLE_README.md)。
+当前产物未签名；自动流程只生成草稿，公开发布需维护者明确操作。
 
 **首次使用需要先构建题库并配置模型。** 发布包不附带第三方完整题库或人工验证
 离线回退题；本地构建和来源说明见 [题库发布与构建](QUESTION_BANK.md)。
 
-## 下载便携版
+首次使用按“准备题库 → 配置模型 → 添加监听项目 → 开始使用”引导。
+恢复完整有效配置时，工作台明确提示已恢复当前 Windows 用户的本机配置，并提供查看数据目录和修改配置入口。
+模型页只显示 Key 来源类型，输入框不回填真实 Key；恢复与浏览设置不自动测试、迁移或清除数据。
+详见 [首次使用与恢复说明](FIRST_USE.md)。
+
+## 普通用户下载与安装
 
 打开 [Release 页面](https://github.com/bugan9527-tech/bagu-trainer/releases)，在 Assets 下载
-`BaguTrainer-<版本>-windows-x64.zip` 和同名 `.sha256`，完整解压后双击 EXE。
+`BaguTrainer-<版本>-windows-x64-Setup.exe` 和同名 `.sha256`，核对摘要后双击安装，
+再从开始菜单启动。也可选择 `BaguTrainer-<版本>-windows-x64.zip` 及其校验文件。
+不要把 GitHub 自动附带的 Source code ZIP 当作桌面应用。
 草稿仅仓库有权限的用户可见；正式发布前请从草稿 Assets 下载，公开固定链接此时尚不可用。
 首次向导依次完成来源选择及构建、模型连接测试和保存、监听项目选择。无需配置 MCP。
 配置、题库和学习记录位于 `%LOCALAPPDATA%\BaguTrainer\`，升级时保留该目录。
 
-维护者可在 Actions 运行 **Windows x64 portable draft**，填写与源码版本一致的 tag。
-工作流构建、测试、生成 SHA-256，并上传草稿 Release；发布说明提供下载入口和中文首次使用步骤。
+维护者可在 Actions 运行 **Windows x64 installer and portable draft**，填写与源码版本一致的 tag。
+工作流从同一干净提交、同一生产目录构建 ZIP 和 Setup，执行源码/实际 EXE/冻结与安装验收，
+分别核对 SHA-256 后上传草稿 Release 和脱敏报告。
 工作流进入默认分支后才有手动按钮；PR 自动检查只构建和测试，不创建 Release。
 流程、权限及失败重跑见 [发布说明](WINDOWS_PORTABLE.md)。
 v0.2.0 整合七页桌面工作区、切题与提交互斥、暂停期间继续练习，以及项目与发布内容清理。
@@ -49,6 +62,8 @@ v0.2.0 整合七页桌面工作区、切题与提交互斥、暂停期间继续�
 可能没有题目。代码改动稳定只是触发时机的近似判断，不能精确识别 AI 任务何时结束。
 
 ## 环境要求
+
+以下 Python 和命令行步骤供开发者从源码运行；下载安装版或便携版的普通用户无需执行。
 
 | 项目 | 要求 |
 | --- | --- |

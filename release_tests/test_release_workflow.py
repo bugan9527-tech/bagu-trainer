@@ -32,6 +32,7 @@ def test_notes_have_direct_assets_and_chinese_first_use(tmp_path):
     archive, checksum, digest = artifact(tmp_path)
     assert release.validate_release(tmp_path, "v" + release.__version__, SHA) == (archive, checksum, digest)
     notes = release.render_notes("owner/repo", "v" + release.__version__, SHA, archive, digest,
+                                 tmp_path / f"BaguTrainer-{release.__version__}-windows-x64-Setup.exe", "b" * 64,
                                  tests={"passed": 100, "skipped": 0})
     assert f"/releases/download/v{release.__version__}/{archive.name}" in notes
     assert archive.name + ".sha256" in notes
