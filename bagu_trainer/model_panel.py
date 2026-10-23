@@ -19,7 +19,7 @@ import threading
 from tkinter import ttk
 
 from . import onboarding
-from .ui_layout import ScrollableFrame, MessageArea, wrapped_label
+from .ui_layout import ScrollableFrame, MessageArea, FlowActions, wrapped_label
 from .ui_state import cancel_timer, set_text, clear_variable_traces, window_var
 from .ui_theme import SPACE, PRIMARY, SECTION, MUTED
 
@@ -125,8 +125,9 @@ class ModelPanel(ttk.Frame):
             self._restore()
             return
 
-        result = ttk.Frame(self)
-        result.grid(row=2, column=0, sticky="ew", pady=px((SPACE.md, 0)))
+        result = ttk.Frame(frm if compact else self)
+        result.grid(row=102 if compact else 2, column=0, columnspan=2 if compact else 1,
+                    sticky="ew", pady=px((SPACE.md, 0)))
         result.columnconfigure(0, weight=1)
         wrapped_label(result, theme, textvariable=self.result_heading, style=SECTION).grid(row=0, column=0, sticky="ew")
         self.status_area = MessageArea(result, self.status, theme, lines=1 if compact else 3)
@@ -141,14 +142,11 @@ class ModelPanel(ttk.Frame):
         else:
             wrapped_label(result, theme, textvariable=self.operation_hint, style=MUTED).grid(
                 row=3, column=0, sticky="ew", pady=px((0, SPACE.sm)))
-        btns = ttk.Frame(result)
-        btns.grid(row=4, column=0, sticky="e")
-        self.test_button = ttk.Button(btns, text="测试连接", command=self._test)
-        self.test_button.pack(side="left", padx=px((0, SPACE.sm)))
-        self.save_button = ttk.Button(btns, text="保存", style=PRIMARY, command=self._save)
-        self.save_button.pack(side="left")
-        self.cancel_button = ttk.Button(btns, text="取消测试", command=self._cancel_test)
-        self.cancel_button.pack(side="left", padx=px((SPACE.sm, 0)))
+        btns = FlowActions(self if compact else result, theme)
+        btns.grid(row=2 if compact else 4, column=0, sticky="ew")
+        self.test_button = btns.add(ttk.Button(btns, text="测试连接", command=self._test))
+        self.save_button = btns.add(ttk.Button(btns, text="保存", style=PRIMARY, command=self._save))
+        self.cancel_button = btns.add(ttk.Button(btns, text="取消测试", command=self._cancel_test))
 
         self.bind("<Destroy>", self._destroyed, add="+")
         self._restore()

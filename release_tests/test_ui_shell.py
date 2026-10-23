@@ -316,6 +316,7 @@ def test_sidebar_keyboard_and_real_pages_at_four_tk_scales(history, monkeypatch,
         app.root.update()
         assert app.root.focus_get() is button
         for name in ("projects", "bank", "model", "settings"):
+            print(f"Rendering {name} at scale {scale}", flush=True)
             app._navigate_page(name)
             app.root.update()
             assert app.shell.current_frame.winfo_ismapped()
