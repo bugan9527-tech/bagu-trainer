@@ -51,7 +51,7 @@ def check(condition, message):
 
 def run_native(executable, work, name, data, *extra):
     log = work / (name + ".log")
-    subprocess.run([str(executable), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-",
+    subprocess.run([str(executable), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/MAINTENANCEWAIT=10",
                     "/LOG=" + str(log), *extra], env=environment(data), check=True, timeout=180)
     # The native uninstall launcher may return before its second phase ends.
     wait_until(lambda: "Log closed." in log.read_text(encoding="utf-8-sig"), timeout=30)

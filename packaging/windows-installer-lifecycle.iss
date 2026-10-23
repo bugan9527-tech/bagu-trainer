@@ -97,10 +97,17 @@ begin
   Result := Lowercase(RemoveBackslashUnlessRoot(ExpandFileName(Path)));
 end;
 
+function UnicodePos(Needle, Haystack: String): Integer;
+begin
+  { Pos accepts AnyString. A narrow literal can select its ANSI overload,
+    turning Chinese filenames into '?' on a non-Chinese Windows code page. }
+  Result := Pos(Needle, Haystack);
+end;
+
 function Within(A, B: String): Boolean;
 begin
   A := Normalize(A); B := Normalize(B);
-  Result := (A = B) or (Pos(AddBackslash(B), AddBackslash(A)) = 1);
+  Result := (A = B) or (UnicodePos(AddBackslash(B), AddBackslash(A)) = 1);
 end;
 
 function NoReparse(Path: String): Boolean;
@@ -120,9 +127,9 @@ end;
 
 function SafeRelative(Path: String): Boolean;
 begin
-  Result := (Path <> '') and (Pos('..', Path) = 0) and (Pos(':', Path) = 0) and
-    (Pos('/', Path) = 0) and (Path[1] <> '\') and (Pos('*', Path) = 0) and
-    (Pos('?', Path) = 0) and (Pos('{', Path) = 0) and
+  Result := (Path <> '') and (UnicodePos('..', Path) = 0) and (UnicodePos(':', Path) = 0) and
+    (UnicodePos('/', Path) = 0) and (Path[1] <> '\') and (UnicodePos('*', Path) = 0) and
+    (UnicodePos('?', Path) = 0) and (UnicodePos('{', Path) = 0) and
     (CompareText(ExtractFileExt(Path), '.lnk') <> 0);
 end;
 
@@ -375,8 +382,8 @@ begin
   try
     Obj := CreateComObject(StringToGuid('{00021401-0000-0000-C000-000000000046}'));
     PF := IPersistFile(Obj); OleCheck(PF.Load(Path, 0)); SL := IShellLinkW(Obj);
-    SetLength(Target, 32768); OleCheck(SL.GetPath(Target, 32768, 0, 4)); SetLength(Target, Pos(#0, Target) - 1);
-    SetLength(Args, 32768); OleCheck(SL.GetArguments(Args, 32768)); SetLength(Args, Pos(#0, Args) - 1);
+    SetLength(Target, 32768); OleCheck(SL.GetPath(Target, 32768, 0, 4)); SetLength(Target, UnicodePos(#0, Target) - 1);
+    SetLength(Args, 32768); OleCheck(SL.GetArguments(Args, 32768)); SetLength(Args, UnicodePos(#0, Args) - 1);
     Result := (Normalize(Target) = Normalize(ExpandConstant('{app}\BaguTrainer.exe'))) and (Trim(Args) = Arguments);
   except
     Log('快捷方式归属无法确认，保留原入口。');

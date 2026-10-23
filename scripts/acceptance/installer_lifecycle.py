@@ -56,6 +56,7 @@ def compile_fixture(iscc, case, identity, version, executable, legacy=False, wai
     payload = case / ("payload-" + suffix)
     payload.mkdir()
     shutil.copyfile(executable, payload / "BaguTrainer.exe")
+    (payload / "中文使用说明.md").write_text("Synthetic Unicode payload fixture", encoding="utf-8")
     (payload / "_internal").mkdir()
     (payload / "_internal" / "version.txt").write_text(version, encoding="ascii")
     (payload / "_internal" / ("removed-in-v2.txt" if version == "0.1.0" else "added-in-v2.txt")).write_text("synthetic", encoding="ascii")
