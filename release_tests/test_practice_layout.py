@@ -17,6 +17,11 @@ def practice(request):
     root = create_root()
     root.tk.call("tk", "scaling", getattr(request, "param", 1) * 96 / 72)
     theme = apply_theme(root)
+    # Windows limits a Tk window's default maxsize to the desktop work area.
+    # The hosted runner's smaller desktop otherwise clamps our *simulated*
+    # wide viewport below its breakpoint at 125%+. Allow the requested test
+    # viewport explicitly; this is not native-DPI or physical-screen evidence.
+    root.maxsize(theme.px(1200), theme.px(1000))
     submissions, entered, errors = [], [], []
     root.report_callback_exception = lambda *args: errors.append(args)
     controller = PracticeController(window_var(root), window_var(root), window_var(root),
@@ -62,6 +67,7 @@ def test_enter_from_populated_wide_list_keeps_all_options_visible(practice):
     root.update()
     page.set_pending([quiz], 4)
     root.update()
+    assert page.workspace.winfo_width() >= theme.px(900)
     assert page.wide and controller.current is None
     page.pending_list.selection_set(quiz["quiz_id"])
     root.update()
