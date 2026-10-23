@@ -40,24 +40,43 @@ def main():
     reports_dir.mkdir(parents=True, exist_ok=True)
     reports, errors = [], []
     failed_process = False
+    targets = []
     for module in modules:
-        report = reports_dir / (module.stem + ".xml")
+        relative = module.relative_to(ROOT).as_posix()
+        if module.stem == "test_ui_shell":
+            # Native window state survives Tk destruction on Windows. Each
+            # shell scenario (including each scale) needs a fresh GUI process.
+            collected = subprocess.run([sys.executable, "-B", "-m", "pytest", relative,
+                "--collect-only", "-q", "-p", "no:cacheprovider"], cwd=ROOT, capture_output=True, text=True)
+            cases = [line.strip() for line in collected.stdout.splitlines() if line.startswith(relative + "::")]
+            if collected.returncode or not cases:
+                errors.append((module.stem, "Shell test collection failed: " + collected.stdout + collected.stderr))
+            targets.extend((module.stem + "-" + str(index), case) for index, case in enumerate(cases))
+        else:
+            targets.append((module.stem, relative))
+    for name, target in targets:
+        report = reports_dir / (name + ".xml")
         report.unlink(missing_ok=True)
-        print("Checking " + module.name, flush=True)
-        process = subprocess.run([sys.executable, "-B", "-m", "pytest", str(module), "-q", "-W", "error",
-            "-p", "no:cacheprovider", "--junitxml=" + str(report)], cwd=ROOT)
+        print("Checking " + target, flush=True)
+        try:
+            process = subprocess.run([sys.executable, "-u", "-B", "-m", "pytest", target, "-vv", "-W", "error",
+                "-o", "faulthandler_timeout=90", "-p", "no:cacheprovider", "--junitxml=" + str(report)], cwd=ROOT, timeout=240)
+        except subprocess.TimeoutExpired:
+            errors.append((name, "Test process timed out after 240 seconds: " + target))
+            failed_process = True
+            continue
         failed_process |= process.returncode != 0
         if report.exists():
             reports.append(report)
             try:
                 cases = ET.parse(report).findall(".//testcase")
                 if process.returncode and not any(c.find("failure") is not None or c.find("error") is not None for c in cases):
-                    errors.append((module.stem, "Process failed without a JUnit failure: " + str(process.returncode)))
+                    errors.append((name, "Process failed without a JUnit failure: " + str(process.returncode)))
             except ET.ParseError:
                 reports.pop()
-                errors.append((module.stem, "Invalid JUnit report"))
+                errors.append((name, "Invalid JUnit report"))
         else:
-            errors.append((module.stem, "Process produced no JUnit report: " + str(process.returncode)))
+            errors.append((name, "Process produced no JUnit report: " + str(process.returncode)))
     if not modules:
         errors.append(("release_tests", "No release modules found"))
     totals = merge_reports(reports, output, errors)

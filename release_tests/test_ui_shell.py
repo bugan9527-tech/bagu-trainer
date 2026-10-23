@@ -75,6 +75,9 @@ def test_history_detail_reflows_and_escape_keeps_shell(history):
     seed(store)
     app, _, errors = desktop(history)
     try:
+        # A 1024px Windows runner needs the collapsed rail to leave the 900px
+        # detail breakpoint available. The wide/narrow assertions stay real.
+        app.shell.toggle_collapse()
         app.root.geometry("%dx%d" % app.theme.px((1280, 820)))
         app._open_history()
         page = app.history_page
