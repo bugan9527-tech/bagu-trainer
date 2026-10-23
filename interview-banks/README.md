@@ -3,6 +3,9 @@
 本清单记录 2026-10-20 检查的本地版本；不附带上游正文，也不表示已获本项目再分发授权。
 构建、发布边界及测试前提见 [QUESTION_BANK.md](../QUESTION_BANK.md)。
 
+桌面初始化按 `sources.json` 的 `audited_commit` 下载固定版本 ZIP，由用户选择来源后才下载；
+不随程序发布完整题库。进度、取消、超时和重试见 [BANK_BUILD.md](../BANK_BUILD.md)。
+
 | 来源 | 本地版本 | 观察到的许可/声明 | 证据 |
 | --- | --- | --- | --- |
 | [CyC2018/CS-Notes](https://github.com/CyC2018/CS-Notes) | `b70121d377cb` | CC-BY-NC-SA-4.0 | [README.md](https://github.com/CyC2018/CS-Notes/blob/b70121d377cb6005eb65f12b098cd5decd905669/README.md) |

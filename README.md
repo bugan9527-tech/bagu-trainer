@@ -3,19 +3,47 @@
 把日常代码修改变成与当前任务相关的面试练习：监听选定项目的代码变化，匹配题库知识点，
 结合来源正文和工作上下文生成四选一情景题，作答后查看解析并记录掌握度与复习计划。
 
-主要入口是 Windows 桌面程序，也可以通过 MCP 在支持该协议的客户端中使用。
-桌面模式不依赖 Trae 或智能体主动调用工具。
+所有新题必须由 AI 生成；模型不可用、正文不足或输出不合格时提示失败与重试，不展示离线回退题。
+复习可复用此前 AI 生成的题目；旧离线题和来源不明快照不再交付，已有作答记录与统计保留。
+新题还须通过上下文/来源引用校验及单独的 AI 关联审核。正常生成通常需要两次模型请求，
+共用配置的超时预算；服务商可能分别计费，失败不会自动循环调用。流程和限制见 [AI 出题规则](AI_QUIZ_POLICY.md)。
 
-**首次使用需要先构建题库并配置模型。** GitHub 源码版不附带第三方完整题库或人工验证
+这是一个独立的 Windows 桌面程序：常驻侧栏与右侧工作区承载工作台、练习中心、答题记录、监听项目、题库管理、模型配置和应用设置七个页面。
+
+**Windows x64 便携版：解压完整目录，双击 `BaguTrainer.exe`。** 无需安装 Python、Git 或
+PowerShell；保留旁边的 `_internal`。使用、旧数据迁移和升级见 [便携版说明](PORTABLE_README.md)，
+构建与实际 EXE 验证见 [Windows 发布](WINDOWS_PORTABLE.md)。下方命令适用于源码运行。
+
+**首次使用需要先构建题库并配置模型。** 发布包不附带第三方完整题库或人工验证
 离线回退题；本地构建和来源说明见 [题库发布与构建](QUESTION_BANK.md)。
+
+## 下载便携版
+
+打开 [Release 页面](https://github.com/bugan9527-tech/bagu-trainer/releases)，在 Assets 下载
+`BaguTrainer-<版本>-windows-x64.zip` 和同名 `.sha256`，完整解压后双击 EXE。
+草稿仅仓库有权限的用户可见；正式发布前请从草稿 Assets 下载，公开固定链接此时尚不可用。
+首次向导依次完成来源选择及构建、模型连接测试和保存、监听项目选择。无需配置 MCP。
+配置、题库和学习记录位于 `%LOCALAPPDATA%\BaguTrainer\`，升级时保留该目录。
+
+维护者可在 Actions 运行 **Windows x64 portable draft**，填写与源码版本一致的 tag。
+工作流构建、测试、生成 SHA-256，并上传草稿 Release；发布说明提供下载入口和中文首次使用步骤。
+工作流进入默认分支后才有手动按钮；PR 自动检查只构建和测试，不创建 Release。
+流程、权限及失败重跑见 [发布说明](WINDOWS_PORTABLE.md)。
+v0.2.0 整合七页桌面工作区、切题与提交互斥、暂停期间继续练习，以及项目与发布内容清理。
+功能状态见 [改版进度](UI_REDESIGN_PROGRESS.md)，每次发布附带对应提交的测试与冻结验收结果。
+
+[验证记录](VALIDATION.md) 区分实际 EXE/冻结调用链测试和干净系统验证；当前开发机已装 Python/Git，
+禁用 PATH 不代表已完成全新系统验收。另附 [干净 Windows 验收包和流程](CLEAN_WINDOWS_ACCEPTANCE.md)。
 
 ## 功能与边界
 
-- 通过主窗口添加监听项目；支持 Git 差异和无 Git 项目的文件变化检测。
-- 文件稳定约 15 秒后匹配知识点，生成题目并弹窗；人工修改也可能触发。
-- 在窗口内选择 A–D、提交答案、查看解析，作答及复习计划保存到本地 SQLite。
-- 题目可暂时关闭，通过“继续答题”恢复；同一道题不会因重复检查而反复推送。
-- 桌面程序与 MCP 共用题目和学习状态，桌面运行时题目在桌面窗口展示。
+- 通过主窗口添加监听项目；比较监听开始后的文件快照，即使改动已自动提交到 Git 也能检测。
+- 文件稳定约 15 秒后匹配知识点，新题更新练习中心待答徽标，不抢走当前阅读或输入页面；人工修改也可能触发。
+- 在内嵌练习中心选择 A–D、提交答案、查看解析，作答及复习计划保存到本地 SQLite。
+- 切页保留当前题目、未提交选择和任务状态；Ctrl+R 进入练习中心（表单输入时不拦截）。待答列表只读，明确进入某题时才交付该题。
+- 主窗口“答题记录”按每次作答回顾历史，支持正误、项目和知识点/题干关键词筛选，每页 20 条；已移除项目及旧题库的题目仍从快照查看。时间按本机时区显示。
+- 历史详情可“重新练习本题”：复用合格的 AI 快照，不调用模型，进入练习中心；同一来源作答未完成的重练复用题号，提交后新增一次记录。旧快照缺失字段或不符合准入规则时解释原因并禁用重练。
+- 普通切页不停止监听、不重建基线；项目实际保存后串行应用，未变化项目基线保留。题库构建、模型测试和保存不因隐藏页面取消。
 
 程序不保证每次改动都有题。未匹配知识点、缺少可靠来源、模型接口不可用或上下文重复时，
 可能没有题目。代码改动稳定只是触发时机的近似判断，不能精确识别 AI 任务何时结束。
@@ -24,14 +52,17 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 操作系统 | Windows；桌面、自启动及桌面与 MCP 共用模式面向 Windows |
-| Python | 3.10 或更高，需包含 Tcl/Tk；当前本地验证环境为 Python 3.10.11 |
-| Git / 终端 | Git、Windows PowerShell，用于下载题库来源及执行脚本 |
+| 操作系统 | Windows 桌面及当前用户登录自启动 |
+| Python | 仅源码运行需要 3.10 或更高及 Tcl/Tk；便携版已内置运行库 |
+| 下载题库 | 桌面内置 HTTPS ZIP 下载和构建，无需 Git 或外部构建命令 |
 | 模型接口 | 支持 `/chat/completions`、Bearer Key 认证和文本 JSON 输出的兼容接口 |
 | 网络 | 首次安装依赖、下载来源及调用远程模型时需要连接相应服务 |
 
-主程序依赖见 [requirements.txt](requirements.txt)。Redis 只用于根目录 `interface.py`
-中的独立示例，不是训练器运行依赖；不需要为桌面程序安装 Redis。
+运行时依赖见 [requirements.txt](requirements.txt)，测试依赖见
+[requirements-dev.txt](requirements-dev.txt)，便携包构建依赖见
+[requirements-build.txt](requirements-build.txt)。
+
+历史 MCP 配置、演示和重复生成物的清理范围及保留理由见 [清理记录](CLEANUP_REPORT.md)。
 
 ## 快速开始
 
@@ -47,41 +78,34 @@ cd bagu-trainer
 
 ```powershell
 python --version
-git --version
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 后续命令直接使用虚拟环境解释器，无需激活环境。若使用已有环境，请统一替换解释器路径，
-保证安装依赖、启动桌面和 MCP 使用同一个 Python。
+保证安装依赖和启动桌面使用同一个 Python。
 
 ### 2. 选择来源并在本地构建题库
 
-先阅读 [来源清单](interview-banks/README.md) 中对应上游的条款，选择适合自己用途的来源。
-下面以 JavaGuide 展示构建流程；源码版不会默认下载所有来源。
+安装依赖后直接启动桌面程序：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\clone_banks.ps1 -Repositories Snailclimb/JavaGuide
-.\.venv\Scripts\python.exe scripts/dedupe_questions.py --repos JavaGuide
-.\.venv\Scripts\python.exe scripts/import_questions.py
-.\.venv\Scripts\python.exe scripts/tag_question_knowledge.py
-.\.venv\Scripts\python.exe scripts/build_concept_profiles.py
+.\.venv\Scripts\python.exe -B scripts/start_desktop.py
 ```
 
-完成后应生成 `data/questions.json`、`data/question_concepts.json` 及概念报告。
-下载参数使用 `owner/repository`，去重参数使用本地目录名。脚本默认不抓取 GitHub Issues。
-多来源、代理、旧题库备份及发布范围见 [QUESTION_BANK.md](QUESTION_BANK.md)。
+首次使用会打开中文分步向导。在第 1 步从 [来源清单](interview-banks/README.md) 选择来源并阅读声明，
+点击“下载并构建 / 重试”。
+程序通过 HTTPS 下载清单固定 commit 的 ZIP，安全解压后依次完成提取、导入、标签和概念构建。
+窗口显示阶段进度，可取消、调整总超时或失败后重试；不抓取 GitHub Issues。
 
-已有本地题库的用户可跳过此步骤。切换来源集合可能改变题目 ID，应在独立目录试构建，
-不要覆盖正在使用的题库和学习记录。
+源码版和便携版都将本机文件放入 `%LOCALAPPDATA%\BaguTrainer\`；下文运行数据相对该目录。
+成功后使用 `data/banks/<版本>/` 下的完整题库，通过原子指针切换；已有 `data/questions.json`
+和学习数据库保持原样。已有可用题库的用户可跳过下载。流程、接口及发布范围见
+[QUESTION_BANK.md](QUESTION_BANK.md) 和 [BANK_BUILD.md](BANK_BUILD.md)。
 
 ### 3. 配置出题模型
 
-```powershell
-.\.venv\Scripts\python.exe scripts/config_window.py
-```
-
-在窗口填写并保存：
+题库构建成功后，向导自动进入第 2 步，填写：
 
 | 字段 | 填写方式 |
 | --- | --- |
@@ -90,32 +114,45 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\clone_banks.ps
 | `model` | 服务商为你的账户提供的实际模型标识 |
 | `timeout_sec` | 单次请求超时秒数 |
 
-程序会在 `base_url` 后追加 `/chat/completions`。“测试连接”会发送一个实际请求，
-可能产生服务商计费；测试成功后仍需点“保存”。连接成功也不保证模型一定能输出有效题目。
+程序会在 `base_url` 后追加 `/chat/completions`。主动点击“测试连接”会在后台发送一个小请求，
+可能产生服务商计费；测试成功后点击“保存并继续”。测试失败时可按提示修改后重试，也可取消测试。
+Key 写入现有 Windows 凭据管理器并回读确认，配置文件不保存 Key 明文。连接成功不保证模型
+一定能生成符合要求的题目。修改地址、模型或 Key 后需要重新测试。
 
-无需先复制 `config.example.json`。配置窗口会使用当前安装路径的默认值并创建本机
+无需先复制 `config.example.json`。配置窗口会使用当前用户的默认值并在用户数据目录创建
 `config.json`。`config.example.json` 中的空 `trae_home` 表示使用当前用户的 `.trae-cn`，
-空 `project_roots` 表示默认监听当前训练器安装目录；相对 `db_path` 按安装目录解析，
-与终端所在目录无关。其他项目可通过主窗口添加。
+空 `project_roots` 在桌面启动时会进入初始化界面，要求显式选择监听项目；相对 `db_path`
+按用户数据目录解析，与安装目录和终端所在目录无关。其他项目也可通过主窗口添加。
 如已有环境变量 `BAGU_LLM_API_KEY`，它优先于凭据管理器中的 Key；排查旧 Key 或迁移时
 参见 [KEY_MIGRATION.md](KEY_MIGRATION.md)。
 
-### 4. 启动桌面程序
+### 4. 选择监听项目并进入主窗口
 
 ```powershell
 .\.venv\Scripts\python.exe -B scripts/start_desktop.py
 ```
 
-1. 点击“添加监听项目”，选择你要练习的代码项目文件夹。
+1. 在向导第 3 步添加要监听的代码项目文件夹，点击“保存项目并继续”，最后点击“进入主窗口”。
+   向导已打开时无需重复启动程序。退出后重开会恢复已完成步骤；旧用户配置完整时仍直接进入主窗口。
 2. 在该项目中进行与题库知识点相关的源码修改并保存，等待文件稳定约 15 秒。
 3. 命中且生成成功后，在题目窗口作答并查看解析。
 
 添加项目或启动程序时会先建立基线，旧改动不会立即当作新任务。模型请求和扫描还会增加等待时间。
+监听不再依赖未提交的 Git 差异，避免自动提交或过大的历史差异掩盖新修改。
+未命中知识点时，窗口会显示题库数量及“未调用 AI”；日志记录匹配、重复跳过和生成结果的数量，不记录代码正文。
+题库构建同时导入问句和普通知识点标题；早期仅导入问句而题量很少的本机题库，需要重新构建。
 主窗口可暂停监听，也可重新打开配置窗口；放下题目后用“继续答题”恢复。
 快捷键：主窗口 `Ctrl+R` 继续答题，题目窗口 `A`–`D` 选项、`Ctrl+Enter` 提交。
 退出时关闭主窗口并确认停止。再次运行启动命令会打开已有实例。
 
+启动检查不会调用模型、重建题库或修改学习数据库。配置损坏、目录失效或引擎初始化失败时，
+可留在向导中修复后重试；登录后台启动遇到缺项也会显示向导。连接测试仅在用户点击时执行，
+重开不会自动请求模型。说明见 [首次使用向导](FIRST_USE.md) 和 [启动协调层](STARTUP.md)。
+
 ## 可选：登录后自动启动
+
+主窗口“登录自启动”菜单可直接启用或取消。便携版快捷方式指向当前 EXE；移动程序后重新启用即可。
+也可执行 `BaguTrainer.exe --install-startup` / `--uninstall-startup`。
 
 先完成题库、模型配置并确认能正常打开桌面窗口。安装脚本优先使用项目中的
 `.venv/Scripts/python.exe`，不存在时才使用 PATH 中的 `python`：
@@ -138,38 +175,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-startu
 ### 换目录或换电脑
 
 在新位置重新创建 `.venv` 并安装依赖，不要直接复制旧虚拟环境。
-不带本机配置时，程序默认使用新安装目录及当前用户目录；若保留旧 `config.json`，
-需要按新机器的位置核对已经添加的项目绝对路径。MCP 客户端中的入口路径和登录自启动
-快捷方式也需要更新。题库和学习数据库若自行迁移，应在程序退出后复制。
-
-## 可选：MCP 集成
-
-先完成上述题库和模型配置，再在客户端中添加一个 **stdio** MCP 服务。
-下面是采用 `mcpServers` 配置格式的示例：将所有 `D:/tools/bagu-trainer` 替换成实际安装目录。
-支持表单配置的客户端可分别填写 `command` 和 `args`。
-
-```json
-{
-  "mcpServers": {
-    "bagu-trainer": {
-      "command": "D:/tools/bagu-trainer/.venv/Scripts/python.exe",
-      "args": ["-B", "D:/tools/bagu-trainer/bagu_trainer/server.py"]
-    }
-  }
-}
-```
-
-由客户端启动服务，不要把手工在终端运行 MCP 的协议输出当作聊天界面。
-连接后应能看到 `list_knowledge_points`、`check_pending_quiz`、`submit_answer`
-和 `get_learning_stats` 等工具。
-
-默认项目白名单是训练器目录。用于其他项目时，先通过桌面主窗口添加项目；
-调用时传该项目的绝对路径 `project_root`。如果希望题目呈现在聊天里，退出桌面程序后使用 MCP；
-桌面运行期间，MCP 将调用转交桌面引擎，避免重复自动出题。
-
-Trae 的规则加载、主控智能体和作答约束见 [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md)。
-自动检查的唯一规则源是 [`.trae/rules/quiz-check.md`](.trae/rules/quiz-check.md)，
-请按该指南配置；仅连接 MCP 不等于客户端已加载自动触发规则。
+源码和便携版在同一 Windows 用户下共用 `%LOCALAPPDATA%\BaguTrainer\`，换程序目录后学习记录仍在。
+旧版曾将配置和数据放在项目旁，使用首次向导“迁移旧数据…”或 `--migrate-from "旧项目目录"`
+显式复制，旧目录保留且不会覆盖已有用户数据。换电脑需要在退出程序后另行备份用户数据，
+核对监听项目绝对路径、重新保存 Windows 凭据并更新自启动；凭据不随目录复制。
 
 ## 数据与隐私
 
@@ -177,7 +186,8 @@ Trae 的规则加载、主控智能体和作答约束见 [AGENT_INTEGRATION.md](
   选择服务商时需要考虑自己项目的数据使用要求。
 - 文件采集受项目白名单及敏感文件排除规则限制；会话摄取默认关闭。
 - 新保存的 API Key 进入系统凭据管理器，本机配置不保存新 Key 明文。
-- 学习记录默认位于 `data/trainer.db`，桌面进程运行文件位于 `data/.desktop-runtime/`。
+- 用户数据根目录为 `%LOCALAPPDATA%\BaguTrainer\`；学习记录默认位于其 `data/trainer.db`，
+  进程运行文件在 `runtime/`，滚动日志在 `logs/`。程序目录可只读。
 - 本机配置、学习数据库、运行认证信息及完整题库均已通过 `.gitignore` 排除。
   手工制作发布附件时仍需遵守 [题库发布范围](QUESTION_BANK.md)。
 
@@ -186,39 +196,38 @@ Trae 的规则加载、主控智能体和作答约束见 [AGENT_INTEGRATION.md](
 | 现象 | 排查方式 |
 | --- | --- |
 | 找不到 `python` 或 `git` | 确认对应程序已安装且位于 PATH，重新打开终端后检查版本 |
-| 缺少 `mcp`、`keyring` | 用启动程序的同一解释器执行 `-m pip install -r requirements.txt` |
+| 缺少 `keyring` | 用启动程序的同一解释器执行 `-m pip install -r requirements.txt` |
 | `tkinter`、Tcl/Tk 初始化失败 | 为当前 Python 安装 Tcl/Tk 支持；用 `.\.venv\Scripts\python.exe -B scripts/start_desktop.py --check-runtime` 检查窗口环境 |
-| 提示题库不存在 | 先完成题库构建；`data/mock/` 不能替代 `data/questions.json` |
-| 来源下载失败 | 检查 Git 和网络；需要代理时给下载脚本显式传 `-Proxy`，已有目录不会自动更新 |
+| 提示题库不存在 | 在初始化界面“下载并构建题库”；测试合成数据不能替代完整题库 |
+| 来源下载失败 | 检查 HTTPS 网络及系统代理；瞬时错误会自动重试，也可在窗口重新尝试 |
 | HTTP 401 / 404 / 429 | 分别检查 Key/授权、基础地址与模型路径、额度及请求限制；环境变量中的旧 Key 可能覆盖新保存的 Key |
 | 模型连接超时或题目生成失败 | 检查接口网络、超时设置、模型标识，以及是否支持要求的 JSON 输出 |
-| 修改代码后没有弹题 | 确认已添加正确项目、监听未暂停、修改发生在基线建立之后；检查知识点匹配、来源正文及模型状态 |
-| MCP 报项目被拒绝 | 将实际代码项目加入白名单，调用时传该项目路径；重新连接客户端加载更新后的代码 |
+| 修改代码后没有待答题 | 查看练习中心徽标；确认监听未暂停、修改发生在基线建立之后，检查项目范围、来源正文及模型状态 |
 | 导入提示题量减少超过 5% | 数据保护已生效；在独立目录构建新来源，保留原题库和学习数据 |
 
 ## 开发与验证
 
-本次干净目录安装、实际来源下载、桌面和 MCP 集成结果见
+本次干净目录安装、实际来源下载、桌面安装与运行结果见
 [全新安装流程验证记录](VALIDATION.md)，其中列明了实际环境及未验证范围。
 
 安装开发依赖，执行不依赖本机完整题库的发布流程测试：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest release_tests -q
+.\.venv\Scripts\python.exe scripts/run_release_tests.py --output validation/release-tests.xml
 ```
 
 这些测试覆盖来源选择、默认不联网抓取 Issues、缺失题库提示、无旧数据的首次构建，
 以及中文和空格目录中的配置定位与自启动解释器选择。自启动测试只写临时快捷方式，不安装实际登录自启动。
-`tests/` 下的完整历史回归还依赖本地题库快照和回退题，不能用新构建的小题库替代这些测试数据；
-前提详见 [QUESTION_BANK.md](QUESTION_BANK.md)。
+`tests/` 中匹配器的历史评估通过 `BAGU_TEST_BANK_ROOT` 显式指定项目外只读基准；普通单元测试使用临时合成题库，详见 [验证范围](VALIDATION.md)。内容链路的归档读取/AI-only 测试现使用自编合成夹具，不再依赖未分发的离线归档。
+发布测试逐模块运行于独立进程，完整保留失败和跳过结果，不自动重试；单元检查使用 `python -m pytest tests -q -W error`。便携包需先构建后再运行，以免 EXE 用例因缺包跳过。指定验收包可设置 `BAGU_PORTABLE_BUNDLE` 和 `BAGU_PORTABLE_ARCHIVE`。验证前将 `BAGU_USER_DATA_DIR` 指向独立目录；测试只写临时配置和数据库。
 
 | 路径 | 用途 |
 | --- | --- |
-| `bagu_trainer/` | 桌面、MCP、匹配、出题和学习记录逻辑 |
+| `bagu_trainer/` | 桌面、匹配、出题和学习记录逻辑 |
 | `scripts/` | 桌面入口、自启动和本地题库构建脚本 |
-| `data/` | 模拟输入，以及本地生成的题库与学习数据 |
-| `interview-banks/` | 可发布的来源清单，以及被忽略的上游下载副本 |
+| `data/` | 本机旧版数据可能保留于此；新运行数据默认在用户目录，不随源码发布 |
+| `interview-banks/` | 可发布的来源清单；新下载的上游副本在用户目录 |
 | `release_tests/` | 源码发布与首次构建测试 |
 | `tests/` | 完整功能与历史题库回归 |
 
@@ -228,3 +237,8 @@ Trae 的规则加载、主控智能体和作答约束见 [AGENT_INTEGRATION.md](
 包括在闭源产品中使用；分发代码或其重要部分时须保留版权声明和许可证文本。
 上游题库的许可证和版权声明独立适用，详见 [来源清单](interview-banks/README.md)。
 源码发布方案不包含第三方完整题库；本地下载、使用或后续再分发时需核对相应条款。
+
+## 桌面视觉规范
+
+统一主题、中文字体、间距和按钮规范见 [UI_DESIGN.md](UI_DESIGN.md)，新增运行组件声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。源码运行前执行 `python -m pip install -r requirements.txt`；便携包已包含主题依赖。
+窗口缩放、长文本、键盘和实际显示覆盖范围见 [UI_DISPLAY.md](UI_DISPLAY.md)。可用 `python scripts/check_ui_display.py` 生成隔离窗口截图供人工检查；Tk 模拟缩放不代表原生 Windows 对应比例的验收。

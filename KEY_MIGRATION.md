@@ -19,6 +19,11 @@ python -m bagu_trainer.secrets check
 
 ## 从旧 config.json 明文 Key 迁移
 
+便携版和源码当前默认配置为 `%LOCALAPPDATA%\BaguTrainer\config.json`。
+下方模块命令只处理该用户配置；若旧配置仍在项目旁，先通过首次向导“迁移旧数据…”
+或 `BaguTrainer.exe --migrate-from "旧项目目录"` 复制迁移，过程会先验证凭据存储再启用新配置，
+旧目录保留。便携版无须另装 Python。
+
 ```powershell
 python -m bagu_trainer.secrets migrate
 ```
@@ -38,9 +43,9 @@ python -m bagu_trainer.secrets migrate
 ## Key 轮换（换新 Key）
 
 1. 在服务商控制台创建新 Key，并吊销旧 Key；
-2. 用户对 AI 说「配置 LLM」并提供新 Key（`configure_llm` 工具验证后写入凭据管理器，
-   config.json 不保存明文）；
-3. 或直接设置/更新环境变量 `BAGU_LLM_API_KEY` 后重启 MCP 服务；
+2. 在主窗口点击「配置出题模型」，输入新 Key 并保存到凭据管理器，
+   config.json 不保存明文；
+3. 或直接设置/更新环境变量 `BAGU_LLM_API_KEY` 后重启桌面程序；
 4. 若曾存在旧明文：确认 `config.json` 的 `llm.api_key` 为 `""`。
 
 ## 隐私边界（相关配置）

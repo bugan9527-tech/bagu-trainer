@@ -4,7 +4,7 @@
 """
 import json
 
-import bagu_trainer.server as server
+import bagu_trainer.engine as engine
 from bagu_trainer.scheduler import (FIRST_INTERVAL_DAYS, MIN_INTERVAL_DAYS,
                                     next_state)
 
@@ -18,7 +18,7 @@ def _set_diff(diff, text):
 
 
 def _go(monkeypatch, t):
-    monkeypatch.setattr(server, "_now", lambda: t)
+    monkeypatch.setattr(engine, "_now", lambda: t)
 
 
 # ============ 调度器纯函数：确定性公式 ============
@@ -50,22 +50,22 @@ def test_scheduler_wrong_short_due_then_reset():
 def test_wrong_answer_due_sooner_then_review_delivered(env, monkeypatch):
     _go(monkeypatch, T0)
     _set_diff(env["diff"], "redis 缓存穿透")
-    r = server.check_pending_quiz()
+    r = engine.next_quiz()
     assert r["has_pending"] is True and r["quiz"].get("review") is not True
     qid = r["quiz"]["quiz_id"]
-    wrong = server.submit_answer(qid, "B")  # FakeGenerator 正确答案是 A
+    wrong = engine.submit_answer(qid, "B")  # FakeGenerator 正确答案是 A
     assert wrong["ok"] is True and wrong["correct"] is False
     assert wrong["schedule"]["next_review_at"] == T0 + MIN_INTERVAL_DAYS * DAY
-    st = server._store.concept_state("test-kp-1")
+    st = engine._store.concept_state("test-kp-1")
     assert st["next_review_at"] == T0 + MIN_INTERVAL_DAYS * DAY
     # 6 小时到期后：自动交付同知识点复习题（确定性快照重建，不调 LLM）
     _go(monkeypatch, T0 + MIN_INTERVAL_DAYS * DAY + 1)
-    r2 = server.check_pending_quiz()
+    r2 = engine.next_quiz()
     assert r2["has_pending"] is True
     q2 = r2["quiz"]
     assert q2["review"] is True and q2["kp_id"] == "test-kp-1"
     assert env["gen"].calls == 1  # 复习不重复生成/billing
-    right = server.submit_answer(q2["quiz_id"], "A")
+    right = engine.submit_answer(q2["quiz_id"], "A")
     assert right["ok"] is True and right["correct"] is True
     assert right["schedule"]["interval_days"] == FIRST_INTERVAL_DAYS
 
@@ -73,14 +73,14 @@ def test_wrong_answer_due_sooner_then_review_delivered(env, monkeypatch):
 def test_repeat_correct_interval_grows(env, monkeypatch):
     _go(monkeypatch, T0)
     _set_diff(env["diff"], "redis 缓存穿透")
-    q1 = server.check_pending_quiz()["quiz"]
-    s1 = server.submit_answer(q1["quiz_id"], "A")
+    q1 = engine.next_quiz()["quiz"]
+    s1 = engine.submit_answer(q1["quiz_id"], "A")
     assert s1["schedule"]["interval_days"] == FIRST_INTERVAL_DAYS
     review_time = s1["schedule"]["next_review_at"] + 1
     _go(monkeypatch, review_time)
-    q2 = server.check_pending_quiz()["quiz"]
+    q2 = engine.next_quiz()["quiz"]
     assert q2["review"] is True
-    s2 = server.submit_answer(q2["quiz_id"], "A")
+    s2 = engine.submit_answer(q2["quiz_id"], "A")
     assert s2["correct"] is True
     assert s2["schedule"]["interval_days"] == round(FIRST_INTERVAL_DAYS * 2.8, 4)
     assert s2["schedule"]["next_review_at"] == review_time + 2.8 * DAY
@@ -90,34 +90,34 @@ def test_repeat_correct_interval_grows(env, monkeypatch):
 def test_duplicate_submit_rejected_counted_once(env, monkeypatch):
     _go(monkeypatch, T0)
     _set_diff(env["diff"], "redis 缓存穿透")
-    qid = server.check_pending_quiz()["quiz"]["quiz_id"]
-    assert server.submit_answer(qid, "A")["ok"] is True
-    r2 = server.submit_answer(qid, "B")
+    qid = engine.next_quiz()["quiz"]["quiz_id"]
+    assert engine.submit_answer(qid, "A")["ok"] is True
+    r2 = engine.submit_answer(qid, "B")
     assert r2["ok"] is False and "已作答" in r2["note"]
-    assert server._store.concept_state("test-kp-1")["attempts"] == 1
-    assert server._store.attempt_count(qid) == 1
+    assert engine._store.concept_state("test-kp-1")["attempts"] == 1
+    assert engine._store.attempt_count(qid) == 1
 
 
 # ============ 重启一致性：未完成题水合、历史保留 ============
 def test_restart_unfinished_quiz_still_submittable(env, monkeypatch):
     _go(monkeypatch, T0)
     _set_diff(env["diff"], "redis 缓存穿透")
-    qid = server.check_pending_quiz()["quiz"]["quiz_id"]  # 未作答
+    qid = engine.next_quiz()["quiz"]["quiz_id"]  # 未作答
     # 模拟重启：关连接、清内存态（store 路径不变，指向同一临时库）
-    server._store.close()
-    server._store = None
-    server._state["quizzes"].clear()
-    server._state["pending"].clear()
+    engine._store.close()
+    engine._store = None
+    engine._state["quizzes"].clear()
+    engine._state["pending"].clear()
     _go(monkeypatch, T0 + 600)  # 未过期
-    ans = server.submit_answer(qid, "A")
+    ans = engine.submit_answer(qid, "A")
     assert ans["ok"] is True and ans["correct"] is True
-    assert server._store.attempt_count(qid) == 1
+    assert engine._store.attempt_count(qid) == 1
     # 再次重启：作答历史与统计完整保留
-    server._store.close()
-    server._store = None
-    server._state["quizzes"].clear()
-    server._state["pending"].clear()
-    stats = server.get_learning_stats()
+    engine._store.close()
+    engine._store = None
+    engine._state["quizzes"].clear()
+    engine._state["pending"].clear()
+    stats = engine.get_learning_stats()
     assert stats["total_attempts"] == 1
     assert stats["accuracy"] == 1.0
     assert stats["answered_quizzes"] == 1
@@ -127,17 +127,17 @@ def test_restart_unfinished_quiz_still_submittable(env, monkeypatch):
 def test_due_review_beats_new_context_generation(env, monkeypatch):
     _go(monkeypatch, T0)
     _set_diff(env["diff"], "redis 缓存穿透")
-    qid = server.check_pending_quiz()["quiz"]["quiz_id"]
-    server.submit_answer(qid, "A")  # 到期时间 T0+1 天
+    qid = engine.next_quiz()["quiz"]["quiz_id"]
+    engine.submit_answer(qid, "A")  # 到期时间 T0+1 天
     # 到期前出现新上下文：同 kp 未到复习期，不重复出题
     _go(monkeypatch, T0 + 60)
     _set_diff(env["diff"], "redis 分布式锁新话题")
-    r = server.check_pending_quiz()
+    r = engine.next_quiz()
     assert r["has_pending"] is False
     assert env["gen"].calls == 1
     # 到期后（且上下文同 kp 相关）：优先交付到期复习题
     _go(monkeypatch, T0 + DAY + 1)
-    r2 = server.check_pending_quiz()
+    r2 = engine.next_quiz()
     assert r2["has_pending"] is True
     assert r2["quiz"]["review"] is True
     assert env["gen"].calls == 1  # 复习仍是快照重建，不重新生成
@@ -147,10 +147,10 @@ def test_due_review_beats_new_context_generation(env, monkeypatch):
 def test_learning_stats_aggregates_only(env, monkeypatch):
     _go(monkeypatch, T0)
     _set_diff(env["diff"], "redis 缓存穿透")
-    qid = server.check_pending_quiz()["quiz"]["quiz_id"]
-    server.submit_answer(qid, "B")  # 答错 -> mastery 0（薄弱）
+    qid = engine.next_quiz()["quiz"]["quiz_id"]
+    engine.submit_answer(qid, "B")  # 答错 -> mastery 0（薄弱）
     # 第二个薄弱知识点走 store 直插（固定时间，保证确定性）
-    s = server._store
+    s = engine._store
     s.create_quiz("q2", "test-kp-2", {
         "kp_id": "test-kp-2", "kp_name": "分布式锁", "difficulty": "medium",
         "question": "Q2?", "options": {"A": "a", "B": "b", "C": "c", "D": "d"},
@@ -160,7 +160,7 @@ def test_learning_stats_aggregates_only(env, monkeypatch):
     s.record_attempt("q2", "test-kp-2", "A", "A", False, T0,
                      next_state(False, None, T0))
     _go(monkeypatch, T0 + MIN_INTERVAL_DAYS * DAY + 1)  # 两个错题都到期
-    stats = server.get_learning_stats()
+    stats = engine.get_learning_stats()
     assert stats["ok"] is True
     assert stats["total_attempts"] == 2
     assert stats["correct_count"] == 0

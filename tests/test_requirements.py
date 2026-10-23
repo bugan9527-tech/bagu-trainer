@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENTS_FILES = (
     "requirements.txt",
     "requirements-dev.txt",
-    "requirements-demo.txt",
+    "requirements-build.txt",
 )
 
 
@@ -29,6 +29,12 @@ def test_requirements_can_be_parsed(filename: str) -> None:
 
     assert lines, f"{filename} must declare at least one dependency"
     for line in lines:
+        if line.startswith("-r "):
+            included = (PROJECT_ROOT / line[3:].strip()).resolve()
+            assert included.is_relative_to(PROJECT_ROOT), "Requirement include escapes the project"
+            assert included.is_file(), f"Missing included requirements: {included.name}"
+            assert _requirement_lines(included)
+            continue
         try:
             parsed = Requirement(line)
         except InvalidRequirement as exc:

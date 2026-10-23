@@ -71,8 +71,8 @@ def test_all_questions_have_labels_and_filter_works():
 
 
 def test_server_tag_filter_uses_knowledge_tags(env):
-    import bagu_trainer.server as server
+    import bagu_trainer.engine as engine
 
-    result = server.list_knowledge_points(tag="Redis")
+    result = engine.list_knowledge_points(tag="Redis")
     assert result["total"] > 0
     assert all("Redis" in k["knowledge_tags"] for k in result["knowledge_points"])

@@ -1,2 +1,4 @@
-mcp>=1.2,<2
 keyring>=23,<26
+# Shared Tkinter theme; stay on the validated 1.x Style API.
+ttkbootstrap==1.20.4
+pillow>=10,<13

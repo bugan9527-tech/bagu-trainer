@@ -2,7 +2,7 @@
 """隐私最小化改造验收测试。
 
 覆盖验收标准：
-  1. fake secret 不出现在任何待发送 payload / 日志 / MCP 返回值中；
+  1. fake secret 不出现在任何待发送 payload / 日志 / 引擎返回值中；
   2. config.json/.env/私钥类文件永不进入文件监听上下文；
   3. 无项目归属的会话默认不参与出题；
   4. 白名单外 project_root（含路径穿越）必须被拒绝；
@@ -20,7 +20,7 @@ import bagu_trainer.config as config_mod
 import bagu_trainer.diff_reader as diff_reader
 import bagu_trainer.quiz_generator as qg
 import bagu_trainer.secrets as secrets_mod
-import bagu_trainer.server as server
+import bagu_trainer.engine as engine
 import bagu_trainer.session_reader as session_reader
 
 FAKE_KEY = "sk-fake-secret-key-9f8e7d6c5b4a"
@@ -191,11 +191,23 @@ def test_update_llm_fallback_never_writes_plaintext(tmp_path, monkeypatch):
 # ============ 4. LLM 载荷脱敏 + 截断 + 异常脱敏 ============
 def _capture_urlopen(capture):
     def urlopen(req, timeout=None):
-        capture["payload"] = json.loads(req.data.decode("utf-8"))
+        payload = json.loads(req.data.decode("utf-8"))
+        is_review = "review_context_grounding" in payload["messages"][-1]["content"]
+        capture["review_payload" if is_review else "payload"] = payload
         capture["auth"] = req.headers.get("Authorization") or ""
+        if is_review:
+            content = json.dumps({"context_relevant": True, "source_supported": True,
+                "answer_unique": True, "no_answer_leak": True, "correct_answer": "A",
+                "reason": "上下文缓存穿透的处理需求有来源支持且答案唯一。"})
+        else:
+            candidate = json.loads(VALID_LLM_CONTENT)
+            candidate["grounding"] = {"context_quote": "缓存穿透场景。",
+                "source_quote": UNVERIFIED["source_excerpt"][:35],
+                "rationale": "上下文明确涉及缓存穿透，需要依据来源选取缓存空值的治理措施。"}
+            content = json.dumps(candidate, ensure_ascii=False)
         # 响应体必须是 OpenAI 兼容包装格式，content 才是试题 JSON
         return _FakeResp(json.dumps(
-            {"choices": [{"message": {"content": VALID_LLM_CONTENT}}]},
+            {"choices": [{"message": {"content": content}}]},
             ensure_ascii=False))
     return urlopen
 
@@ -203,7 +215,9 @@ def _capture_urlopen(capture):
 class _FakeResp:
     def __init__(self, text): self._t = text
 
-    def read(self): return self._t.encode("utf-8")
+    def read(self, size=-1):
+        body = self._t.encode("utf-8")
+        return body if size < 0 else body[:size]
 
     def __enter__(self): return self
 
@@ -219,11 +233,11 @@ def test_llm_payload_never_contains_secrets(monkeypatch):
     gen = qg.QuizGenerator(urlopen=_capture_urlopen(capture))
     context = ("上下文：当前 Key 是 sk-test-key-1111（不该外泄）；"
                '另有 api_key="%s"、Bearer %s、密码 password: %s。'
-               "缓存穿透场景。" % (FAKE_KEY, FAKE_TOKEN, FAKE_PASSWORD))
+               "\n缓存穿透场景。" % (FAKE_KEY, FAKE_TOKEN, FAKE_PASSWORD))
     context += "填充文本" * 800  # 超长：验证截断
     quiz = gen.generate(UNVERIFIED, context)
     assert quiz.get("available") is not False
-    body = json.dumps(capture["payload"], ensure_ascii=False)
+    body = json.dumps([capture["payload"], capture["review_payload"]], ensure_ascii=False)
     for bad in ("sk-test-key-1111", FAKE_KEY, FAKE_TOKEN, FAKE_PASSWORD):
         assert bad not in body, bad
     assert "[REDACTED]" in body
@@ -268,7 +282,7 @@ def test_server_returns_and_internal_state_clean(env, tmp_path, monkeypatch):
               "改缓存代码：连接串里写了 api_key=%s、Bearer %s 和"
               "数据库密码 password: %s，redis 缓存穿透空值缓存。" %
               (FAKE_KEY, FAKE_TOKEN, FAKE_PASSWORD))
-    r = server.report_ai_activity(project_root=str(tmp_path),
+    r = engine.process_activity(project_root=str(tmp_path),
                                   description="刚接了 redis 配置")
     assert r["ok"] is True and len(r["quizzes"]) == 1
     dumped = json.dumps(r, ensure_ascii=False)
@@ -281,10 +295,10 @@ def test_server_returns_and_internal_state_clean(env, tmp_path, monkeypatch):
         assert bad not in env["matcher"].last_text, bad
         assert bad not in env["gen"].last_ctx, bad
     # pending 公开记录也不含秘密
-    assert FAKE_KEY not in json.dumps(server._state["pending"], ensure_ascii=False)
+    assert FAKE_KEY not in json.dumps(engine._state["pending"], ensure_ascii=False)
 
 
-def test_generate_quiz_tool_redacts_user_context(env, monkeypatch):
+def test_create_quiz_tool_redacts_user_context(env, monkeypatch):
     class FakeKB:
         def get(self, kid):
             if kid != "kp1":
@@ -294,10 +308,10 @@ def test_generate_quiz_tool_redacts_user_context(env, monkeypatch):
                     "analysis": "来源: r/a.md", "source_paths": ["r/a.md"],
                     "source_excerpt": "缓存穿透指查询不存在的数据……",
                     "excerpt_source": "r/a.md"}
-    monkeypatch.setattr(server, "kb", FakeKB())
+    monkeypatch.setattr(engine, "kb", FakeKB())
     monkeypatch.setattr(secrets_mod, "resolve_api_key", lambda llm=None: FAKE_KEY)
     ctx = '用户给的片段：api_key="%s" Bearer %s' % (FAKE_KEY, FAKE_TOKEN)
-    r = server.generate_quiz("kp1", context=ctx)
+    r = engine.create_quiz("kp1", context=ctx)
     assert r["ok"] is True and r.get("quiz_id")
     assert FAKE_KEY not in env["gen"].last_ctx
     assert FAKE_TOKEN not in env["gen"].last_ctx
@@ -312,12 +326,12 @@ def test_whitelist_outside_rejected(env, tmp_path):
     outside.mkdir()
     env["cfg"]["project_roots"] = [str(allowed)]
 
-    r = server.check_pending_quiz(project_root=str(outside))
+    r = engine.next_quiz(project_root=str(outside))
     assert r["ok"] is False and r["has_pending"] is False
     assert "白名单" in r["error"]
     assert env["gen"].calls == 0
 
-    rep = server.report_ai_activity(project_root=str(outside))
+    rep = engine.process_activity(project_root=str(outside))
     assert rep["ok"] is False and "白名单" in rep["error"]
     assert env["gen"].calls == 0
 
@@ -329,7 +343,7 @@ def test_whitelist_path_traversal_rejected(env, tmp_path):
     outside.mkdir()
     env["cfg"]["project_roots"] = [str(allowed)]
     traversal = str(allowed / ".." / "outside")  # 路径穿越：真实指向白名单外
-    r = server.check_pending_quiz(project_root=traversal)
+    r = engine.next_quiz(project_root=traversal)
     assert r["ok"] is False and "白名单" in r["error"]
     assert env["gen"].calls == 0
 
@@ -387,18 +401,18 @@ def test_server_session_ingest_off_and_gated(env, tmp_path, monkeypatch):
     trae = tmp_path / "trae"
     _mk_projects(trae)
     calls = {}
-    monkeypatch.setattr(server, "find_trae_home", lambda cfg_home=None: trae)
+    monkeypatch.setattr(engine, "find_trae_home", lambda cfg_home=None: trae)
 
     def _fake_read(trae_home, since_minutes=180, limit=8, project_root=None):
         calls["project_root"] = project_root
         return []
 
-    monkeypatch.setattr(server, "read_recent_entries", _fake_read)
+    monkeypatch.setattr(engine, "read_recent_entries", _fake_read)
     # 默认关闭：完全不读取会话
-    info = server._collect_context("", str(tmp_path))
+    info = engine._collect_context("", str(tmp_path))
     assert "project_root" not in calls
     assert "会话记录" not in " ".join(info["sources"])
     # 显式开启：只按当前项目归属读取
     env["cfg"]["session_ingest"] = True
-    info = server._collect_context("", str(tmp_path))
+    info = engine._collect_context("", str(tmp_path))
     assert calls.get("project_root") is not None

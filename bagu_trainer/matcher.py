@@ -443,7 +443,7 @@ class Matcher:
         self.concept_overlap_discount = concept_overlap_discount
         self.questions = list(self.kb.all())
         self._concepts = (
-            load_concept_profiles() if use_concepts else {}
+            load_concept_profiles(getattr(self.kb, "concepts_path", None)) if use_concepts else {}
         )
         self._build_index()
 

@@ -1,2 +1,0 @@
-{"intent":"给商品详情接口加 HTTP 缓存与 Redis 缓存","actions":["在 product.py 接口里加了 ETag 生成逻辑","检查 If-None-Match 命中时返回 304","设置了响应头 Cache-Control: public, max-age=300","把数据库查询结果缓存到 Redis，TTL 30 秒"],"outcome":"接口优先走缓存：先协商缓存再查 Redis，未命中查数据库回填","learned":["304 不返回响应体","缓存未命中再回源数据库"],"message_summary_time":"2026-10-18 14:10:00","message_id":"mock001"}
-{"intent":"修复高并发购物车扣库存超卖","actions":["在扣库存 update 语句加 version 字段","讨论了 SELECT ... FOR UPDATE 悲观锁方案的优缺点","实现乐观锁冲突重试"],"outcome":"扣库存改为乐观锁，冲突自动重试","learned":["乐观锁适合冲突率低的场景"],"message_summary_time":"2026-10-18 14:05:00","message_id":"mock002"}

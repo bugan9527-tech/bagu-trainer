@@ -69,8 +69,8 @@ def _q(qid, question, tags, **extra):
 
 
 @pytest.fixture(scope="module")
-def matcher():
-    kb = KnowledgeBase()
+def matcher(benchmark_root):
+    kb = KnowledgeBase(benchmark_root / "data" / "questions.json")
     t = time.perf_counter()
     m = Matcher(kb)
     m._build_secs = time.perf_counter() - t
@@ -290,7 +290,7 @@ def test_rank_new_explainable_fields_do_not_break_server_usage(matcher):
         assert isinstance(x["matched_tags"], list)
         assert isinstance(x["matched_concept_terms"], list)
         assert 0.0 <= x["concept_boost"] <= 1.0
-    # server.report_ai_activity 的组装方式不受新增字段影响
+    # engine.process_activity 的组装方式不受新增字段影响
     matches = [{"question": x["question"], "score": x["score"],
                 "hits": x["hits"], "confidence": x["confidence"],
                 "margin": x["margin"]} for x in r]
@@ -305,9 +305,9 @@ def test_list_knowledge_points_filter_still_works(matcher):
 
 
 # ---- 概念档案数据完整性 ----
-def test_concept_profiles_complete_and_valid():
-    kb = KnowledgeBase()
-    profiles = load_concept_profiles()
+def test_concept_profiles_complete_and_valid(benchmark_root):
+    kb = KnowledgeBase(benchmark_root / "data" / "questions.json")
+    profiles = load_concept_profiles(benchmark_root / "data" / "question_concepts.json")
     stats, errors = validate_profiles([q["id"] for q in kb.all()], profiles)
     assert errors == []
     assert stats["covered"] == stats["total_questions"]
@@ -326,9 +326,9 @@ def test_concept_profiles_complete_and_valid():
     assert bad_terms == []
 
 
-def test_concept_profile_report_has_no_short_profiles():
+def test_concept_profile_report_has_no_short_profiles(benchmark_root):
     report = json.loads(
-        (PROJECT / "data" / "concept_profile_report.json").read_text(
+        (benchmark_root / "data" / "concept_profile_report.json").read_text(
             encoding="utf-8"
         )
     )
@@ -401,7 +401,7 @@ _PERF_QUERIES = [
 def test_perf_build_under_3s(matcher):
     # 冷启动含概念档案 JSON 解析与 OS 页缓存抖动，实测 2.97~3.07s；
     # 留 0.5s 余量避免 CI 机器抖动影响验收（交付报告记录实测值）。
-    assert matcher._build_secs < 3.5, \
+    assert matcher._build_secs < 3.5,\
         f"索引构建 {matcher._build_secs:.2f}s 超过预算"
 
 

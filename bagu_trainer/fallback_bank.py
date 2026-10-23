@@ -10,10 +10,10 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from .config import PROJECT_ROOT
+from .config import data_dir
 from .source_extractor import normalize_title
 
-FALLBACK_PATH = PROJECT_ROOT / "data" / "fallback_quizzes.json"
+FALLBACK_PATH = data_dir() / "fallback_quizzes.json"
 MIN_FALLBACK_QUIZZES = 20
 
 _GENERIC_TERMS = {

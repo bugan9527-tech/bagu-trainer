@@ -17,8 +17,8 @@ from eval_heldout import (
 
 
 @pytest.fixture(scope="module")
-def matcher():
-    return Matcher(KnowledgeBase())
+def matcher(benchmark_root):
+    return Matcher(KnowledgeBase(benchmark_root / "data" / "questions.json"))
 
 
 def test_heldout_set_is_independent_and_large_enough():

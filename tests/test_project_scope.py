@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-import bagu_trainer.server as server
+import bagu_trainer.engine as engine
 
 
 @pytest.fixture
@@ -38,15 +38,15 @@ def test_ready_queue_and_unanswered_cooldown_are_project_scoped(
     _set_diff(env)
 
     # A 只预生成 ready，不交付；B 的同知识点不应因此被冷却。
-    generated_a = server._refresh(str(project_a), "")
+    generated_a = engine._refresh(str(project_a), "")
     assert len(generated_a["generated"]) == 1
     quiz_a = generated_a["generated"][0]
     pending_a = next(
-        p for p in server._state["pending"] if p["quiz_id"] == quiz_a["quiz_id"])
+        p for p in engine._state["pending"] if p["quiz_id"] == quiz_a["quiz_id"])
     assert pending_a["status"] == "ready"
     assert quiz_a["project_root"] == _scope(project_a)
 
-    result_b = server.check_pending_quiz(project_root=str(project_b))
+    result_b = engine.next_quiz(project_root=str(project_b))
     assert result_b["ok"] is True and result_b["has_pending"] is True
     quiz_b = result_b["quiz"]
     assert quiz_b["quiz_id"] != quiz_a["quiz_id"]
@@ -59,7 +59,7 @@ def test_ready_queue_and_unanswered_cooldown_are_project_scoped(
     assert pending_a["delivered_at"] is None
 
     # A 仍可取回自己的 ready 题，且不会拿到 B 的题。
-    result_a = server.check_pending_quiz(project_root=str(project_a))
+    result_a = engine.next_quiz(project_root=str(project_a))
     assert result_a["ok"] is True and result_a["has_pending"] is True
     assert result_a["quiz"]["quiz_id"] == quiz_a["quiz_id"]
     assert result_a["quiz"]["project_root"] == _scope(project_a)
@@ -69,8 +69,8 @@ def test_ready_queue_and_unanswered_cooldown_are_project_scoped(
 def test_concurrent_checks_do_not_cross_project_queues(env, two_projects):
     project_a, project_b = two_projects
     _set_diff(env)
-    generated_a = server._refresh(str(project_a), "")
-    generated_b = server._refresh(str(project_b), "")
+    generated_a = engine._refresh(str(project_a), "")
+    generated_b = engine._refresh(str(project_b), "")
     assert len(generated_a["generated"]) == 1
     assert len(generated_b["generated"]) == 1
     assert env["gen"].calls == 2
@@ -82,7 +82,7 @@ def test_concurrent_checks_do_not_cross_project_queues(env, two_projects):
     def worker(name, root):
         try:
             barrier.wait(timeout=5)
-            results[name] = server.check_pending_quiz(project_root=str(root))
+            results[name] = engine.next_quiz(project_root=str(root))
         except Exception as exc:  # 让主线程看到并发路径中的失败
             errors[name] = exc
 
@@ -110,7 +110,7 @@ def test_concurrent_checks_do_not_cross_project_queues(env, two_projects):
     }
     actual = {
         p["quiz_id"]: _scope(p["project_root"])
-        for p in server._state["pending"] if p["status"] == "delivered"
+        for p in engine._state["pending"] if p["status"] == "delivered"
     }
     assert actual == expected
 
@@ -119,17 +119,17 @@ def test_report_delivery_is_atomic_for_memory_and_store(env, two_projects):
     project_a, _ = two_projects
     _set_diff(env)
 
-    result = server.report_ai_activity(project_root=str(project_a))
+    result = engine.process_activity(project_root=str(project_a))
     assert result["ok"] is True and len(result["quizzes"]) == 1
     quiz = result["quizzes"][0]
     qid = quiz["quiz_id"]
     assert quiz["project_root"] == _scope(project_a)
 
-    pending = next(p for p in server._state["pending"] if p["quiz_id"] == qid)
+    pending = next(p for p in engine._state["pending"] if p["quiz_id"] == qid)
     assert pending["status"] == "delivered"
     assert pending["delivered_at"] is not None
-    assert server._state["quizzes"][qid]["_status"] == "delivered"
+    assert engine._state["quizzes"][qid]["_status"] == "delivered"
 
-    stored = server._store.get_quiz(qid)
+    stored = engine._store.get_quiz(qid)
     assert stored["status"] == "delivered"
     assert stored["delivered_at"] is not None

@@ -14,11 +14,11 @@ from eval_cases import NEGATIVE_CASES, POSITIVE_CASES
 
 
 @pytest.fixture(scope="module")
-def matcher():
+def matcher(benchmark_root):
     """真实题库上的 Matcher（构建一次，全模块复用）"""
     import time
     t = time.time()
-    m = Matcher(KnowledgeBase())
+    m = Matcher(KnowledgeBase(benchmark_root / "data" / "questions.json"))
     print(f"[perf] matcher 索引构建 {time.time() - t:.2f}s")
     return m
 
@@ -139,10 +139,10 @@ def test_tokenize_junk_char_grams():
 
 # ---- server 端：resolve confidence/margin 增量字段 ----
 def test_server_surfaces_confidence_and_margin(env):
-    import bagu_trainer.server as server
+    import bagu_trainer.engine as engine
     env["diff"].results = [{"source": "git", "files": ["x.py"],
                             "diff_text": "redis 缓存穿透"}]
-    rep = server.report_ai_activity()
+    rep = engine.process_activity()
     assert rep["ok"] is True and len(rep["quizzes"]) == 1
     q = rep["quizzes"][0]
     assert "confidence" in q and "margin" in q
