@@ -105,11 +105,11 @@ class PracticePage(ttk.Frame):
         self.feedback_label.grid(row=8, column=0, sticky="ew", pady=px((0, SPACE.lg)))
 
         # -- fixed footer -----------------------------------------------------
-        footer = ttk.Frame(self)
+        footer = self.footer = ttk.Frame(self)
         footer.grid(row=1, column=0, sticky="ew", pady=px((SPACE.md, 0)))
         footer.columnconfigure(0, weight=1)
-        wrapped_label(footer, theme, text="A–D 选择 · Ctrl+Enter 提交 · 下一题继续", style=MUTED).grid(
-            row=0, column=0, sticky="ew")
+        self.keyboard_hint = wrapped_label(footer, theme, text="A–D 选择 · Ctrl+Enter 提交 · 下一题继续", style=MUTED)
+        self.keyboard_hint.grid(row=0, column=0, sticky="ew")
         actions = FlowActions(footer, theme)
         actions.grid(row=1, column=0, sticky="ew", pady=px((SPACE.sm, 0)))
         self.submit_button = actions.add(ttk.Button(actions, text="提交答案", style=PRIMARY, command=self._submit))
@@ -148,6 +148,7 @@ class PracticePage(ttk.Frame):
         self.workspace.columnconfigure(1, weight=1 if split else 0, uniform="practice" if split else "")
         self.compact_toggle.grid_remove()
         if self.compact_list and not split:
+            self.keyboard_hint.grid_remove()
             self.workspace.rowconfigure(0, weight=0)
             self.workspace.rowconfigure(1, weight=1)
             self.compact_toggle.configure(text="返回当前题目" if self.compact_expanded else f"查看待答列表（{len(self._pending)}）")
@@ -159,6 +160,7 @@ class PracticePage(ttk.Frame):
                 self.list_column.grid_remove()
                 self.view.grid(row=1, column=0, sticky="nsew")
             return
+        self.keyboard_hint.grid()
         if split:
             self.workspace.rowconfigure(0, weight=1)
             self.workspace.rowconfigure(1, weight=0)
@@ -295,6 +297,10 @@ class PracticePage(ttk.Frame):
         switching = controller.entering_quiz_id is not None
         finished = state == "finished"
         has_current = controller.current is not None
+        if has_current:
+            self.footer.grid()
+        else:
+            self.footer.grid_remove()
         self.submit_button.configure(text=("正在切题…" if switching else "正在提交…" if submitting else
                                            ("重试提交" if state == "failed" else
                                             ("已记录作答" if finished else "提交答案"))))

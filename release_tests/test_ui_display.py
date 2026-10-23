@@ -30,6 +30,8 @@ def display_roots(monkeypatch):
 
 
 def focus_key(root, widget, key):
+    root.deiconify()
+    root.lift()
     root.update_idletasks()
     widget.focus_force()
     # Maximize/restore dispatches native focus events asynchronously. Deliver a
@@ -44,7 +46,8 @@ def focus_key(root, widget, key):
             stable = 0
             widget.focus_force()
         time.sleep(.02)
-    assert root.focus_get() is widget, "Requested keyboard target did not acquire native focus"
+    assert root.focus_get() is widget, ("Requested keyboard target did not acquire native focus",
+        str(widget), widget.winfo_ismapped(), widget.winfo_rooty(), root.winfo_geometry())
     widget.event_generate(key)
     root.update()
     return root.focus_get()
@@ -185,8 +188,14 @@ def test_quiz_shortcuts_preserve_text_keys_and_require_intent(display_roots):
         assert app.answer.get() == "B"
         focus_key(app.root, practice, "<Return>")
         assert app.jobs.empty()
+        if not practice.pending_list.winfo_ismapped():
+            practice.compact_toggle.invoke()
+            app.root.update()
         focus_key(app.root, practice.pending_list, "<a>")
         focus_key(app.root, practice.pending_list, "<Control-Return>")
+        if practice.compact_expanded:
+            practice.compact_toggle.invoke()
+            app.root.update()
         focus_key(app.root, practice.dismiss_button, "<Control-Return>")
         assert app.answer.get() == "B" and app.jobs.empty()
         focus_key(app.root, practice, "<Control-Return>")

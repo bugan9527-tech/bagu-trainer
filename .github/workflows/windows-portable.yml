@@ -50,7 +50,7 @@ jobs:
       - name: Build audited onedir ZIP and SHA-256
         run: .\.venv-build\Scripts\python.exe scripts/build_portable.py
       - name: Test source workflows and the actual portable EXE
-        run: python -m pytest release_tests -q -W error --junitxml=validation/release-tests.xml
+        run: python scripts/run_release_tests.py --output validation/release-tests.xml
       - name: Build and run the separate frozen acceptance driver
         run: |
           .\.venv-build\Scripts\python.exe scripts/build_acceptance.py --verify --memory-credentials --work build/frozen-acceptance

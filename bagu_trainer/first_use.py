@@ -103,7 +103,7 @@ class FirstUseWizard:
         self.migration_button = ttk.Button(auxiliary, text="迁移旧数据…", command=self._migrate)
         if not self.embedded:
             auxiliary.add(self.migration_button)
-        if self.embedded:
+        if self.embedded or compact:
             stepper.grid_remove()
             progress_row.grid_remove()
         self.cancel_button = auxiliary.add(ttk.Button(auxiliary, text="取消测试", command=self._cancel_test))
@@ -259,6 +259,8 @@ class FirstUseWizard:
         self.pages[step].pack(fill="both", expand=True)
         self.heading.set(self.TITLES[step])
         index = self.STEPS.index(step)
+        if self.theme.compact and not self.embedded:
+            self.heading.set(f"{index + 1}/4 · {self.TITLES[step]}")
         self.steps_text.set(f"第 {index + 1} / 4 步")
         self.step_progress.configure(value=index + 1)
         for position, (label, title) in enumerate(zip(self.step_labels, ("题库", "模型连接", "监听项目", "完成"))):

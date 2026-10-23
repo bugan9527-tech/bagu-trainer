@@ -29,13 +29,14 @@ class ModelSettingsWindow:
         self.root.title("AI 八股训练器 · AI 接口配置")
         self.theme.window(self.root, (760, 760), (560, 540))
 
-        panel = ttk.Frame(self.root, padding=px(SPACE.xl))
+        panel = ttk.Frame(self.root, padding=px(SPACE.md if self.theme.compact else SPACE.xl))
         panel.pack(fill="both", expand=True)
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(2, weight=1)
         wrapped_label(panel, self.theme, text="模型连接", style=TITLE).grid(row=0, column=0, sticky="ew")
-        wrapped_label(panel, self.theme, text="先测试当前配置，再保存生效。新题需经过 AI 生成与关联审核，共用所填超时；失败可重试，不展示离线选择题。",
-                      style=MUTED).grid(row=1, column=0, sticky="ew", pady=px((SPACE.sm, SPACE.lg)))
+        if not self.theme.compact:
+            wrapped_label(panel, self.theme, text="先测试当前配置，再保存生效。新题需经过 AI 生成与关联审核，共用所填超时；失败可重试，不展示离线选择题。",
+                          style=MUTED).grid(row=1, column=0, sticky="ew", pady=px((SPACE.sm, SPACE.lg)))
 
         self.panel_widget = ModelPanel(panel, self.theme)
         self.panel_widget.grid(row=2, column=0, sticky="nsew")

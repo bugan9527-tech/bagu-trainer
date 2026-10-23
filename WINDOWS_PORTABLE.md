@@ -114,7 +114,7 @@ gh run list --workflow windows-portable.yml
 
 ```powershell
 python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest release_tests -q -W error
+python scripts/run_release_tests.py --output validation/release-tests.xml
 python -m pytest tests -q
 git diff --check
 ```

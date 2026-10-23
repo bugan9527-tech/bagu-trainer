@@ -39,6 +39,7 @@ class ModelPanel(ttk.Frame):
                  compact=False, interactive=True):
         super().__init__(parent)
         self.theme = theme
+        compact = compact or theme.compact
         px = theme.px
         self.events = events if events is not None else queue.Queue()
         self.on_saved = on_saved
@@ -71,9 +72,9 @@ class ModelPanel(ttk.Frame):
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
-        wrapped_label(self, theme, text="填写服务商提供的基础地址和模型名称。点击“测试连接”会发送一次小请求，\n"
-                      "可能产生服务商费用；测试通过后点击“保存”。", style=MUTED).grid(
-            row=0, column=0, sticky="ew", pady=px((0, SPACE.lg)))
+        intro_text = "填写服务商提供的基础地址和模型名称。点击“测试连接”会发送一次小请求，\n可能产生服务商费用；测试通过后点击“保存”。"
+        self.intro = wrapped_label(self, theme, text=intro_text, style=MUTED)
+        self.intro.grid(row=0, column=0, sticky="ew", pady=px((0, SPACE.sm if compact else SPACE.lg)))
 
         self.form_view = ScrollableFrame(self, theme)
         self.form_view.grid(row=1, column=0, sticky="nsew")
@@ -110,6 +111,12 @@ class ModelPanel(ttk.Frame):
         self.key_hint_area = MessageArea(frm, self.key_hint, theme, lines=2, muted=True)
         self.key_hint_area.grid(row=100, column=0, columnspan=2, sticky="ew", pady=px(SPACE.md))
 
+        if compact or not self.interactive:
+            # The wizard already has a fixed step header and action footer.
+            # Keep fee/help text next to its test action in the scrolling body.
+            self.intro.grid_remove()
+            wrapped_label(frm, theme, text=intro_text, style=MUTED).grid(
+                row=99, column=0, columnspan=2, sticky="ew", pady=px(SPACE.sm))
         if not self.interactive:
             # Form-only mode: the host (e.g. the first-use wizard) supplies its
             # own test/save buttons and lifecycle; no worker, poll or buttons.
@@ -122,13 +129,18 @@ class ModelPanel(ttk.Frame):
         result.grid(row=2, column=0, sticky="ew", pady=px((SPACE.md, 0)))
         result.columnconfigure(0, weight=1)
         wrapped_label(result, theme, textvariable=self.result_heading, style=SECTION).grid(row=0, column=0, sticky="ew")
-        self.status_area = MessageArea(result, self.status, theme, lines=2 if compact else 3)
+        self.status_area = MessageArea(result, self.status, theme, lines=1 if compact else 3)
         self.status_area.grid(row=1, column=0, sticky="ew", pady=px(SPACE.sm))
         self.progress = ttk.Progressbar(result, mode="indeterminate")
         self.progress.grid(row=2, column=0, sticky="ew")
         self.operation_hint = window_var(self, "保存不可用：请先测试当前配置。尚无进行中的任务。")
-        wrapped_label(result, theme, textvariable=self.operation_hint, style=MUTED).grid(
-            row=3, column=0, sticky="ew", pady=px((0, SPACE.sm)))
+        if compact:
+            operation_area = MessageArea(result, self.operation_hint, theme, lines=1, muted=True)
+            operation_area.configure(padding=px(SPACE.xs))
+            operation_area.grid(row=3, column=0, sticky="ew", pady=px((0, SPACE.xs)))
+        else:
+            wrapped_label(result, theme, textvariable=self.operation_hint, style=MUTED).grid(
+                row=3, column=0, sticky="ew", pady=px((0, SPACE.sm)))
         btns = ttk.Frame(result)
         btns.grid(row=4, column=0, sticky="e")
         self.test_button = ttk.Button(btns, text="测试连接", command=self._test)

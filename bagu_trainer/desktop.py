@@ -146,17 +146,23 @@ class DesktopApp:
         wrapped_label(panel, self.theme, text="监听与学习概况", style=MUTED).grid(row=0, column=0, sticky="ew")
         wrapped_label(panel, self.theme, textvariable=self.listen_state, style=SECTION).grid(
             row=1, column=0, sticky="ew", pady=px((SPACE.lg, SPACE.sm)))
-        self.status_area = MessageArea(panel, self.status, self.theme, lines=2)
-        self.status_area.grid(row=2, column=0, sticky="ew", pady=px((0, SPACE.lg)))
+        self.dashboard_view = ScrollableFrame(panel, self.theme)
+        self.dashboard_view.grid(row=3, column=0, sticky="nsew")
+        compact = self.theme.compact
+        status_host = self.dashboard_view.body if compact else panel
+        self.status_area = MessageArea(status_host, self.status, self.theme, lines=2)
+        self.status_area.grid(row=0 if compact else 2, column=0, sticky="ew", pady=px((0, SPACE.lg)))
         self.task_hint = window_var(self.root, "空闲：等待代码改动。当前没有可取消的出题请求。")
         wrapped_label(self.status_area, self.theme, textvariable=self.task_hint, style=MUTED).grid(
             row=1, column=0, columnspan=2, sticky="ew", pady=px((SPACE.sm, 0)))
         self.task_progress = ttk.Progressbar(self.status_area, mode="indeterminate")
         self.task_progress.grid(row=2, column=0, columnspan=2, sticky="ew", pady=px((SPACE.sm, 0)))
         self.task_progress.grid_remove()
-        self.dashboard_view = ScrollableFrame(panel, self.theme)
-        self.dashboard_view.grid(row=3, column=0, sticky="nsew")
         content = self.dashboard_view.body
+        if compact:
+            content = ttk.Frame(content)
+            content.columnconfigure(0, weight=1)
+            content.grid(row=1, column=0, sticky="ew")
         wrapped_label(content, self.theme, text="当前项目", style=SECTION).grid(row=0, column=0, sticky="ew")
         wrapped_label(content, self.theme, textvariable=self.current_project, style=MUTED).grid(
             row=1, column=0, sticky="ew", pady=px((SPACE.sm, SPACE.sm)))

@@ -214,13 +214,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-startu
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python.exe -m pytest release_tests -q
+.\.venv\Scripts\python.exe scripts/run_release_tests.py --output validation/release-tests.xml
 ```
 
 这些测试覆盖来源选择、默认不联网抓取 Issues、缺失题库提示、无旧数据的首次构建，
 以及中文和空格目录中的配置定位与自启动解释器选择。自启动测试只写临时快捷方式，不安装实际登录自启动。
 `tests/` 中匹配器的历史评估通过 `BAGU_TEST_BANK_ROOT` 显式指定项目外只读基准；普通单元测试使用临时合成题库，详见 [验证范围](VALIDATION.md)。内容链路的归档读取/AI-only 测试现使用自编合成夹具，不再依赖未分发的离线归档。
-完整检查包括 `python -m pytest release_tests tests -q -W error`；便携包需先构建后再运行，以免 EXE 用例因缺包跳过。指定验收包可设置 `BAGU_PORTABLE_BUNDLE` 和 `BAGU_PORTABLE_ARCHIVE`。验证前将 `BAGU_USER_DATA_DIR` 指向独立目录；测试只写临时配置和数据库。
+发布测试逐模块运行于独立进程，完整保留失败和跳过结果，不自动重试；单元检查使用 `python -m pytest tests -q -W error`。便携包需先构建后再运行，以免 EXE 用例因缺包跳过。指定验收包可设置 `BAGU_PORTABLE_BUNDLE` 和 `BAGU_PORTABLE_ARCHIVE`。验证前将 `BAGU_USER_DATA_DIR` 指向独立目录；测试只写临时配置和数据库。
 
 | 路径 | 用途 |
 | --- | --- |

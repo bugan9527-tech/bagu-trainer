@@ -100,7 +100,8 @@ def test_browse_is_read_only_and_independent_of_generation_lock(history):
     assert detail["project_root"] == r"C:\removed-project"
     assert detail["snapshot"]["excerpt_source"] == SNAP["excerpt_source"]
     assert dump(store) == before and not calls
-    assert "08:00:00" in engine.history_time(0)  # test machine local zone Asia/Shanghai
+    from datetime import datetime
+    assert datetime.fromtimestamp(0).strftime("%H:%M:%S") in engine.history_time(0)
 
 
 def test_repractice_new_id_deduplicated_persisted_and_submission_once(history):

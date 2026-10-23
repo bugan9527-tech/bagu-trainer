@@ -8,7 +8,7 @@
 
 ```powershell
 python -m pip install -r requirements.txt -r requirements-dev.txt
-python -m pytest release_tests -q -W error
+python scripts/run_release_tests.py --output validation/release-tests.xml
 python -m pytest tests -q -W error
 ```
 
@@ -30,3 +30,5 @@ GitHub Release 附带本次 ZIP、SHA-256、无失败或跳过的发布测试报
 - 清空 PATH 不等于无 Python/Git 的干净 Windows；应使用 [干净系统流程](CLEAN_WINDOWS_ACCEPTANCE.md)。
 - localhost 模拟链路不能代表真实服务商连通性、计费或真实系统凭据写入。
 - 程序没有代码签名；正式公开发布需由维护者审阅草稿及目标环境结果。
+
+GUI 发布检查按模块创建独立进程，不自动重试，合并报告保留每一项失败、跳过和进程异常。逻辑布局用例使用固定 100% 起点，再由具体用例显式设置缩放，避免宿主或上一用例的缩放污染。
