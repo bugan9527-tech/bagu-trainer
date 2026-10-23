@@ -80,15 +80,23 @@ def check_pristine_start(installed, setup, work, data, bundle, entries):
     child = subprocess.Popen([str(installed / "BaguTrainer.exe")], env=environment(data),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
+        last_status = {}
         def is_first_use():
+            nonlocal last_status
             check(child.poll() is None, "Installed EXE exited before first-use wizard")
             try:
                 status = desktop_instance.remote_call("_desktop_status", {})
-                return status.get("startup_state") == "needs_setup" and status.get("checks") == {
+                # Retain only the public state and readiness booleans for diagnostics.
+                last_status = {"startup_state": status.get("startup_state"),
+                               "checks": status.get("checks")}
+                return status.get("startup_state") == "initialization" and status.get("checks") == {
                     "bank": False, "model": False, "projects": False}
             except (OSError, ValueError):
                 return False
-        wait_until(is_first_use, timeout=30)
+        try:
+            wait_until(is_first_use, timeout=30)
+        except AssertionError as error:
+            raise AssertionError("Installed first-use readiness timed out: " + json.dumps(last_status)) from error
         screenshot = capture_window(work, "installed-pristine-first-use", pid=child.pid,
                                     expected_title="AI 八股训练器 · 首次使用向导")
         check(screenshot["captured"], "Could not capture installed first-use wizard")
