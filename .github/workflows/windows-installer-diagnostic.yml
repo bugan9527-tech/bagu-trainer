@@ -34,8 +34,12 @@ jobs:
           python -m venv .venv-build
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Build audited production payload
         run: .\.venv-build\Scripts\python.exe scripts/build_portable.py --require-clean
+      - name: Diagnose portable migration and repeated startup without retries
+        run: python -m pytest release_tests/test_portable_bundle.py -q --junitxml=validation/portable-diagnostic.xml
       - name: Prepare pinned tools
         run: python scripts/prepare_installer_tools.py
       - name: Compile separate frozen driver
@@ -54,6 +58,8 @@ jobs:
           name: installer-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             validation/INSTALLED_ACCEPTANCE.json
+            validation/portable-diagnostic.xml
+            validation/portable-diagnostics/
             ${{ runner.temp }}/bagu-installed-release/*.log
             ${{ runner.temp }}/bagu-installed-release/screenshots/
             ${{ runner.temp }}/bagu-installed-release/frozen/ERROR.json

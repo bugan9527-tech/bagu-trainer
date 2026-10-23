@@ -87,10 +87,29 @@ def window_titles(pid):
 
 
 def await_state(child, state):
+    observed = {"expected_state": state, "states": [], "probe_errors": []}
     def probe():
-        status = desktop_instance.remote_call("_desktop_status", {})
+        try:
+            status = desktop_instance.remote_call("_desktop_status", {})
+        except (OSError, ValueError, RuntimeError) as error:
+            observed["probe_errors"].append(type(error).__name__)
+            raise
+        public = {name: status.get(name) for name in ("startup_state", "window_state", "checks")}
+        if not observed["states"] or observed["states"][-1] != public:
+            observed["states"].append(public)
         return status if status.get("startup_state") == state else None
-    return until(child, probe)
+    try:
+        return until(child, probe)
+    except BaseException:
+        # This RUNTIME is redirected by each fixture, never the real profile.
+        output = ROOT / "validation" / "portable-diagnostics"
+        output.mkdir(parents=True, exist_ok=True)
+        observed["process_running"] = child.poll() is None
+        (output / "startup-state.json").write_text(json.dumps(observed, indent=2), encoding="utf-8")
+        log = desktop_instance.RUNTIME.parent / "logs" / "desktop.log"
+        if log.is_file():
+            shutil.copyfile(log, output / "desktop.log")
+        raise
 
 
 def tree_hash(directory):
