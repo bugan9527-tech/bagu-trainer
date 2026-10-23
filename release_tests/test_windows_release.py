@@ -180,13 +180,16 @@ def test_public_reports_remove_machine_paths_credentials_and_test_output_and_rev
     metadata = json.loads(path.read_text(encoding="utf-8"))
     metadata["lifecycle_acceptance"] = builder.lifecycle_summary(dist / "INSTALLER_LIFECYCLE.json")
     write(path, metadata)
-    (evidence / "release-tests.xml").write_text('<testsuites><testsuite hostname="PRIVATE-RUNNER"><properties><property name="path" value="secret-profile"/></properties><testcase classname="release" name="fixture"><system-out>test-only-credential-must-disappear</system-out></testcase></testsuite></testsuites>')
+    (evidence / "release-tests.xml").write_text('<testsuites><testsuite hostname="PRIVATE-RUNNER"><properties><property name="path" value="secret-profile"/></properties><testcase classname="release" name="fixture[synthetic-param-must-disappear]"><system-out>test-only-credential-must-disappear</system-out></testcase></testsuite></testsuites>')
     result = validate(dist, evidence, require_privacy=False)
     public = evidence / "public"
     release.write_public_evidence(result, evidence, public, SHA)
     for path in public.iterdir():
         text = path.read_text(encoding="utf-8")
         assert "PRIVATE-RUNNER" not in text and "secret-profile" not in text and "test-only-credential" not in text
+        assert "synthetic-param-must-disappear" not in text
+    import xml.etree.ElementTree as ET
+    assert ET.parse(public / "release-tests.xml").find(".//testcase").get("name") == "fixture"
     add_privacy(dist, public, public)
     assert release.validate_dual_release(dist, "v" + release.__version__, SHA, public, public)["tests"] == {"passed": 1, "skipped": 0}
 

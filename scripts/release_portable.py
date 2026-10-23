@@ -229,7 +229,11 @@ def write_public_evidence(result, source, output, target):
     public = ET.Element("testsuites", tests=str(result["tests"]["passed"]), failures="0", errors="0", skipped="0")
     suite = ET.SubElement(public, "testsuite", tests=str(result["tests"]["passed"]), failures="0", errors="0", skipped="0")
     for case in raw.findall(".//testcase"):
-        ET.SubElement(suite, "testcase", {key: case.get(key, "") for key in ("classname", "name", "time")})
+        attributes = {key: case.get(key, "") for key in ("classname", "name", "time")}
+        # pytest parameter IDs can embed test credentials or private paths.
+        # Keep every result and its function identity, but omit parameter values.
+        attributes["name"] = attributes["name"].split("[", 1)[0]
+        ET.SubElement(suite, "testcase", attributes)
     ET.ElementTree(public).write(output / "release-tests.xml", encoding="utf-8", xml_declaration=True)
     frozen = result["frozen"]
     safe = {key: frozen[key] for key in ("passed", "frozen", "source_commit", "source_dirty", "production_commit",
