@@ -242,10 +242,11 @@ def test_cancel_at_each_stage_preserves_active_bank_and_retry_works(installed, h
         if event.stage == stage:
             cancel.set()
     with pytest.raises(BuildCancelled):
-        service.build([REPOSITORY], cancel=cancel, progress=progress)
+        service.build([REPOSITORY], cancel=cancel, progress=progress, force_download=stage == "download")
     assert_unchanged(installed, original, pointer)
     assert active_bank_dir() == first.directory
     assert service.build([REPOSITORY]).questions == 1
+    assert http_archive.count == 1  # Cancellation never discards a valid cache.
 
 
 def test_cancel_during_download_chunk_preserves_old_data(installed, http_archive):
@@ -271,6 +272,7 @@ def test_build_exception_then_retry(installed, http_archive, monkeypatch):
     assert_unchanged(installed, original)
     monkeypatch.setattr(profiles, "build_profiles", build_profiles)
     assert service.build([REPOSITORY]).questions == 1
+    assert http_archive.count == 1
 
 
 def test_pointer_switch_failure_keeps_previous_bank(installed, http_archive, monkeypatch):
@@ -388,7 +390,7 @@ def test_case_distinct_source_build_preserves_body_provenance_and_stable_ids(ins
     ids = []
     for ordered in (entries, list(reversed(entries))):
         http_archive.body = archive_bytes(ordered)
-        result = service.build([REPOSITORY])
+        result = service.build([REPOSITORY], force_download=True)
         bank = json.loads((result.directory / "questions.json").read_text(encoding="utf-8"))
         assert result.questions == 2
         by_path = {q["excerpt_source"]: q for q in bank}
@@ -412,7 +414,7 @@ def test_identical_case_distinct_documents_deduplicate_stably(installed, http_ar
     banks = []
     for ordered in (entries, list(reversed(entries))):
         http_archive.body = archive_bytes(ordered)
-        result = BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY])
+        result = BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY], force_download=True)
         assert result.questions == 1
         banks.append(json.loads((result.directory / "questions.json").read_text(encoding="utf-8")))
     assert banks[0] == banks[1]
@@ -495,7 +497,8 @@ def opener(request, timeout):
 def crash(event):
     if event.stage == 'concepts':
         os._exit(73)
-BankBuildService(root, opener=opener).build(['Snailclimb/JavaGuide'], progress=crash)
+BankBuildService(root, manifest=root / 'interview-banks' / 'sources.json', opener=opener).build(
+    ['Snailclimb/JavaGuide'], progress=crash)
 '''
     result = subprocess.run([sys.executable, "-B", "-c", probe, str(installed.project)],
                             cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
@@ -506,6 +509,7 @@ BankBuildService(root, opener=opener).build(['Snailclimb/JavaGuide'], progress=c
     # Abandoned UUID workspaces are ignored; the crashed process's lock is released.
     assert any(p.is_dir() for p in (installed.data / ".bank-builds").iterdir())
     assert BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY]).questions == 1
+    assert http_archive.count == 0  # Reuse the completed cache from the exited process.
 
 
 def wait_for_ui(window, predicate):
@@ -514,6 +518,180 @@ def wait_for_ui(window, predicate):
         window.root.update()
         time.sleep(0.01)
     assert predicate()
+
+
+def cache_entry(installed, repository=REPOSITORY, commit=COMMIT):
+    from dataclasses import replace
+    from bagu_trainer.bank_build.source_cache import cache_directory
+    source = replace(load_sources(installed.manifest)[REPOSITORY], repository=repository, commit=commit)
+    return cache_directory(installed.data / "source-cache", source)
+
+
+def test_cache_reused_across_rebuild_and_service_restart(installed, http_archive):
+    original = snapshot(installed)
+    service = BankBuildService(installed.project, opener=http_archive.opener)
+    first = service.build([REPOSITORY])
+    second = service.build([REPOSITORY])
+    def offline(*args, **kwargs):
+        pytest.fail("valid cache attempted network")
+    third = BankBuildService(installed.project, opener=offline).build([REPOSITORY])
+    assert len({first.generation, second.generation, third.generation}) == 3
+    assert http_archive.count == 1
+    assert {p: p.read_bytes() for p in original} == original
+
+
+@pytest.mark.parametrize("damage", ["empty_directory", "missing_record", "bad_record", "identity", "schema",
+                                    "missing_zip", "truncated_zip", "same_size_corruption", "invalid_zip"])
+def test_cache_damage_downloads_once_then_repairs(installed, http_archive, damage):
+    service = BankBuildService(installed.project, opener=http_archive.opener)
+    first = service.build([REPOSITORY])
+    previous = {p.relative_to(first.directory): p.read_bytes() for p in first.directory.rglob("*") if p.is_file()}
+    directory = cache_entry(installed)
+    record_path = directory / "complete.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    archive = next(directory.glob("*.zip"))
+    if damage == "empty_directory":
+        for path in directory.iterdir():
+            path.unlink()
+    elif damage == "missing_record":
+        record_path.unlink()
+    elif damage == "bad_record":
+        record_path.write_text("{", encoding="utf-8")
+    elif damage in {"identity", "schema"}:
+        if damage == "identity":
+            record["source"]["commit"] = "b" * 40
+        else:
+            record["schema_version"] = 999
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+    elif damage == "missing_zip":
+        archive.unlink()
+    elif damage == "truncated_zip":
+        archive.write_bytes(archive.read_bytes()[:-1])
+    elif damage == "same_size_corruption":
+        body = archive.read_bytes()
+        archive.write_bytes(bytes([body[0] ^ 255]) + body[1:])
+    else:
+        # Digest alone is insufficient: malformed ZIP with a matching record.
+        body = b"not a ZIP"
+        digest = hashlib.sha256(body).hexdigest()
+        (directory / (digest[:32] + ".zip")).write_bytes(body)
+        record["source"].update(archive_sha256=digest, download_bytes=len(body))
+        record_path.write_text(json.dumps(record), encoding="utf-8")
+    assert service.build([REPOSITORY]).questions == 1
+    assert service.build([REPOSITORY]).questions == 1
+    assert http_archive.count == 2
+    assert {p.relative_to(first.directory): p.read_bytes() for p in first.directory.rglob("*") if p.is_file()} == previous
+
+
+def test_cache_identity_includes_repository_and_full_commit(installed, http_archive):
+    manifest = json.loads(installed.manifest.read_text(encoding="utf-8"))
+    other = "another/JavaGuide"
+    manifest["sources"].append({**manifest["sources"][0], "repository": other, "directory": "Other"})
+    installed.manifest.write_text(json.dumps(manifest), encoding="utf-8")
+    service = BankBuildService(installed.project, opener=http_archive.opener)
+    for repo, commit in [(REPOSITORY, COMMIT), (REPOSITORY, "a" * 39 + "b"), (other, COMMIT),
+                         (REPOSITORY, COMMIT), (REPOSITORY, "a" * 39 + "b"), (other, COMMIT)]:
+        service.build([repo], versions={repo: commit})
+    assert http_archive.count == 3
+    assert len(list((installed.data / "source-cache").glob("*/complete.json"))) == 3
+
+
+@pytest.mark.parametrize("failure", ["cancel_download", "cancel_unpack", "bad_zip", "http_error"])
+def test_failed_force_refresh_retains_previous_cache(installed, http_archive, failure):
+    service = BankBuildService(installed.project, opener=http_archive.opener)
+    service.build([REPOSITORY])
+    directory = cache_entry(installed)
+    cached = {p: p.read_bytes() for p in directory.iterdir()}
+    pointer = (installed.data / "active-bank.json").read_bytes()
+    original = snapshot(installed)
+    cancel = threading.Event()
+    def progress(event):
+        if ((failure == "cancel_download" and event.stage == "download" and event.completed)
+                or (failure == "cancel_unpack" and event.stage == "unpack" and event.completed)):
+            cancel.set()
+    if failure == "bad_zip":
+        http_archive.body = b"bad zip"
+    elif failure == "http_error":
+        http_archive.failures, http_archive.status = 2, 404
+    with pytest.raises(BuildError):
+        service.build([REPOSITORY], force_download=True, cancel=cancel, progress=progress)
+    assert {p: p.read_bytes() for p in cached} == cached
+    assert_unchanged(installed, original, pointer)
+    assert service.build([REPOSITORY]).questions == 1
+    assert http_archive.count == 2
+
+
+def test_force_refresh_is_explicit_and_updates_cache(installed, http_archive):
+    service = BankBuildService(installed.project, opener=http_archive.opener)
+    service.build([REPOSITORY])
+    http_archive.body = archive_bytes([("snapshot/new.md", MARKDOWN.replace("数据库索引？", "数据库索引的作用？"))])
+    changed = service.build([REPOSITORY], force_download=True)
+    reused = BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY])
+    assert http_archive.count == 2
+    assert (changed.directory / "questions.json").read_bytes() == (reused.directory / "questions.json").read_bytes()
+    metadata = json.loads((reused.directory / "sources.json").read_text(encoding="utf-8"))["sources"][0]
+    assert metadata["archive_sha256"] == hashlib.sha256(http_archive.body).hexdigest()
+
+
+@pytest.mark.parametrize("limits", [ArchiveLimits(download_bytes=10), ArchiveLimits(file_bytes=10),
+    ArchiveLimits(unpack_bytes=10), ArchiveLimits(members=0), ArchiveLimits(compression_ratio=1)])
+def test_cached_archive_still_enforces_limits_without_redownload(installed, http_archive, limits):
+    BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY])
+    pointer = (installed.data / "active-bank.json").read_bytes()
+    with pytest.raises(BuildError):
+        BankBuildService(installed.project, opener=http_archive.opener, limits=limits).build([REPOSITORY])
+    assert http_archive.count == 1
+    assert (installed.data / "active-bank.json").read_bytes() == pointer
+
+
+def test_cancel_during_cache_validation_never_requests_network(installed, http_archive):
+    service = BankBuildService(installed.project, opener=http_archive.opener)
+    service.build([REPOSITORY])
+    pointer = (installed.data / "active-bank.json").read_bytes()
+    cancel = threading.Event()
+    def progress(event):
+        if event.stage == "cache":
+            cancel.set()
+    with pytest.raises(BuildCancelled):
+        service.build([REPOSITORY], cancel=cancel, progress=progress)
+    assert (installed.data / "active-bank.json").read_bytes() == pointer
+    assert http_archive.count == 1
+
+
+def test_legacy_source_snapshots_are_not_trusted(installed, http_archive):
+    first = BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY])
+    # Old generations have a download digest but no retained archive to verify.
+    shutil.rmtree(installed.data / "source-cache")
+    (first.directory / "repos" / "JavaGuide" / "README.md").write_text("unverified", encoding="utf-8")
+    assert BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY]).questions == 1
+    assert http_archive.count == 2
+
+
+def test_concurrent_start_is_locked_before_cache_or_network(installed, http_archive):
+    entered, release = threading.Event(), threading.Event()
+    errors = []
+    def progress(event):
+        if event.stage == "download":
+            entered.set()
+            assert release.wait(10)
+    def worker():
+        try:
+            BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY], progress=progress)
+        except BaseException as error:
+            errors.append(error)
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(BuildError, match="正在运行"):
+            BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY], force_download=True)
+        assert http_archive.count == 0
+    finally:
+        release.set()
+        thread.join(10)
+    assert not thread.is_alive() and not errors
+    assert BankBuildService(installed.project, opener=http_archive.opener).build([REPOSITORY]).questions == 1
+    assert http_archive.count == 1
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk desktop")
@@ -549,6 +727,16 @@ def test_desktop_source_selection_failure_cancel_and_retry(installed, http_archi
         wait_for_ui(window, lambda: not window.busy)
         assert len(results) == 1 and results[0].questions == 1
         assert window.progress.cget("value") == 100
+        count = http_archive.count
+        assert not window.force_download.get()
+        window._start()
+        assert window.force_download_check.instate(["disabled"])
+        wait_for_ui(window, lambda: not window.busy)
+        assert len(results) == 2 and http_archive.count == count
+        window.force_download.set(True)
+        window._start()
+        wait_for_ui(window, lambda: not window.busy)
+        assert len(results) == 3 and http_archive.count == count + 1
     finally:
         window._close()
         parent.destroy()

@@ -10,6 +10,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 from .paths import RESOURCE_ROOT, USER_ROOT
@@ -17,6 +19,21 @@ from .paths import RESOURCE_ROOT, USER_ROOT
 PROJECT_ROOT = RESOURCE_ROOT  # Read-only resources; retained for callers using this name.
 USER_DATA_ROOT = USER_ROOT
 CONFIG_PATH = USER_DATA_ROOT / "config.json"
+_CONFIG_LOCK = threading.RLock()
+
+
+@contextmanager
+def config_transaction():
+    """Serialize in-process edits, from the latest strict read through commit.
+
+    All live configuration editors share this lock. Keep credential/network
+    operations outside it; atomic replacement still protects concurrent readers.
+    """
+    with _CONFIG_LOCK:
+        from .app_cleanup import maintenance_active
+        if maintenance_active():
+            raise RuntimeError("应用正在完整卸载，禁止保存配置和凭据。")
+        yield
 
 
 def data_dir():
@@ -102,7 +119,7 @@ def update_llm(llm: dict, *, clear_api_key: bool = False) -> str:
         raise ValueError("api_key 与 clear_api_key=True 不能同时使用")
     # Saving a model must not invent watched projects or replace an explicit
     # empty/false setting with runtime defaults, especially during first run.
-    cfg = read_user_config()
+    read_user_config()  # Reject broken files before touching credentials.
     if key:
         stored = secrets.save_api_key(key)
         if stored == "fallback":
@@ -115,6 +132,8 @@ def update_llm(llm: dict, *, clear_api_key: bool = False) -> str:
         stored = "cleared"
     else:
         stored = "unchanged"
-    cfg["llm"] = {**llm, "api_key": ""}
-    _write_config_atomic(cfg)
+    with config_transaction():
+        cfg = read_user_config()
+        cfg["llm"] = {**llm, "api_key": ""}
+        _write_config_atomic(cfg)
     return stored

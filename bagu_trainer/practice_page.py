@@ -13,6 +13,7 @@ from tkinter import ttk
 from .ui_layout import ScrollableFrame, FlowActions, wrapped_label
 from .ui_state import window_var
 from .ui_theme import SPACE, PRIMARY, SECTION, MUTED, CAPTION
+from .ui_copy import ReadOnlyText, copy_text, question_text, solution_text
 
 
 class PracticePage(ttk.Frame):
@@ -81,39 +82,40 @@ class PracticePage(ttk.Frame):
         self.project = window_var(self, "")
         wrapped_label(body, theme, textvariable=self.project, style=MUTED).grid(
             row=1, column=0, sticky="ew", pady=px((0, SPACE.sm)))
-        self.question_label = wrapped_label(body, theme, text="")
+        self.question_label = ReadOnlyText(body, theme)
         self.question_label.grid(row=2, column=0, sticky="ew", pady=px((0, SPACE.sm)))
 
         self.option_buttons = []
+        self.option_texts = []
         for index, letter in enumerate("ABCD"):
-            button = ttk.Radiobutton(body, text="", value=letter, variable=controller.answer,
+            option = ttk.Frame(body)
+            option.columnconfigure(1, weight=1)
+            option.grid(row=3 + index, column=0, sticky="ew", pady=px(SPACE.xs))
+            button = ttk.Radiobutton(option, text=letter + ".", value=letter, variable=controller.answer,
                                      style="Quiz.TRadiobutton", command=lambda l=letter: controller.choose(l))
-            button.grid(row=3 + index, column=0, sticky="ew", pady=px(SPACE.xs))
+            button.grid(row=0, column=0, sticky="nw", padx=px((0, SPACE.sm)))
+            text = ReadOnlyText(option, theme)
+            text.grid(row=0, column=1, sticky="ew")
             self.option_buttons.append(button)
-
-        def wrap_options(event):
-            if event.width < px(80):
-                return
-            width = max(1, event.width - px(56))
-            if self.theme.style.lookup("Quiz.TRadiobutton", "wraplength") != width:
-                self.theme.style.configure("Quiz.TRadiobutton", wraplength=width)
-        body.bind("<Configure>", wrap_options, add="+")
+            self.option_texts.append(text)
 
         wrapped_label(body, theme, text="作答结果与解析", style=SECTION).grid(
             row=7, column=0, sticky="ew", pady=px((SPACE.lg, SPACE.sm)))
-        self.feedback_label = wrapped_label(body, theme, textvariable=controller.feedback)
+        self.feedback_label = ReadOnlyText(body, theme, textvariable=controller.feedback)
         self.feedback_label.grid(row=8, column=0, sticky="ew", pady=px((0, SPACE.lg)))
 
         # -- fixed footer -----------------------------------------------------
         footer = self.footer = ttk.Frame(self)
         footer.grid(row=1, column=0, sticky="ew", pady=px((SPACE.md, 0)))
         footer.columnconfigure(0, weight=1)
-        self.keyboard_hint = wrapped_label(footer, theme, text="A–D 选择 · Ctrl+Enter 提交 · 下一题继续", style=MUTED)
+        self.keyboard_hint = wrapped_label(footer, theme, text="A–D 选择 · Ctrl+Enter 提交 · 正文 Ctrl+A 全选、Ctrl+C 复制；选中文本时不切换选项", style=MUTED)
         self.keyboard_hint.grid(row=0, column=0, sticky="ew")
         actions = FlowActions(footer, theme)
         actions.grid(row=1, column=0, sticky="ew", pady=px((SPACE.sm, 0)))
         self.submit_button = actions.add(ttk.Button(actions, text="提交答案", style=PRIMARY, command=self._submit))
         self.dismiss_button = actions.add(ttk.Button(actions, text="下一题 / 关闭", command=self._dismiss))
+        self.copy_question_button = actions.add(ttk.Button(actions, text="复制题目（含选项）", command=self._copy_question))
+        self.copy_solution_button = actions.add(ttk.Button(actions, text="复制答案与解析", command=self._copy_solution))
         wrapped_label(footer, theme, textvariable=controller.answer_hint, style=MUTED).grid(
             row=2, column=0, sticky="ew")
 
@@ -194,6 +196,9 @@ class PracticePage(ttk.Frame):
                     return None
                 if not self._on_reading_surface(event):
                     return None
+                focus = self.focus_get()
+                if isinstance(focus, ReadOnlyText) and focus.tag_ranges("sel"):
+                    return None
                 if self.controller.submit_state not in ("submitting", "finished"):
                     self.controller.choose(selected)
                     self.view.reveal(self.option_buttons["ABCD".index(selected)])
@@ -221,6 +226,8 @@ class PracticePage(ttk.Frame):
             return False
         widget = self.focus_get()
         if widget is self or widget is self.view.canvas or widget is self.view:
+            return True
+        if widget in [self.question_label, self.feedback_label, *self.option_texts]:
             return True
         return widget in self.option_buttons or widget is self.submit_button
 
@@ -279,18 +286,18 @@ class PracticePage(ttk.Frame):
         self._rendered_quiz_id = controller.quiz_id
         if quiz is None:
             self.question_heading.configure(text="当前题目")
-            self.question_label.configure(text="当前没有待答题。")
+            self.question_label.set_text("当前没有待答题。")
             self.project.set("")
-            for button in self.option_buttons:
-                button.configure(text="")
+            for button, text in zip(self.option_buttons, self.option_texts):
+                text.set_text("")
                 button.state(["disabled"])
         else:
             self.question_heading.configure(text="当前题目" + ("（历史重练）" if controller.manual else ""))
-            self.question_label.configure(text=quiz.get("question") or "")
+            self.question_label.set_text(quiz.get("question") or "")
             self.project.set(quiz.get("project_root") or "当前练习未提供项目路径")
             options = quiz.get("options") or {}
-            for button, letter in zip(self.option_buttons, "ABCD"):
-                button.configure(text=f"{letter}. {options.get(letter, '')}")
+            for text, letter in zip(self.option_texts, "ABCD"):
+                text.set_text(options.get(letter, ""))
         self._sync_controls()
         return "break"
 
@@ -303,6 +310,8 @@ class PracticePage(ttk.Frame):
         switching = controller.entering_quiz_id is not None
         finished = state == "finished"
         has_current = controller.current is not None
+        self.copy_question_button.state(["!disabled"] if has_current else ["disabled"])
+        self.copy_solution_button.state(["!disabled"] if self._solution_visible() else ["disabled"])
         if has_current:
             self.footer.grid()
         else:
@@ -320,6 +329,22 @@ class PracticePage(ttk.Frame):
 
     def _submit(self):
         self.controller.submit()
+
+    def _solution_visible(self):
+        controller = self.controller
+        return (not self.closed and controller.current is not None and controller.submit_state == "finished"
+                and bool(controller.grade and controller.grade.get("ok")))
+
+    def _copy_question(self):
+        quiz = self.controller.current
+        if not self.closed and quiz:
+            copy_text(self, question_text(quiz.get("question"), quiz.get("options") or {}))
+
+    def _copy_solution(self):
+        # Guard the callback itself, including failed/expired and repractice states.
+        if self._solution_visible():
+            grade = self.controller.grade
+            copy_text(self, solution_text(grade.get("correct_answer"), grade.get("analysis")))
 
     def _dismiss(self):
         self.controller.dismiss()

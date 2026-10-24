@@ -19,6 +19,7 @@ class Palette:
     selection: str = "#E8EFFD"
     sidebar: str = "#EEF2F8"
     danger: str = "#B42318"
+    success: str = "#166534"
     danger_hover: str = "#912018"
     disabled: str = "#E4E9F0"
     disabled_text: str = "#667085"

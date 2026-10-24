@@ -46,6 +46,7 @@ var
   WaitChecking, WaitSucceeded: Boolean;
   PreservedLinks: array of TPreservedLink;
   LinkBackups: array of TPreservedLink;
+  CleanupMutex: Integer;
 
 function OpenFileW(Name: String; Access, Sharing, Security, Creation, Flags, Template: Cardinal): Integer;
   external 'CreateFileW@kernel32.dll stdcall';
@@ -59,6 +60,8 @@ function WriteByte(Handle: Integer; Buffer: AnsiString; Count: Cardinal; var Wri
   external 'WriteFile@kernel32.dll stdcall';
 function FileSizeLow(Handle: Integer; High: Cardinal): Cardinal;
   external 'GetFileSize@kernel32.dll stdcall';
+function CreateCleanupMutex(Security: Integer; InitialOwner: Boolean; Name: String): Integer;
+  external 'CreateMutexW@kernel32.dll stdcall';
 function SetWaitTimer(Window: HWND; ID, Interval: Cardinal; Callback: LongWord): Cardinal;
   external 'SetTimer@user32.dll stdcall';
 function KillWaitTimer(Window: HWND; ID: Cardinal): Boolean;
@@ -86,10 +89,10 @@ end;
 
 function RetainedDataDescription: String;
 begin
-  Result := '个人配置、题库、学习记录和日志将保留在：' + #13#10 + DefaultDataRoot;
+  Result := '主动卸载将清除受管题库、学习记录、配置、日志和本机 API 凭据：' + #13#10 + DefaultDataRoot;
   if (GetEnv('BAGU_USER_DATA_DIR') <> '') and (CompareText(GetEnv('BAGU_USER_DATA_DIR'), DefaultDataRoot) <> 0) then
-    Result := Result + #13#10 + '显式数据目录也保留：' + GetEnv('BAGU_USER_DATA_DIR');
-  Result := Result + #13#10 + 'Windows 凭据管理器中的 API Key 和自定义数据库不会删除。';
+    Result := Result + #13#10 + '还将核对显式数据目录：' + GetEnv('BAGU_USER_DATA_DIR');
+  Result := Result + #13#10 + '升级/修复保留数据；本机清除不代表吊销服务商后台 Key。失败保留卸载入口以便重试。';
 end;
 
 function Normalize(Path: String): String;
@@ -504,6 +507,7 @@ begin
 end;
 
 function InitializeUninstall: Boolean;
+var CleanupExit: Integer; CleanupArguments: String;
 begin
   Result := NoReparse(ExpandConstant('{app}'));
   if Result then begin
@@ -516,7 +520,21 @@ begin
     if not UninstallSilent then
       SuppressibleMsgBox('程序仍在运行、文件被占用或清单不安全。未删除程序；请正常退出后重试。', mbError, MB_OK, IDOK);
   end else begin
-    if not UninstallSilent then SuppressibleMsgBox(RetainedDataDescription, mbInformation, MB_OK, IDOK);
+    #ifndef LifecycleTestRoot
+    { Hold a mutex outside the data directory while removing owner/build locks. }
+    CleanupMutex := CreateCleanupMutex(0, True, 'Local\BaguTrainer.Maintenance');
+    if CleanupMutex = 0 then begin Result := False; ReleaseMaintenanceLocks; exit; end;
+    ReleaseMaintenanceLocks;
+    { Never run from Setup/upgrade: only the explicit uninstaller enters here.
+      A nonzero result aborts before program files and retry tool are removed. }
+    CleanupArguments := '--maintenance-held';
+    if UninstallSilent then CleanupArguments := CleanupArguments + ' --confirmed';
+    Result := Exec(ExpandConstant('{app}\BaguCleanup.exe'), CleanupArguments,
+      ExpandConstant('{app}'), SW_SHOWNORMAL, ewWaitUntilTerminated, CleanupExit);
+    if Result then Result := CleanupExit = 0;
+    if not Result and not UninstallSilent then
+      SuppressibleMsgBox('完整清理未完成或已取消。程序和卸载入口保留，请解除残留占用后重试。', mbError, MB_OK, IDOK);
+    #endif
   end;
 end;
 
@@ -550,4 +568,5 @@ procedure DeinitializeUninstall;
 begin
   RestoreForeignShortcuts;
   ReleaseMaintenanceLocks;
+  if CleanupMutex <> 0 then begin CloseFileHandle(CleanupMutex); CleanupMutex := 0; end;
 end;

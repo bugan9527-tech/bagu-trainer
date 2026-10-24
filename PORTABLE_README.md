@@ -1,3 +1,5 @@
+> 0.4.0 当前行为：启动直接进入唯一正式工作台；准备在原侧栏页完成。主动完整卸载清除受管数据和本机凭据，升级/修复保留数据。以下早期验收记录中的旧向导或卸载保留语义不适用于新版本，当前流程见 [FIRST_USE.md](FIRST_USE.md)、[STARTUP.md](STARTUP.md) 和 [FEATURE_DELIVERY.md](FEATURE_DELIVERY.md)。
+
 # AI 八股训练器 · Windows x64 便携版
 
 将整个压缩包解压到任意文件夹，双击 `BaguTrainer.exe`。

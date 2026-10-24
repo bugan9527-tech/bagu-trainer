@@ -77,7 +77,7 @@ AllowUNCPath=no
 Name: "chinesesimplified"; MessagesFile: "languages\ChineseSimplified.isl"
 
 [Messages]
-WelcomeLabel2=即将安装 [name/ver]。%n%n本程序仅为当前用户安装，无需管理员权限。%n%n升级和卸载将保留个人配置、题库、学习记录和 Windows 凭据。继续前请先正常退出已运行的训练器。
+WelcomeLabel2=即将安装 [name/ver]。%n%n本程序仅为当前用户安装，无需管理员权限。%n%n升级和修复安装保留个人数据。主动卸载将清除受管题库、学习记录、配置及本机 API 凭据。继续前请先正常退出训练器。
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: unchecked

@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from . import config, secrets
 from .bank_storage import atomic_json
+from .model_http import http_error_message, open_model_request
 
 
 class SetupError(Exception):
@@ -61,12 +62,13 @@ def read_state():
 
 
 def begin():
-    state = read_state()
-    if not state:
-        try:
-            atomic_json(state_path(), {"schema_version": 1})
-        except OSError as error:
-            raise SetupError("state", "无法保存向导进度，请检查 data 目录的写入权限后重试。") from error
+    with config.config_transaction():
+        state = read_state()
+        if not state:
+            try:
+                atomic_json(state_path(), {"schema_version": 1})
+            except OSError as error:
+                raise SetupError("state", "无法保存向导进度，请检查 data 目录的写入权限后重试。") from error
 
 
 def validate_settings(base_url, model, api_key, timeout_sec=15):
@@ -127,12 +129,6 @@ def saved_model_verified(configuration=None):
         return False
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        # Authorization must never be forwarded to a redirect target.
-        return None
-
-
 def test_connection(settings, *, cancel=None, opener=None):
     """One explicit, bounded chat request; response content is never displayed/logged."""
     settings = validate_settings(settings.base_url, settings.model, settings.api_key, settings.timeout_sec)
@@ -148,7 +144,7 @@ def test_connection(settings, *, cancel=None, opener=None):
         data=json.dumps({"model": settings.model, "max_tokens": 8,
             "messages": [{"role": "user", "content": "请回复 OK"}]}).encode("utf-8"),
         headers={"Content-Type": "application/json", "Authorization": "Bearer " + settings.api_key})
-    opener = opener or urllib.request.build_opener(_NoRedirect()).open
+    opener = opener or open_model_request
     try:
         with opener(request, timeout=settings.timeout_sec) as response:
             parts, size = [], 0
@@ -172,12 +168,11 @@ def test_connection(settings, *, cancel=None, opener=None):
         return VerifiedModel(settings, _receipt(settings))
     except urllib.error.HTTPError as error:
         error.close()
-        messages = {401: "Key 无效或未授权，请核对 Key 后重试。", 403: "接口拒绝访问，请检查模型权限。",
-                    404: "接口或模型不存在，请核对基础地址和模型名称。",
-                    429: "请求受限，请检查额度或稍后重试。"}
-        raise SetupError("http", f"HTTP {error.code}：" + messages.get(error.code, "接口暂不可用，请稍后重试；若为重定向，请填写最终基础地址。")) from None
-    except (TimeoutError, urllib.error.URLError):
+        raise SetupError("http", http_error_message(error.code)) from None
+    except (TimeoutError, urllib.error.URLError) as error:
         check()
+        if isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError):
+            raise SetupError("timeout", "连接测试超时，请检查网络、代理或增加超时后重试。") from None
         raise SetupError("network", "连接失败或超时，请检查基础地址、网络和代理后重试。") from None
     except (ValueError, UnicodeError, TypeError):
         raise SetupError("response", "接口响应不是有效的聊天 JSON，请核对基础地址和模型后重试。") from None
@@ -196,22 +191,28 @@ def save_verified_model(verified):
     if environment and environment != settings.api_key:
         raise SetupError("changed", "生效的环境变量 Key 已变化，请重新测试连接。")
     try:
-        configuration = config.read_user_config()
+        config.read_user_config()
         # Establish the gate before writing model config, so an interrupted
         # receipt write cannot make a first-use save look like a legacy install.
         begin()
-        state = read_state()
+        read_state()
     except (OSError, ValueError):
         raise SetupError("config", "无法读取原配置，请修复 config.json 的格式或权限后再保存。") from None
     if secrets.save_api_key(settings.api_key) != "keyring" or not secrets._keyring_matches(settings.api_key):
         raise SetupError("credentials", "无法确认 Key 已存入 Windows 凭据管理器；请检查 keyring 和系统凭据服务，再点击保存重试。")
-    configuration["llm"] = settings.public()
-    state["model_verification"] = verified.receipt
-    try:
-        config._write_config_atomic(configuration)
-        atomic_json(state_path(), state)
-    except OSError:
-        raise SetupError("save", "Key 已在凭据管理器中，但配置或进度保存失败；请检查文件写入权限后再次保存。") from None
+    with config.config_transaction():
+        try:
+            configuration = config.read_user_config()
+            state = read_state()
+        except (OSError, ValueError):
+            raise SetupError("config", "无法读取原配置，请修复 config.json 的格式或权限后再保存。") from None
+        configuration["llm"] = settings.public()
+        state["model_verification"] = verified.receipt
+        try:
+            config._write_config_atomic(configuration)
+            atomic_json(state_path(), state)
+        except OSError:
+            raise SetupError("save", "Key 已在凭据管理器中，但配置或进度保存失败；请检查文件写入权限后再次保存。") from None
 
 
 @dataclass(frozen=True)

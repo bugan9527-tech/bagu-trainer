@@ -1,3 +1,5 @@
+> 0.4.0 当前行为：启动直接进入唯一正式工作台；准备在原侧栏页完成。主动完整卸载清除受管数据和本机凭据，升级/修复保留数据。以下早期验收记录中的旧向导或卸载保留语义不适用于新版本，当前流程见 [FIRST_USE.md](FIRST_USE.md)、[STARTUP.md](STARTUP.md) 和 [FEATURE_DELIVERY.md](FEATURE_DELIVERY.md)。
+
 # AI 八股训练器
 
 把日常代码修改变成与当前任务相关的面试练习：监听选定项目的代码变化，匹配题库知识点，
@@ -12,7 +14,7 @@
 
 **普通用户推荐 Windows x64 安装版 `Setup.exe`**：中文向导、当前用户安装，默认无需管理员权限，
 可选桌面快捷方式。默认程序目录为 `%LOCALAPPDATA%\Programs\BaguTrainer`，个人数据继续在
-`%LOCALAPPDATA%\BaguTrainer`；升级和卸载保留数据与 Windows 凭据。
+`%LOCALAPPDATA%\BaguTrainer`；升级和修复保留数据；主动完整卸载清除受管数据与本机 Windows 凭据。
 无需安装 Python、Git、PowerShell 或配置 MCP。安装、升级及卸载见 [安装器说明](WINDOWS_INSTALLER.md)。
 
 **便携 ZIP 是另一个下载选项**：完整解压后双击 `BaguTrainer.exe`，保留旁边的 `_internal`。
@@ -34,7 +36,7 @@
 再从开始菜单启动。也可选择 `BaguTrainer-<版本>-windows-x64.zip` 及其校验文件。
 不要把 GitHub 自动附带的 Source code ZIP 当作桌面应用。
 草稿仅仓库有权限的用户可见；正式发布前请从草稿 Assets 下载，公开固定链接此时尚不可用。
-首次向导依次完成来源选择及构建、模型连接测试和保存、监听项目选择。无需配置 MCP。
+首次启动直接显示工作台，在题库管理、模型配置、监听项目侧栏页完成准备。无需配置 MCP。
 配置、题库和学习记录位于 `%LOCALAPPDATA%\BaguTrainer\`，升级时保留该目录。
 
 维护者可在 Actions 运行 **Windows x64 installer and portable draft**，填写与源码版本一致的 tag。

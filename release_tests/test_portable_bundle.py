@@ -189,16 +189,17 @@ def test_chinese_spaces_readonly_install_singleton_and_configuration(tmp_path, m
         assert {widget["class"] for widget in ui["widgets"]} >= {"TButton", "TRadiobutton", "TCombobox", "Treeview"}
         assert Path(ui["tk_library"]).is_relative_to(installation / "_internal")
         with running(exe, env) as first:
-            status = await_state(first, "initialization")
+            status = await_state(first, "running")
             assert not status["checks"]["bank"]
-            until(first, lambda: any("首次" in title for title in window_titles(first.pid)))
+            until(first, lambda: "AI 八股训练器" in window_titles(first.pid))
             credentials = (user / "runtime" / "bridge-credentials.json").read_bytes()
             invoke(exe, env)
             assert (user / "runtime" / "bridge-credentials.json").read_bytes() == credentials
             assert first.poll() is None
-        # Independent frozen --configure entry must actually construct its Tk window.
+        # The legacy configure entry opens the same formal main window.
         with running(exe, env, "--configure") as settings:
-            until(settings, lambda: any("AI 接口配置" in title for title in window_titles(settings.pid)))
+            until(settings, lambda: "AI 八股训练器" in window_titles(settings.pid))
+            until(settings, lambda: desktop_instance.remote_call("_desktop_status", {}).get("page") == "model")
         assert tree_hash(installation) == before
         assert (user / "logs" / "desktop.log").is_file()
         assert env["BAGU_LLM_API_KEY"] not in (user / "logs" / "desktop.log").read_text(encoding="utf-8")
@@ -226,13 +227,31 @@ def test_native_startup_shortcut_points_to_exe(tmp_path):
     assert not shortcut.exists()
 
 
-def test_exe_migration_and_upgrade_keep_learning_history(tmp_path, monkeypatch):
+@pytest.mark.parametrize("layout", ["legacy-flat", "uuid-version"])
+def test_exe_migration_and_upgrade_keep_learning_history(tmp_path, monkeypatch, layout):
     legacy = legacy_project(tmp_path / "旧版 项目")
+    if layout == "uuid-version":
+        generation = "d" * 32
+        version = legacy / "data" / "banks" / generation
+        version.mkdir(parents=True)
+        shutil.copyfile(legacy / "data" / "questions.json", version / "questions.json")
+        (legacy / "data" / "active-bank.json").write_text(json.dumps({"generation": generation}), encoding="utf-8")
     original = tree_hash(legacy)
-    # Test the shipped ZIP itself, not only the build directory.
-    with zipfile.ZipFile(ARCHIVE) as archive:
-        archive.extractall(tmp_path / "解压 版本 一")
     first = tmp_path / "解压 版本 一" / "BaguTrainer"
+    previous = os.environ.get("BAGU_PREVIOUS_BUNDLE")
+    if previous:
+        # Opt-in local cross-version verification; copy binaries only, never an
+        # installed program or its data. The regular suite tests the shipped ZIP.
+        previous = Path(previous).resolve()
+        manifest = json.loads((previous / "BUILD_MANIFEST.json").read_text(encoding="utf-8"))
+        assert manifest["version"] != __version__
+        assert tree_hash(previous) == {**{item["path"]: item["sha256"] for item in manifest["files"]},
+                                      "BUILD_MANIFEST.json": hashlib.sha256((previous / "BUILD_MANIFEST.json").read_bytes()).hexdigest()}
+        shutil.copytree(previous, first)
+    else:
+        # Test the shipped ZIP itself, not only the build directory.
+        with zipfile.ZipFile(ARCHIVE) as archive:
+            archive.extractall(tmp_path / "解压 版本 一")
     env = environment(tmp_path)
     user = Path(env["LOCALAPPDATA"]) / "BaguTrainer"
     monkeypatch.setattr(desktop_instance, "RUNTIME", user / "runtime")
@@ -240,6 +259,10 @@ def test_exe_migration_and_upgrade_keep_learning_history(tmp_path, monkeypatch):
     invoke(first / "BaguTrainer.exe", env, "--migrate-from", legacy, "--check-package", report)
     assert_history(user / "data" / "trainer.db")
     assert_original_data_preserved(legacy, original)
+    migrated_config = (user / "config.json").read_bytes()
+    migrated_bank = {p.relative_to(user): p.read_bytes() for p in (user / "data").rglob("*.json")
+                     if p.name in {"questions.json", "active-bank.json"}}
+    assert migrated_bank
     upgraded = tmp_path / "升级 版本 二"
     shutil.copytree(BUNDLE, upgraded)
     with running(first / "BaguTrainer.exe", env) as child:
@@ -261,6 +284,8 @@ def test_exe_migration_and_upgrade_keep_learning_history(tmp_path, monkeypatch):
         assert (user / "runtime" / "bridge-credentials.json").read_bytes() == credentials
     assert_history(user / "data" / "trainer.db")
     assert_original_data_preserved(legacy, original)
+    assert (user / "config.json").read_bytes() == migrated_config
+    assert all((user / name).read_bytes() == content for name, content in migrated_bank.items())
 
 
 def assert_original_data_preserved(directory, original):

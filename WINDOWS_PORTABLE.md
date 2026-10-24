@@ -1,3 +1,5 @@
+> 0.4.0 当前行为：启动直接进入唯一正式工作台；准备在原侧栏页完成。主动完整卸载清除受管数据和本机凭据，升级/修复保留数据。以下早期验收记录中的旧向导或卸载保留语义不适用于新版本，当前流程见 [FIRST_USE.md](FIRST_USE.md)、[STARTUP.md](STARTUP.md) 和 [FEATURE_DELIVERY.md](FEATURE_DELIVERY.md)。
+
 # Windows x64 便携应用构建与验证
 
 产物为 PyInstaller **onedir**：`BaguTrainer.exe` 与 `_internal/` 必须一起解压和移动。
@@ -17,7 +19,7 @@ python -m venv .venv-build
 输出：
 
 - `dist/BaguTrainer/`：可直接启动的完整目录。
-- `dist/BaguTrainer-0.3.0-windows-x64.zip`：分发压缩包，文件名版本由 `version.py` 生成。
+- `dist/BaguTrainer-0.3.1-windows-x64.zip`：分发压缩包，文件名版本由 `version.py` 生成。
 - 同名 `.zip.sha256`：压缩包校验值。
 - 包内 `BUILD_MANIFEST.json`：架构、版本、构建依赖版本及逐文件 SHA256。
 
@@ -52,7 +54,7 @@ PR 只运行构建/测试，不获得 Release 写权限。手动运行要求文�
 依据 [GitHub 手动运行规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 
 ```powershell
-gh workflow run windows-portable.yml --ref main -f tag=v0.3.0
+gh workflow run windows-portable.yml --ref main -f tag=v0.3.1
 gh run list --workflow windows-portable.yml
 ```
 

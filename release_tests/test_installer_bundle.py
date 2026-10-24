@@ -12,7 +12,7 @@ from scripts.build_portable import audit
 
 
 def production_fixture(root):
-    for name in ("BaguTrainer.exe", "使用说明.md", "_internal/LICENSE", "_internal/THIRD_PARTY_NOTICES.txt",
+    for name in ("BaguTrainer.exe", "BaguCleanup.exe", "使用说明.md", "_internal/LICENSE", "_internal/THIRD_PARTY_NOTICES.txt",
                  "_internal/interview-banks/sources.json", "_internal/licenses/Python-LICENSE.txt",
                  "_internal/_tcl_data/init.tcl", "_internal/_tk_data/tk.tcl", "_internal/runtime.dll"):
         path = root / name

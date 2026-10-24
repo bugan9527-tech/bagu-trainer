@@ -49,6 +49,7 @@ _state = {
 # SQLite 学习闭环存储（首次使用时按 config db_path 建库，
 # 一并水合未完成/未复习的持久化状态，保证程序重启不丢失）
 _store = None
+_CONTENT_REVISION = 0
 # 薄弱知识点阈值与上限（get_learning_stats 用）
 WEAK_MASTERY = 0.6
 WEAK_LIMIT = 10
@@ -94,6 +95,26 @@ def reload_bank():
     updated_matcher = Matcher(updated)
     with _STATE_LOCK:
         kb, matcher = updated, updated_matcher
+
+
+def invalidate_content():
+    """A maintenance boundary invalidates generation results and all delivery caches."""
+    global _CONTENT_REVISION, _store
+    with _STATE_LOCK:
+        _CONTENT_REVISION += 1
+        for value in _state.values():
+            value.clear()
+        _diff_readers.clear()
+        from .concepts import _load_concept_profiles
+        from .fallback_bank import _load_fallback_cached
+        from .matcher import _tokenize_cached, _domain_profile
+        _load_concept_profiles.cache_clear()
+        _load_fallback_cached.cache_clear()
+        _tokenize_cached.cache_clear()
+        _domain_profile.cache_clear()
+        if _store is not None:
+            _store.close()
+            _store = None
 
 def _open_config_window() -> bool:
     """以独立进程弹出 AI 接口配置窗口（tkinter 在独立进程运行）"""
@@ -357,6 +378,7 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
             continue
         try:
             quiz = generator.generate(q, ctx)
+            quiz["sources"] = q.get("sources", [])
         except Exception as error:
             quiz = {"available": False, "unavailable_reason": f"出题失败（{type(error).__name__}），请检查模型配置后重试。"}
         failure = _generation_failure(quiz, require_review=True)
@@ -707,6 +729,7 @@ def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
     传入的 context 在进入 LLM 前统一脱敏（密钥/令牌自动替换为 [REDACTED]）并限制长度。
     生成失败（未配置 LLM、LLM 输出校验失败、来源正文缺失）时
     返回 ok=False 与明确原因，绝不返回无选项/无答案的题目。"""
+    revision = _CONTENT_REVISION
     q = kb.get(knowledge_point_id) or get_verified_fallback(knowledge_point_id)
     if not q:
         return {"ok": False, "note": f"知识点 {knowledge_point_id} 不存在，可先 list_knowledge_points"}
@@ -718,6 +741,7 @@ def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
     else:
         context = _collect_context("", "")["context"]
     quiz = generator.generate(q, context)
+    quiz["sources"] = q.get("sources", [])
     failure = _generation_failure(quiz, require_review=True)
     if failure:
         return {"ok": False, "knowledge_point_id": knowledge_point_id,
@@ -725,6 +749,8 @@ def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
                 "note": "不提供无法作答的题目。可在主窗口配置出题模型后重试"}
     quiz_id = uuid.uuid4().hex[:8]
     with _STATE_LOCK:
+        if revision != _CONTENT_REVISION:
+            return {"ok": False, "note": "题库内容已变化，已丢弃过期出题结果。"}
         caps = _caps()
         now = _now()
         quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
@@ -858,6 +884,8 @@ def repractice_attempt(attempt_id):
     requests and survives restarts. Persist before publishing in-memory state.
     """
     with _STATE_LOCK:
+        if getattr(kb, "explicit_empty", False):
+            return {"ok": False, "note": "当前无题库，请重新下载并构建来源后练习；历史快照仍可查看。"}
         detail = get_answer_detail(attempt_id)
         if not detail.get("ok") or not detail.get("can_retry"):
             return {"ok": False, "note": detail.get("retry_reason") or detail.get("note")}

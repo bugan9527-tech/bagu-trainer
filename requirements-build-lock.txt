@@ -1,0 +1,19 @@
+# Windows x64 / CPython 3.10.11; exact local build toolchain.
+altgraph==0.17.5
+backports.tarfile==1.2.0
+importlib_metadata==9.0.1
+jaraco.classes==3.4.0
+jaraco.context==6.1.2
+jaraco.functools==4.6.0
+keyring==25.7.0
+more-itertools==11.1.0
+packaging==26.3
+pefile==2024.8.26
+pillow==12.3.0
+pip==23.0.1
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.9
+pywin32-ctypes==0.2.3
+setuptools==65.5.0
+ttkbootstrap==1.20.4
+zipp==4.1.1

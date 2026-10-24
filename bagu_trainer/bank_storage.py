@@ -3,9 +3,27 @@ import json
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 
 from . import config
+
+
+def replace_with_sharing_wait(source, destination, control=None):
+    """Windows readers may briefly deny rename; never broaden the operation."""
+    deadline = time.monotonic() + 6
+    while True:
+        try:
+            os.replace(source, destination)
+            return
+        except OSError as error:
+            remaining = deadline - time.monotonic()
+            if os.name != "nt" or getattr(error, "winerror", None) not in {5, 32, 33} or remaining <= 0:
+                raise
+            if control is not None:
+                control.wait(min(.1, remaining))
+            else:
+                time.sleep(min(.1, remaining))
 
 
 def active_bank_dir(project_root=None):
@@ -35,7 +53,7 @@ def atomic_json(path, value):
             json.dump(value, handle, ensure_ascii=False, indent=2)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        replace_with_sharing_wait(temporary, path)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)

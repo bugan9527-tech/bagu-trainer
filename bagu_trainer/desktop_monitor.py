@@ -101,6 +101,7 @@ class ActivityDiffReader(DiffReader):
 class DesktopMonitor:
     def __init__(self, engine, quiet_seconds=15, clock=time.monotonic):
         self.engine = engine
+        self.capabilities_ready = engine is not None
         self.quiet_seconds = quiet_seconds
         self.clock = clock
         self.observed = {}
@@ -115,6 +116,12 @@ class DesktopMonitor:
         self.ui_state = {"window_state": "starting"}
 
     def poll(self):
+        if self.engine is None or not self.capabilities_ready:
+            return {"state": "not_ready", "projects": 0}
+        if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
+            self.waiting.clear()
+            self.failed_generations.clear()
+            return {"state": "bank_empty", "projects": 0}
         if self.paused:
             return {"state": "paused", "projects": 0}
         engine = self.engine
@@ -207,6 +214,8 @@ class DesktopMonitor:
 
     def retry_generation(self):
         """Explicit retry of failed items; preserve scope, dedupe and cooldown."""
+        if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
+            return {"state": "bank_empty", "projects": 0}
         if self.paused:
             return {"state": "paused", "projects": 0}
         engine = self.engine
@@ -221,6 +230,8 @@ class DesktopMonitor:
         return result
 
     def take_quiz(self):
+        if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
+            return None
         """Only one automatic popup at a time; answered/delivered items are skipped."""
         if self.paused or self.active or self.delivery_paused.is_set():
             return None
@@ -239,12 +250,16 @@ class DesktopMonitor:
         return None
 
     def list_pending(self):
+        if self.engine is None or not self.capabilities_ready:
+            return []
         """Read-only pending list (待答列表): ready + delivered, unanswered, in
         project scope (or manual), oldest first.  Viewing the list must NOT mark
         anything delivered — it only reads the current state after cleanup.
         Monitoring/automatic-delivery pauses do not hide existing practice.
         Expiry and dedupe/cooldown rules are enforced by _cleanup_locked."""
         engine = self.engine
+        if getattr(getattr(engine, "kb", None), "explicit_empty", False):
+            return []
         with engine._STATE_LOCK:
             engine._get_store_locked()
             engine._cleanup_locked(engine._caps())
@@ -272,6 +287,8 @@ class DesktopMonitor:
         ready 题交付；返回公开题目，题不存在/过期/越权时返回 None。
         主动进入不受监听暂停或自动推送暂停限制；自动交付由 take_quiz 控制。"""
         engine = self.engine
+        if getattr(getattr(engine, "kb", None), "explicit_empty", False):
+            return None
         with engine._STATE_LOCK:
             engine._get_store_locked()
             engine._cleanup_locked(engine._caps())
@@ -293,38 +310,64 @@ class DesktopMonitor:
         return None
 
     def resume_quiz(self):
+        """Explicit practice: resume pending work, then replay a due AI snapshot.
+
+        Unlike automatic delivery, this remains available while monitoring or
+        popups are paused. Never scan project context or generate a new quiz.
+        """
         engine = self.engine
+        if getattr(getattr(engine, "kb", None), "explicit_empty", False):
+            return None
         with engine._STATE_LOCK:
             engine._get_store_locked()
-            engine._cleanup_locked(engine._caps())
+            caps = engine._caps()
+            engine._cleanup_locked(caps)
             roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
-            scopes = {engine._normalize_project_root(r) for r in roots}
-            for pending in engine._state["pending"]:
-                manual = engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review")
-                if pending["status"] == "delivered" and (pending["project_root"] in scopes or manual):
+            roots = list(dict.fromkeys(engine._normalize_project_root(r) for r in roots))
+            scopes = set(roots)
+            pending_items = sorted(engine._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"]))
+            for status in ("delivered", "ready"):
+                for pending in pending_items:
+                    manual = engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review")
+                    if pending["status"] != status or (pending["project_root"] not in scopes and not manual):
+                        continue
+                    if status == "ready":
+                        engine._deliver_pending_locked(pending)
                     self.active = pending["quiz_id"]
                     return {**engine._public_pending(pending), **({"manual_review": True} if manual else {})}
+            for root in roots:
+                _, error = engine._resolve_project_root(root)
+                if error:
+                    continue
+                review = engine._deliver_due_review_locked(root, prefer=None, only_prefer=False, caps=caps)
+                if review:
+                    self.active = review["quiz_id"]
+                    return review
         return None
 
     def window_command(self, name, arguments):
         if name == "_desktop_status":
             return {"ok": True, **self.ui_state}
-        if name == "_show_dashboard":
+        if name in {"_show_dashboard", "_navigate"}:
+            page = arguments.get("page", "dashboard") if name == "_navigate" else "dashboard"
+            if page not in {"dashboard", "practice", "history", "projects", "bank", "model", "settings"}:
+                return {"ok": False}
             if self.ui_post:
-                self.ui_post(("show", None))
+                self.ui_post(("show", page))
             return {"ok": self.ui_post is not None}
         return {"ok": False, "note": "不支持的窗口操作"}
 
 
 def add_project(path):
     """Explicit project selection from the desktop's folder picker."""
-    from .config import load_config, _write_config_atomic
+    from . import config
     resolved = Path(path).resolve(strict=True)
     if not resolved.is_dir():
         raise ValueError("请选择项目文件夹")
-    configuration = load_config()
-    roots = configuration.get("project_roots") or []
-    normalized = {str(Path(r).resolve()).casefold() for r in roots}
-    if str(resolved).casefold() not in normalized:
-        configuration["project_roots"] = [*roots, str(resolved)]
-        _write_config_atomic(configuration)
+    with config.config_transaction():
+        configuration = config.read_user_config()
+        roots = configuration.get("project_roots") or []
+        normalized = {str(Path(r).resolve()).casefold() for r in roots}
+        if str(resolved).casefold() not in normalized:
+            configuration["project_roots"] = [*roots, str(resolved)]
+            config._write_config_atomic(configuration)

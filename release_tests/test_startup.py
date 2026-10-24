@@ -209,7 +209,7 @@ def test_retry_rechecks_files_instead_of_trusting_previous_success(install):
 def test_initialization_window_commands_before_engine_load(install):
     coordinator = startup.StartupCoordinator()
     assert coordinator.window_command("_show_dashboard", {}) == {"ok": True}
-    assert coordinator.events.get_nowait() == ("show", None)
+    assert coordinator.events.get_nowait() == ("show", "dashboard")
     status = coordinator.window_command("_desktop_status", {})
     assert status["startup_state"] == "checking"
     assert not coordinator.window_command("submit_answer", {})["ok"]
@@ -348,10 +348,11 @@ def test_entrypoint_first_run_failure_repair_restart_and_single_instance(tmp_pat
     probe = r'''
 import json
 import sys
+import time
 from pathlib import Path
 project = Path(sys.argv[1])
 sys.path.insert(0, str(project))
-from bagu_trainer import desktop, desktop_instance, startup, initialization
+from bagu_trainer import desktop, desktop_instance, startup
 assert 'bagu_trainer.engine' not in sys.modules
 loads, windows, failures = [], [], []
 original_init = startup.StartupCoordinator.__init__
@@ -365,77 +366,65 @@ def coordinator_init(self):
         return loader()
     self.engine_loader = load
 startup.StartupCoordinator.__init__ = coordinator_init
-ui_init = initialization.InitializationApp.__init__
-def init_setup(self, coordinator):
-    ui_init(self, coordinator)
-    self.root.withdraw()
-    windows.append('setup')
-    def step(callback):
-        if self.busy:
-            self.root.after(20, lambda: step(callback))
-        else:
-            try:
-                callback()
-            except Exception as error:
-                failures.append(repr(error))
-                self._close()
-    def after_partial():
-        assert not coordinator.report.ready
-        assert 'bagu_trainer.engine' not in sys.modules
-        from bagu_trainer import onboarding
-        from bagu_trainer.bank_storage import atomic_json
-        settings = onboarding.validate_settings('https://example.invalid/v1', 'test', 'test-key')
-        atomic_json(onboarding.state_path(), {'schema_version': 1, 'model_verification': onboarding._receipt(settings)})
-        startup.set_projects([project])
-        self._retry()
-        self.root.after(20, lambda: step(after_failure))
-    def after_failure():
-        assert coordinator.state == 'failed'
-        assert 'RuntimeError' in self.status.get()
-        assert 'bagu_trainer.engine' not in sys.modules
-        self._retry()
-    def first():
-        assert 'bagu_trainer.engine' not in sys.modules
-        status = desktop_instance.remote_call('_desktop_status', {})
-        assert status['startup_state'] == 'initialization'
-        assert desktop.main([]) == 0  # Duplicate startup activates this setup.
-        assert not loads and windows == ['setup']
-        (project / 'data' / 'questions.json').write_text(json.dumps([{
-            'id': 'test-1', 'knowledge_point': '缓存', 'question': '缓存失效？',
-            'tags': ['cache'], 'keywords': ['redis'], 'difficulty': 'easy',
-        }]), encoding='utf-8')
-        (project / 'config.json').write_text(json.dumps({
-            'project_roots': [], 'db_path': 'data/learning.db',
-            'llm': {'base_url': 'https://example.invalid/v1', 'model': 'test'},
-        }), encoding='utf-8')
-        self._retry()
-        self.root.after(20, lambda: step(after_partial))
-    self.root.after(30, lambda: step(first))
-    self.root.after(10000, lambda: (failures.append('setup timeout'), self.root.destroy()))
-initialization.InitializationApp.__init__ = init_setup
-def run_dashboard(self):
+original_app = desktop.DesktopApp.__init__
+def app_init(self, *args, **kwargs):
+    original_app(self, *args, **kwargs)
     windows.append('main')
-    self.root.withdraw()
-    status = desktop_instance.remote_call('_desktop_status', {})
-    assert status['startup_state'] == 'running'
-    assert desktop.main([]) == 0  # Duplicate does not load another engine.
-    self._drain()
-    assert self.root.state() == 'normal'
-    self.stop.set()
-    self.root.destroy()
-desktop.DesktopApp.run = run_dashboard
+    stage = [0]
+    deadline = time.monotonic() + 10
+    def step():
+        try:
+            assert time.monotonic() < deadline, self.status.get()
+            c = self.coordinator
+            if not c.report.checks:
+                self.root.after(20, step)
+                return
+            assert desktop.main([]) == 0
+            assert len(windows) == (1 if len(loads) < 2 else len(windows))
+            status = desktop_instance.remote_call('_desktop_status', {})
+            assert status['startup_state'] == 'running'
+            if stage[0] == 0 and len(windows) == 1:
+                assert not self.ready and not loads
+                (project / 'data').mkdir(exist_ok=True)
+                (project / 'data/questions.json').write_text(json.dumps([{
+                    'id':'test-1', 'knowledge_point':'cache', 'question':'cache?',
+                    'tags':['cache'], 'keywords':['redis'], 'difficulty':'easy'}]))
+                (project / 'config.json').write_text(json.dumps({
+                    'project_roots':[str(project)], 'db_path':'data/learning.db',
+                    'llm':{'base_url':'https://example.invalid/v1','model':'test'}}))
+                self.jobs.put(('prepare', None))
+                stage[0] = 1
+            elif stage[0] == 1 and c.report.error:
+                if 'RuntimeError' not in self.readiness_text.get():
+                    self.root.after(20, step)
+                    return
+                assert 'RuntimeError' in self.readiness_text.get()
+                assert 'bagu_trainer.engine' not in sys.modules
+                self.jobs.put(('prepare', None))
+                stage[0] = 2
+            elif (stage[0] == 2 or len(windows) > 1) and self.ready:
+                assert self.monitor.engine is not None
+                assert desktop.main(['--configure']) == 0
+                self.events.put(('show','model'))
+                self.root.after(250, self._close)
+                return
+            self.root.after(20, step)
+        except Exception as error:
+            failures.append(repr(error))
+            self._close()
+    self.root.after(50, step)
+desktop.DesktopApp.__init__ = app_init
 assert desktop.main(['--background']) == 0
 assert not failures, failures
-assert windows == ['setup', 'main'], windows
-assert not (project / 'runtime' / 'bridge-credentials.json').exists()
+assert windows == ['main'] and len(loads) == 2
+assert not (project / 'runtime/bridge-credentials.json').exists()
 saved = (project / 'config.json').read_bytes()
-bank = (project / 'data' / 'questions.json').read_bytes()
-assert desktop.main([]) == 0  # A new launch goes straight to main.
-assert windows == ['setup', 'main', 'main'], windows
-assert len(loads) == 3
+bank = (project / 'data/questions.json').read_bytes()
+assert desktop.main([]) == 0
+assert windows == ['main','main'] and len(loads) == 3
 assert (project / 'config.json').read_bytes() == saved
-assert (project / 'data' / 'questions.json').read_bytes() == bank
-assert not (project / 'data' / 'learning.db').exists()
+assert (project / 'data/questions.json').read_bytes() == bank
+assert not failures, failures
 print('first run, retry, restart and singleton passed')
 '''
     environment = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1",
@@ -467,7 +456,7 @@ def test_entrypoint_releases_owner_when_setup_closes_or_startup_raises(monkeypat
     class CancelledStartup:
         def window_command(self, *_):
             return {"ok": True}
-        def run(self, background):
+        def run(self, background, page="dashboard"):
             calls.append("setup closed")
     monkeypatch.setattr(desktop.os, "name", "nt")
     monkeypatch.setattr(desktop_instance, "OwnerLock", Owner)
@@ -475,7 +464,7 @@ def test_entrypoint_releases_owner_when_setup_closes_or_startup_raises(monkeypat
     monkeypatch.setattr(startup, "StartupCoordinator", CancelledStartup)
     assert desktop.main([]) == 0
     assert calls == ["lock", "broker", "setup closed", "unlock"]
-    def fail(_self, _background):
+    def fail(_self, _background, page="dashboard"):
         raise RuntimeError("startup failed")
     monkeypatch.setattr(CancelledStartup, "run", fail)
     with pytest.raises(RuntimeError):

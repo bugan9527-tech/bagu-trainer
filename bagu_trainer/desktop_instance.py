@@ -8,11 +8,22 @@ import secrets
 import threading
 import uuid
 from pathlib import Path
+from multiprocessing import AuthenticationError
 from multiprocessing.connection import Client, Listener
 from .config import USER_DATA_ROOT
 
-RUNTIME = Path(USER_DATA_ROOT) / "runtime"
-WINDOW_COMMANDS = frozenset({"_show_dashboard", "_desktop_status"})
+def runtime_directory():
+    # Production ownership is independent of EXE location and data profile.
+    # Test identities must be explicit, never inferred from a custom data path.
+    import hashlib
+    identity = os.environ.get("BAGU_TEST_INSTANCE", "")
+    if identity:
+        return Path(USER_DATA_ROOT) / "runtime"
+    return Path(os.environ.get("LOCALAPPDATA", str(Path(USER_DATA_ROOT).parent))) / "BaguTrainer" / "runtime"
+
+
+RUNTIME = runtime_directory()
+WINDOW_COMMANDS = frozenset({"_show_dashboard", "_desktop_status", "_navigate"})
 
 
 class OwnerLock:
@@ -86,8 +97,13 @@ class WindowBroker:
         while not self.closed:
             try:
                 connection = self.listener.accept()
-            except (OSError, EOFError):
+            except (AuthenticationError, OSError, EOFError):
+                # Listener.accept authenticates before returning a connection.
+                # Reject this client without stopping the window service.
                 continue
+            if self.closed:
+                connection.close()
+                break
             threading.Thread(target=self._handle, args=(connection,), daemon=True).start()
 
     def _handle(self, connection):
@@ -109,6 +125,19 @@ class WindowBroker:
 
     def close(self):
         self.closed = True
+        # PipeListener.close only closes queued handles, not the handle already
+        # blocked in accept(). An immediately dropped, non-waiting transport
+        # connection makes the normal handshake fail; it cannot reach a handler.
+        # Listener authentication and the command allowlist stay unchanged.
+        import _winapi
+        try:
+            handle = _winapi.CreateFile(
+                self.address, _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
+                0, _winapi.NULL, _winapi.OPEN_EXISTING,
+                _winapi.FILE_FLAG_OVERLAPPED, _winapi.NULL)
+            _winapi.CloseHandle(handle)
+        except OSError:
+            pass  # Already closed/busy: never wait for a peer during shutdown.
         self.listener.close()
         self.endpoint.unlink(missing_ok=True)
         self.owner.close()
