@@ -12,6 +12,7 @@ from .bank_build.control import BuildCancelled, BuildControl, BuildError, BuildT
 from .bank_build.downloads import ArchiveLimits, safe_extract
 from .bank_build.source_cache import cache_directory, load_archive
 from .bank_build.service import _build_lock
+from .bank_build.source_snapshot import SnapshotVerifier
 from .bank_storage import active_bank_dir
 
 
@@ -46,6 +47,7 @@ class SourceInventory:
     bytes_by_category: dict = field(default_factory=lambda: dict.fromkeys(CATEGORIES, 0))
     reason: str = ""
     remote_bytes: int | None = None  # A local archive is not a remote size estimate.
+    downloaded: bool = False
 
     @property
     def local_bytes(self):
@@ -67,6 +69,7 @@ class BankInventory:
         self.root = Path(project_root).resolve()
         self.limits = limits or ArchiveLimits()
         self._verified = {}
+        self._snapshots = SnapshotVerifier()
 
     def _verify(self, source, directory, control):
         if directory.parent.is_symlink() or (directory.parent.exists() and getattr(directory.parent.lstat(), "st_file_attributes", 0) & 0x400):
@@ -227,6 +230,27 @@ class BankInventory:
             walk(directory, "cache", owner)
         for directory in children(data / "banks"):
             walk(directory, "current" if directory == current else "history", mapping=owner_map(directory), snapshot=True)
+            # Only published UUID generations count, never .bank-builds staging.
+            if not re.fullmatch(r"[0-9a-f]{32}|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", directory.name):
+                continue
+            try:
+                entries = _json(directory / "sources.json")["sources"]
+            except (OSError, ValueError, TypeError, KeyError):
+                continue
+            if not isinstance(entries, list):
+                continue
+            for entry in entries:
+                try:
+                    if not isinstance(entry, dict):
+                        continue
+                    repo = known.get(str(entry.get("repository", "")).casefold())
+                    commit = entry.get("commit")
+                    if (repo and not result.sources[repo].downloaded
+                            and isinstance(commit, str) and commit.lower() == sources[repo].commit.lower()
+                            and self._snapshots.verify(directory, entry, control)):
+                        result.sources[repo].downloaded = True
+                except (OSError, ValueError, TypeError, KeyError, AttributeError):
+                    continue
         live = generation if re.fullmatch(r"[0-9a-f]{32}", generation) else None
         for directory in children(data / ".bank-builds"):
             walk(directory, "current" if directory.name == live else "temporary", mapping=owner_map(directory))
@@ -256,6 +280,7 @@ class BankInventory:
             control.check()
             row = result.sources[repo]
             row.local_state, row.reason = self._verify(source, cache_directory(cache_root, source), control)
+            row.downloaded = row.downloaded or row.local_state == "verified"
             if row.local_state == "missing" and repo in legacy_seen:
                 row.local_state = "legacy"
                 row.reason = "版本来源目录无可核对的 ZIP/完成记录，不能直接作为可复用缓存。"

@@ -15,6 +15,9 @@ import bagu_trainer.secrets as secrets_mod  # noqa: E402
 
 _test_profile = tempfile.TemporaryDirectory(prefix="bagu-unit-tests-")
 atexit.register(_test_profile.cleanup)
+os.environ["BAGU_USER_DATA_DIR"] = _test_profile.name
+os.environ["BAGU_TEST_INSTANCE"] = "unit-suite"
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 _benchmark = os.environ.get("BAGU_TEST_BANK_ROOT")
 config_mod.USER_DATA_ROOT = Path(_benchmark).resolve() if _benchmark else Path(_test_profile.name)
 config_mod.CONFIG_PATH = Path(_test_profile.name) / "__no_config__.json"

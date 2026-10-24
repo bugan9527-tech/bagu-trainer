@@ -8,6 +8,7 @@ from tkinter import ttk
 from . import config
 from .bank_build.control import BuildCancelled, BuildControl
 from .bank_build.service import BankBuildService, load_sources
+from .bank_build.source_snapshot import download_label
 from .bank_inventory import BankInventory, LOCAL_LABELS, format_bytes
 from .bank_cleanup import BankCleanupService
 from .ui_layout import ScrollableFrame, FlowActions, wrapped_label, MessageArea
@@ -49,18 +50,19 @@ class BankPanel(ttk.Frame):
         self.view.grid(row=2, column=0, sticky="nsew")
         body = self.view.body
         body.columnconfigure(0, weight=1)
-        wrapped_label(body, theme, text="本地状态、任务结果与当前版本使用情况分别显示。远端大小不作估算；全部来源就绪后才构建切换。",
+        wrapped_label(body, theme, text="已下载表示本地有该 commit 的完整来源，不代表当前用于练习。全部来源就绪后才构建切换。",
                       style=MUTED).grid(row=0, column=0, sticky="ew", pady=px((0, SPACE.sm)))
         listing = ttk.Frame(body)
         listing.grid(row=1, column=0, sticky="ew")
         listing.columnconfigure(0, weight=1)
         listing.rowconfigure(0, weight=1)
-        self.source_list = ttk.Treeview(listing, columns=("local", "task", "used", "size", "remote", "commit"),
+        self.source_list = ttk.Treeview(listing, columns=("download", "local", "task", "used", "size", "remote", "commit", "license"),
                                         selectmode="extended", height=5)
         self.source_list.heading("#0", text="来源仓库")
         self.source_list.column("#0", width=px(210), minwidth=px(140))
-        for name, title, width in (("local", "本地来源", 160), ("task", "本次任务", 90), ("used", "当前题库", 160),
-                                    ("size", "本地跨版本合计", 130), ("remote", "远端下载大小", 110), ("commit", "固定 commit", 110)):
+        for name, title, width in (("download", "下载状态", 100), ("local", "本地来源", 160), ("task", "本次任务", 90), ("used", "当前题库", 160),
+                                    ("size", "本地跨版本合计", 130), ("remote", "远端下载大小", 110), ("commit", "固定 commit", 110),
+                                    ("license", "观察到的声明", 140)):
             self.source_list.heading(name, text=title)
             self.source_list.column(name, width=px(width), minwidth=px(width), stretch=False)
         vertical = ttk.Scrollbar(listing, orient="vertical", command=self.source_list.yview)
@@ -107,8 +109,9 @@ class BankPanel(ttk.Frame):
         self.cancel_button = actions.add(ttk.Button(actions, text="取消构建", command=self._cancel))
         self.start_button = actions.add(ttk.Button(actions, text="构建 / 重新构建", style=PRIMARY, command=self._start))
         self.retry_button = actions.add(ttk.Button(actions, text="仅重试失败项", command=self._retry))
-        self.delete_button = actions.add(ttk.Button(actions, text="删除所选来源缓存", command=self._delete))
+        self.delete_button = actions.add(ttk.Button(actions, text="删除题库", command=self._delete))
         self.history_button = actions.add(ttk.Button(actions, text="清理历史版本", command=lambda: self._plan_cleanup("history")))
+        self.recover_button = actions.add(ttk.Button(actions, text="重试未完成清理", command=self._recover_cleanup))
         self.bind("<Map>", self._mapped, add="+")
         self.bind("<Destroy>", self._destroyed, add="+")
         self._sync_controls()
@@ -118,7 +121,7 @@ class BankPanel(ttk.Frame):
     def _populate(self):
         for repo, source in self.sources.items():
             self.source_list.insert("", "end", iid=repo, text=repo,
-                values=("待检查", "未参与", "待检查", "统计中", "未知", source.commit[:12]), tags=("unknown",))
+                values=("未下载", "待检查", "未参与", "待检查", "统计中", "未知", source.commit[:12], source.license), tags=("unknown",))
 
     def _request_scan(self):
         if self.closed:
@@ -167,8 +170,9 @@ class BankPanel(ttk.Frame):
                    "good" if row and row.local_state == "verified" else "unknown")
             if self.source_list.exists(repo):
                 remote = self.tasks.bank.download_sizes.get(repo)
-                self.source_list.item(repo, values=(local, task_text, row.used if row else "待检查",
-                    format_bytes(row.local_bytes) if row else "统计中", format_bytes(remote) if remote else "未知", source.commit[:12]), tags=(tag,))
+                downloaded = download_label(source, row.downloaded if row else False, task, self.tasks.bank.state == "building")
+                self.source_list.item(repo, values=(downloaded, local, task_text, row.used if row else "待检查",
+                    format_bytes(row.local_bytes) if row else "统计中", format_bytes(remote) if remote else "未知", source.commit[:12], source.license), tags=(tag,))
         self._selection_changed()
 
     def _selection_changed(self):
@@ -182,7 +186,8 @@ class BankPanel(ttk.Frame):
             row = self.inventory.sources.get(repo) if self.inventory else None
             task = self.tasks.bank.sources.get(repo)
             remote = self.tasks.bank.download_sizes.get(repo)
-            self.local_detail.set(f"{repo} · 本地：{LOCAL_LABELS[row.local_state] if row else '待检查'} · "
+            downloaded = download_label(self.sources[repo], row.downloaded if row else False, task, self.tasks.bank.state == "building")
+            self.local_detail.set(f"{repo} · 下载状态：{downloaded} · 本地：{LOCAL_LABELS[row.local_state] if row else '待检查'} · "
                                   f"跨版本占用 {format_bytes(row.local_bytes) if row else '统计中'} · "
                                   f"下载大小：{'本次响应 ' + format_bytes(remote) if remote else '未知'}")
             self.local_label.configure(foreground=(COLORS.danger if row and row.local_state in {"invalid", "incomplete"} else
@@ -206,17 +211,18 @@ class BankPanel(ttk.Frame):
         self.start_button.configure(text="构建中…" if task.busy else "构建 / 重新构建")
         self.delete_button.state(["!disabled"] if selected and not locked else ["disabled"])
         self.history_button.state(["disabled"] if locked else ["!disabled"])
+        self.recover_button.state(["disabled"] if locked or not (self.project_root / "data" / "source-deletion.json").is_file() else ["!disabled"])
         failures = any(s.state == "failed" for s in task.sources.values())
         self.retry_button.state(["!disabled"] if failures and not locked else ["disabled"])
         self.cancel_button.state(["!disabled"] if task.busy and not task.cleaning and not task.cancel.is_set() else ["disabled"])
         for widget in (self.timeout_entry, self.reload_button, self.source_list):
             widget.state(["disabled"] if locked else ["!disabled"])
-        hint = ("清理准备/执行中：确认后先安全切换，学习记录保留。" if self.deleting else
+        hint = ("删除准备/执行中：先校验保留内容并安全切换，关联作答与题目快照也将删除。" if self.deleting else
                 "构建进行中，可取消；隐藏页面不取消任务。" if task.busy else
                 "新题库已落盘，等待引擎在安全边界应用。" if task.state == "built" else
                 "新题库已应用。" if task.state == "applied" else
                 "失败：" + task.error if task.state == "failed" else
-                "已取消，已完成缓存保留。" if task.state == "cancelled" else "选择来源后构建；删除仅移除缓存。")
+                "已取消，已完成缓存保留。" if task.state == "cancelled" else "选择来源后可构建或删除；删除涵盖全部本地版本和关联学习记录。")
         set_text(self.operation_hint, hint)
 
     def _start(self):
@@ -276,14 +282,15 @@ class BankPanel(ttk.Frame):
         self._sync_controls()
 
     def _confirm_cleanup(self, plan):
-        if not plan.targets and not plan.requires_switch:
+        learning = getattr(plan, "learning", {})
+        legacy_unknown = sum(rewrite.unknown for rewrite in getattr(plan, "legacy", ()))
+        if not plan.targets and not plan.requires_switch and not legacy_unknown and not any(learning.get(key) for key in ("affected", "unknown", "affected_states", "unknown_states")):
             self.finish_cleanup(error="没有可清理的对象；当前使用的版本已排除。")
             return
         import tkinter as tk
-        window = tk.Toplevel(self)
+        window = ttk.Frame(self.view.body, padding=self.theme.px(SPACE.sm))
+        window.grid(row=6, column=0, sticky="ew")
         self.confirmation = window
-        window.title("确认题库清理")
-        self.theme.window(window, (820, 600), (560, 380))
         window.columnconfigure(0, weight=1)
         window.rowconfigure(1, weight=1)
         wrapped_label(window, self.theme, text="请核对删除对象、使用情况及预计释放空间", style=SECTION).grid(row=0, column=0, sticky="ew", padx=16, pady=8)
@@ -291,13 +298,14 @@ class BankPanel(ttk.Frame):
         content.grid(row=1, column=0, sticky="nsew", padx=16)
         content.columnconfigure(0, weight=1)
         content.rowconfigure(0, weight=1)
-        text = tk.Text(content, wrap="word", width=1)
+        text = tk.Text(content, wrap="word", width=1, height=10)
         scroll = ttk.Scrollbar(content, command=text.yview)
         text.configure(yscrollcommand=scroll.set)
         text.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         lines = ["所选来源：" + ("、".join(plan.repositories) or "独立清理历史版本"),
                  f"预计释放文件字节：{format_bytes(plan.estimated_bytes)}（共享硬链接只在最后一份引用删除时计入；未扣除新版本构建空间）"]
+        lines += [f"本地来源版本：{repo} @ {commit}" for repo, commit in getattr(plan, "commits", ())]
         lines += [f"{target.label}\n  {target.relative}\n  当前使用：{'是，必须先切换新题库' if target.used else '否'}" for target in plan.targets]
         if plan.requires_switch:
             lines.append("将先构建并校验不含所选来源的新题库，运行中引擎切换成功后才清理；构建或切换失败保留原文件。")
@@ -305,37 +313,68 @@ class BankPanel(ttk.Frame):
             lines.append("运行中引擎仍在使用旧版本；先应用已校验的磁盘当前版本，再清理缓存。")
         if plan.last_source:
             lines.append("这是最后一个可用来源：将切换为空题库，后续需要重新下载并构建来源才能练习。")
-        lines.append("学习数据库、历史作答和答题快照默认保留。未在清单中的当前版本/共享文件不会被清理。")
+        if plan.kind == "sources":
+            lines.append(f"关联题目快照 {len(learning.get('affected', []))} 个，答题记录 {learning.get('attempts', 0)} 条。关联待答题、历史重练和学习状态也将删除，无法在应用内撤销。")
+        else:
+            lines.append("单独清理历史版本保留学习记录。")
         text.insert("1.0", "\n\n".join(lines))
         text.configure(state="disabled")
         actions = FlowActions(window, self.theme)
         actions.grid(row=2, column=0, sticky="ew", padx=16, pady=8)
+        self.include_unknown = tk.BooleanVar(master=self, value=False)
+        unknown = [*learning.get("unknown", []), *learning.get("unknown_states", [])]
+        unknown += [None] * legacy_unknown
+        if unknown:
+            ttk.Checkbutton(window, text=f"额外确认：一并删除 {len(unknown)} 组来源不明的旧快照、备份、作答和学习状态（可能涉及其他来源）",
+                variable=self.include_unknown).grid(row=3, column=0, sticky="ew")
         def cancel():
             window.destroy()
             self.finish_cleanup(error="已取消清理，文件未改动。")
         def confirm():
+            if unknown and not self.include_unknown.get():
+                self.status.set("来源不明的旧记录需要额外确认，否则不能完成彻底删除。")
+                return
+            include_unknown = self.include_unknown.get()
             window.destroy()
-            self._execute_cleanup(plan)
+            self._execute_cleanup(plan, include_unknown=include_unknown)
         self.confirm_cancel = actions.add(ttk.Button(actions, text="取消", command=cancel))
         self.confirm_delete = actions.add(ttk.Button(actions, text="确认清理", command=confirm))
         self.confirm_text = text
-        window.protocol("WM_DELETE_WINDOW", cancel)
-        window.transient(self.winfo_toplevel())
-        window.grab_set()
         self.confirm_cancel.focus_set()
 
-    def _execute_cleanup(self, plan):
+    def _execute_cleanup(self, plan, include_unknown=False):
         if self.on_cleanup:
-            if self.on_cleanup(self.cleanup, plan) is False:
+            if self.on_cleanup(self.cleanup, plan, include_unknown) is False:
                 self.finish_cleanup(error="当前有其他任务，未执行删除；请等待后重新确认。")
             return
         events, cleanup = self._disk_events, self.cleanup
         def execute():
             try:
-                events.put(("cleanup_result", 0, cleanup.execute(plan)))
+                events.put(("cleanup_result", 0, cleanup.execute(plan, include_unknown=include_unknown)))
             except Exception as error:
                 events.put(("cleanup_error", 0, str(error)))
         self.worker = threading.Thread(target=execute, daemon=True, name="bagu-bank-cleanup")
+        self.worker.start()
+
+    def _recover_cleanup(self):
+        if self.tasks.bank.busy or self.deleting:
+            return
+        self.deleting = self.tasks.bank.cleaning = True
+        self._scan_cancel.set()
+        if self.on_cleanup:
+            if self.on_cleanup(self.cleanup, None, False) is False:
+                self.finish_cleanup(error="当前有其他任务，请等待后重试。")
+            return
+        events, cleanup = self._disk_events, self.cleanup
+        def recover():
+            try:
+                from .source_deletion import SourceDeletion
+                from .bank_cleanup import CleanupResult
+                result = SourceDeletion(cleanup).recover()
+                events.put(("cleanup_result", 0, result or CleanupResult([], [])))
+            except Exception as error:
+                events.put(("cleanup_error", 0, str(error)))
+        self.worker = threading.Thread(target=recover, daemon=True, name="bagu-bank-recovery")
         self.worker.start()
 
     def finish_cleanup(self, result=None, error=None):
@@ -417,6 +456,8 @@ class BankPanel(ttk.Frame):
                         if kind == "scan":
                             self._apply_inventory(value)
                         elif kind == "scan_error":
+                            self.inventory = None
+                            self._render_rows()
                             self.space_summary.set(f"空间统计失败：{value}；请刷新重试，不代表占用为零。")
         except queue.Empty:
             pass

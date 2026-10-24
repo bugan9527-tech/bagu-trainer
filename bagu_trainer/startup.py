@@ -83,7 +83,7 @@ def _model_check(configuration):
         if valid and secrets.resolve_api_key(llm):
             from .onboarding import state_path, saved_model_verified
             if state_path().exists() and not saved_model_verified(configuration):
-                return ReadinessCheck("model", False, "请在向导中主动测试模型连接并保存；接口或 Key 变化后需重新测试。")
+                return ReadinessCheck("model", False, "请在模型配置页主动测试连接并保存；接口或 Key 变化后需重新测试。")
             return ReadinessCheck("model", True, "模型配置已就绪（启动检查不发送网络请求）。")
     except (TypeError, ValueError, AttributeError):
         pass
@@ -156,6 +156,8 @@ class StartupCoordinator:
             self.state = "loading_engine"
             if self.engine is None:
                 self.engine = self.engine_loader()
+            from .cleanup_manifest import register_profile
+            register_profile(global_index=True)
             self.state = "ready"
             return self.engine
         except Exception as error:
@@ -168,36 +170,37 @@ class StartupCoordinator:
         if self.monitor is not None:
             result = self.monitor.window_command(name, arguments)
             if name == "_desktop_status":
-                result["startup_state"] = self.state
+                result["startup_state"] = "running"
+                result["preparation_state"] = self.state
+                result["checks"] = {**dict.fromkeys(("bank", "model", "projects"), False),
+                                    **{item.name: item.ready for item in self.report.checks}}
+                result["user_data"] = str(config.USER_DATA_ROOT)
             return result
-        if name == "_show_dashboard":
-            self.events.put(("show", None))
+        if name in {"_show_dashboard", "_navigate"}:
+            page = arguments.get("page", "dashboard") if name == "_navigate" else "dashboard"
+            if page not in {"dashboard", "practice", "history", "projects", "bank", "model", "settings"}:
+                return {"ok": False}
+            self.events.put(("show", page))
             return {"ok": True}
         if name == "_desktop_status":
             return {"ok": True, "startup_state": self.state, "window_state": self.window_state,
-                    "checks": {item.name: item.ready for item in self.report.checks}}
+                    "checks": {**dict.fromkeys(("bank", "model", "projects"), False),
+                               **{item.name: item.ready for item in self.report.checks}}}
         return {"ok": False, "note": "不支持的窗口操作"}
 
-    def run(self, background=False):
-        engine = self.prepare()
-        # Capture before entering the wizard: completing new setup is not a
-        # restoration. Keep the local readiness gate and engine handoff intact.
-        restored = engine is not None and config.CONFIG_PATH.is_file()
-        if engine is None:
-            from .initialization import InitializationApp
-            engine = InitializationApp(self).run()
-        if engine is None:
-            self.state = "stopped"
-            return
+    def run(self, background=False, page="dashboard"):
         from .desktop import DesktopApp
         from .desktop_monitor import DesktopMonitor
-        monitor = DesktopMonitor(engine)
-        app = DesktopApp(monitor, background, events=self.events)
-        if restored:
-            app.show_restored_configuration()
+        monitor = DesktopMonitor(None)
+        app = DesktopApp(monitor, background, events=self.events, coordinator=self)
         self.monitor = monitor
         self.state = "running"
+        if page != "dashboard":
+            app._navigate_page(page)
         try:
             app.run()
         finally:
             self.state = "stopped"
+            if monitor.engine is not None and getattr(monitor.engine, "_store", None) is not None:
+                monitor.engine._store.close()
+                monitor.engine._store = None

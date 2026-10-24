@@ -11,13 +11,14 @@ from . import paths
 
 
 class SettingsPage(ttk.Frame):
-    def __init__(self, parent, theme, *, on_status=None, on_navigate=None):
+    def __init__(self, parent, theme, *, on_status=None, on_navigate=None, on_uninstall=None):
         super().__init__(parent)
         self.theme = theme
         px = theme.px
         self.on_status = on_status
         self.closed = False
         self.busy = False
+        self.on_uninstall = on_uninstall
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
@@ -39,7 +40,7 @@ class SettingsPage(ttk.Frame):
         wrapped_label(body, theme, text="存放程序及运行资源；源码运行时显示源码目录。升级更新此处的程序文件，个人配置和学习记录另存于下方数据目录。",
                       style=MUTED).grid(row=4, column=0, sticky="ew", pady=px((SPACE.xs, SPACE.lg)))
         wrapped_label(body, theme, text="个人数据目录", style=SECTION).grid(row=5, column=0, sticky="ew", pady=px((0, SPACE.sm)))
-        wrapped_label(body, theme, text="配置、下载的题库、学习记录、窗口状态和日志保存在此；升级和默认卸载均保留。安装版与便携版默认共用当前 Windows 用户的数据。", style=MUTED).grid(
+        wrapped_label(body, theme, text="配置、下载的题库、学习记录、窗口状态和日志保存在此；升级和修复安装保留，主动完整卸载会清除。安装版与便携版默认共用当前 Windows 用户的数据。", style=MUTED).grid(
             row=6, column=0, sticky="ew")
         self.data_dir = window_var(self, str(config.USER_DATA_ROOT))
         wrapped_label(body, theme, textvariable=self.data_dir, style=MUTED).grid(
@@ -67,6 +68,52 @@ class SettingsPage(ttk.Frame):
         self.uninstall_button = actions.add(ttk.Button(actions, text="取消登录自启动", command=lambda: self._set_startup(False)))
         self.startup_state = window_var(self, self._startup_status())
         wrapped_label(body, theme, textvariable=self.startup_state, style=MUTED).grid(row=14, column=0, sticky="ew", pady=px((SPACE.sm, 0)))
+        wrapped_label(body, theme, text="完整卸载", style=SECTION).grid(row=15, column=0, sticky="ew", pady=px((SPACE.lg, SPACE.sm)))
+        self.cleanup_status = window_var(self, "清除本应用管理的全部题库、记录、配置和本机 API 凭据。先查看清理范围，再确认退出并交接卸载工具。")
+        wrapped_label(body, theme, textvariable=self.cleanup_status).grid(row=16, column=0, sticky="ew")
+        self.cleanup_preview = ttk.Button(body, text="卸载应用并清除全部数据…", command=self._preview_cleanup)
+        self.cleanup_preview.grid(row=17, column=0, sticky="w", pady=px(SPACE.sm))
+        self.cleanup_confirm = ttk.Button(body, text="确认退出并进入完整卸载", command=self._confirm_cleanup)
+        self.cleanup_confirm.grid(row=18, column=0, sticky="w")
+        self.cleanup_confirm.grid_remove()
+        import queue
+        self.cleanup_events = queue.Queue()
+        self.cleanup_worker = None
+        self.cleanup_poll = None
+
+    def _preview_cleanup(self):
+        if self.cleanup_worker is not None and self.cleanup_worker.is_alive():
+            return
+        import threading
+        from .cleanup_cli import preview
+        events = self.cleanup_events
+        def work():
+            try:
+                events.put((preview(), True))
+            except Exception as error:
+                events.put((f"清理范围检查失败：{error}。请修复后重试。", False))
+        self.cleanup_status.set("正在后台核对数据位置和归属…")
+        self.cleanup_preview.state(["disabled"])
+        self.cleanup_worker = threading.Thread(target=work, daemon=True, name="bagu-uninstall-plan")
+        self.cleanup_worker.start()
+        self.cleanup_poll = self.after(100, self._poll_cleanup)
+
+    def _poll_cleanup(self):
+        import queue
+        try:
+            message, ready = self.cleanup_events.get_nowait()
+        except queue.Empty:
+            self.cleanup_poll = self.after(100, self._poll_cleanup)
+            return
+        self.cleanup_poll = None
+        self.cleanup_status.set(message)
+        self.cleanup_preview.state(["!disabled"])
+        if ready:
+            self.cleanup_confirm.grid()
+
+    def _confirm_cleanup(self):
+        if self.on_uninstall is not None:
+            self.on_uninstall()
 
     def _open_data_directory(self):
         try:

@@ -33,9 +33,15 @@ def merge_reports(reports, output, process_errors=()):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--module", action="append", help="Run specified test_*.py modules, each in its own process")
     options = parser.parse_args()
     output = options.output.resolve()
     modules = sorted((ROOT / "release_tests").glob("test_*.py"))
+    if options.module:
+        requested = set(options.module)
+        modules = [module for module in modules if module.stem in requested or module.name in requested]
+        if {m.stem for m in modules} != {Path(name).stem for name in requested}:
+            parser.error("Unknown release test module")
     reports_dir = output.parent / (output.stem + "-modules")
     reports_dir.mkdir(parents=True, exist_ok=True)
     reports, errors = [], []
@@ -43,7 +49,7 @@ def main():
     targets = []
     for module in modules:
         relative = module.relative_to(ROOT).as_posix()
-        if module.stem == "test_ui_shell":
+        if module.stem in {"test_ui_shell", "test_ui_display"}:
             # Native window state survives Tk destruction on Windows. Each
             # shell scenario (including each scale) needs a fresh GUI process.
             collected = subprocess.run([sys.executable, "-B", "-m", "pytest", relative,

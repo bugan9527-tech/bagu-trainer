@@ -99,7 +99,7 @@ def validate_bundle(bundle, *, current_source=True, check_exe=True):
     if len(actual_files) != len(expected) or any(expected.get(item["path"].casefold()) != item for item in actual_files):
         raise ValueError("生产目录与 BUILD_MANIFEST 不一致：存在新增、缺失或变更文件")
     names = {item["path"] for item in actual_files}
-    required = {"BaguTrainer.exe", "使用说明.md", "_internal/LICENSE", "_internal/THIRD_PARTY_NOTICES.txt",
+    required = {"BaguTrainer.exe", "BaguCleanup.exe", "使用说明.md", "_internal/LICENSE", "_internal/THIRD_PARTY_NOTICES.txt",
                 "_internal/interview-banks/sources.json", "_internal/licenses/Python-LICENSE.txt",
                 "_internal/_tcl_data/init.tcl", "_internal/_tk_data/tk.tcl"}
     if not required <= names or not any(name.startswith("_internal/") and name.endswith(".dll") for name in names):

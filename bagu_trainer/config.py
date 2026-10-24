@@ -30,6 +30,9 @@ def config_transaction():
     operations outside it; atomic replacement still protects concurrent readers.
     """
     with _CONFIG_LOCK:
+        from .app_cleanup import maintenance_active
+        if maintenance_active():
+            raise RuntimeError("应用正在完整卸载，禁止保存配置和凭据。")
         yield
 
 

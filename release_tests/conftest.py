@@ -30,6 +30,8 @@ def isolate_tk_scaling(monkeypatch):
 def isolated_user_data(tmp_path, monkeypatch):
     user = tmp_path / "isolated-user"
     monkeypatch.setenv("BAGU_USER_DATA_DIR", str(user))
+    monkeypatch.setenv("BAGU_TEST_INSTANCE", "release-fixture")
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.null.Keyring")
     monkeypatch.setattr(config, "USER_DATA_ROOT", user)
     monkeypatch.setattr(config, "CONFIG_PATH", user / "config.json")
     monkeypatch.setattr(desktop_instance, "RUNTIME", user / "runtime")

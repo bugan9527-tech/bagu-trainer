@@ -189,16 +189,17 @@ def test_chinese_spaces_readonly_install_singleton_and_configuration(tmp_path, m
         assert {widget["class"] for widget in ui["widgets"]} >= {"TButton", "TRadiobutton", "TCombobox", "Treeview"}
         assert Path(ui["tk_library"]).is_relative_to(installation / "_internal")
         with running(exe, env) as first:
-            status = await_state(first, "initialization")
+            status = await_state(first, "running")
             assert not status["checks"]["bank"]
-            until(first, lambda: any("首次" in title for title in window_titles(first.pid)))
+            until(first, lambda: "AI 八股训练器" in window_titles(first.pid))
             credentials = (user / "runtime" / "bridge-credentials.json").read_bytes()
             invoke(exe, env)
             assert (user / "runtime" / "bridge-credentials.json").read_bytes() == credentials
             assert first.poll() is None
-        # Independent frozen --configure entry must actually construct its Tk window.
+        # The legacy configure entry opens the same formal main window.
         with running(exe, env, "--configure") as settings:
-            until(settings, lambda: any("AI 接口配置" in title for title in window_titles(settings.pid)))
+            until(settings, lambda: "AI 八股训练器" in window_titles(settings.pid))
+            until(settings, lambda: desktop_instance.remote_call("_desktop_status", {}).get("page") == "model")
         assert tree_hash(installation) == before
         assert (user / "logs" / "desktop.log").is_file()
         assert env["BAGU_LLM_API_KEY"] not in (user / "logs" / "desktop.log").read_text(encoding="utf-8")

@@ -110,7 +110,13 @@ def package_report(destination):
 
 
 def run(argv=None):
-    logger = configure_logs()
+    if os.path.basename(sys.executable).lower() == "bagucleanup.exe":
+        from .cleanup_cli import main
+        return main(argv)
+    from .cleanup_cli import journal_path
+    # A failed/interrupted full uninstall owns the profile until recovery;
+    # do not recreate logs or config before handing off to its retry tool.
+    logger = logging.getLogger("bagu-trainer") if journal_path().is_file() else configure_logs()
     try:
         from .desktop import main
         return main(argv)

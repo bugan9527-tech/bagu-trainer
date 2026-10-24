@@ -133,6 +133,9 @@ def save_api_key(key: str) -> str:
     """把新 Key 写入凭据管理器（不写项目目录）。返回存储位置标签：
     "keyring" / "cleared" / "fallback"（keyring 不可用，由调用方决定兜底策略）。
     """
+    from .app_cleanup import maintenance_active
+    if maintenance_active():
+        raise RuntimeError("应用正在完整卸载，禁止保存凭据。")
     key = (key or "").strip()
     _remember(key)
     keyring = _load_keyring()
@@ -162,6 +165,28 @@ def clear_api_key() -> None:
             keyring.delete_password(KEYRING_SERVICE, KEYRING_USER)
         except Exception:
             pass
+
+
+def remove_credential(service, backend=None):
+    """Uninstall-only strict deletion: absence and backend failure are distinct."""
+    if not (service == "bagu-trainer" or re.fullmatch(r"bagu-trainer\.profile\.[0-9a-f]{24}", service)):
+        raise ValueError("非本应用凭据命名空间")
+    if backend is None:
+        if os.name == "nt":
+            # Uninstall must inspect the real Windows vault even if normal
+            # runtime resolution was configured to use a null/fallback backend.
+            from keyring.backends.Windows import WinVaultKeyring
+            backend = WinVaultKeyring()
+        else:
+            backend = _load_keyring()
+    if backend is None:
+        raise RuntimeError("Windows 凭据后端不可用，无法核验清理")
+    if backend.get_password(service, KEYRING_USER) is None:
+        return "absent"
+    backend.delete_password(service, KEYRING_USER)
+    if backend.get_password(service, KEYRING_USER) is not None:
+        raise RuntimeError("凭据删除后仍存在")
+    return "deleted"
 
 
 # ---- 统一脱敏 ----

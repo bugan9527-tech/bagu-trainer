@@ -12,10 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config
-from ..bank_storage import active_bank_dir, atomic_json
+from ..bank_storage import active_bank_dir, atomic_json, replace_with_sharing_wait
 from .control import BuildCancelled, BuildControl, BuildError, BuildTimeout, SourceBatchError, SourceStatus
 from .downloads import ArchiveLimitError, ArchiveLimits, download_archive, safe_extract
 from .source_cache import load_archive, publish_archive
+from .source_snapshot import source_files
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,7 @@ class BankBuildService:
 
     def build(self, repositories, *, versions=None, cancel=None, timeout=None,
               progress=None, download_retries=2, request_timeout=5, force_download=False,
-              retry_failed=None, _lease=None):
+              retry_failed=None, _lease=None, local_only=False, activate=True):
         """Build a fresh generation; failure/cancellation never changes active data.
 
         Versions defaults to the audited commits. Overrides must be full commit
@@ -134,9 +135,14 @@ class BankBuildService:
         Retries use a new staging directory; no partial build is resumed.
         """
         repositories = list(dict.fromkeys(repositories))
+        from ..app_cleanup import maintenance_active
+        if maintenance_active():
+            raise BuildError("prepare", "应用正在完整卸载，禁止写入题库。")
+        if _lease is None and (self.project_root / "data" / "source-deletion.json").exists():
+            raise BuildError("prepare", "题库删除尚未完成，请先重试未完成清理；禁止下载或发布新版本。")
         control = BuildControl(cancel, 900 * max(1, len(repositories)) if timeout is None else timeout, progress)
         try:
-            result = self._run(repositories, versions, control, download_retries, request_timeout, force_download, retry_failed, _lease)
+            result = self._run(repositories, versions, control, download_retries, request_timeout, force_download, retry_failed, _lease, local_only, activate)
             control.emit("done", f"题库构建完成：{result.questions} 道题", result.questions, result.questions)
             return result
         except (BuildCancelled, BuildTimeout) as error:
@@ -154,7 +160,7 @@ class BankBuildService:
             control.emit("failed", str(failure))
             raise failure from error
 
-    def _run(self, repositories, versions, control, download_retries, request_timeout, force_download, retry_failed, lease):
+    def _run(self, repositories, versions, control, download_retries, request_timeout, force_download, retry_failed, lease, local_only=False, activate=True):
         if (not isinstance(download_retries, int) or not 0 <= download_retries <= 5
                 or not isinstance(request_timeout, (int, float))
                 or not math.isfinite(request_timeout) or request_timeout <= 0):
@@ -191,7 +197,9 @@ class BankBuildService:
         with (nullcontext(lease) if lease is not None else _build_lock(staging_root)):
             try:
                 staging.mkdir()
-                return self._build(sources, staging, generation, control, download_retries, request_timeout, force_download, retry_failed)
+                atomic_json(staging / "build-intent.json", {"sources": [
+                    {"repository": s.repository, "commit": s.commit} for s in sources]})
+                return self._build(sources, staging, generation, control, download_retries, request_timeout, force_download, retry_failed, local_only, activate)
             finally:
                 _remove_staging(staging, staging_root)
 
@@ -211,7 +219,18 @@ class BankBuildService:
                 cached = None
         if not cached:
             if not allow_download:
-                raise BuildError("cache", "已完成来源的缓存缺失或损坏；仅重试失败项不会重新下载该来源。请使用“重新构建”修复缓存。")
+                from .source_snapshot import SnapshotVerifier
+                for version in sorted((self.project_root / "data" / "banks").glob("*")):
+                    record = version / "sources.json"
+                    if not record.is_file():
+                        continue
+                    for entry in json.loads(record.read_text(encoding="utf-8")).get("sources", []):
+                        if (entry.get("repository", "").casefold() == source.repository.casefold()
+                                and entry.get("commit") == source.commit
+                                and SnapshotVerifier().verify(version, entry, control)):
+                            shutil.copytree(version / "repos" / entry["directory"], destination)
+                            return entry
+                raise BuildError("cache", "保留来源的已校验本地缓存或完整快照不足；本操作不会下载。请通过重新构建修复后重试。")
             archive = staging / (source.directory + ".zip")
             metadata = download_archive(source, archive, control, opener=self.opener,
                 retries=retries, request_timeout=request_timeout, limits=self.limits)
@@ -220,9 +239,10 @@ class BankBuildService:
             control.phase("cache", f"保存已校验来源 {source.repository}")
             publish_archive(cache_root, source, archive, metadata, control)
         return {**metadata, "repository": source.repository,
+                "directory": source.directory, "source_files": source_files(destination, control),
                 "observed_license": source.license, "evidence_url": source.evidence_url, "path_aliases": aliases}
 
-    def _build(self, sources, staging, generation, control, retries, request_timeout, force_download, retry_failed):
+    def _build(self, sources, staging, generation, control, retries, request_timeout, force_download, retry_failed, local_only=False, activate=True):
         from .extraction import extract_sources
         from .importer import build_bank
         from .tagging import tag_questions
@@ -238,7 +258,7 @@ class BankBuildService:
                 control.check()
                 allowed = retry_failed is None or source.repository in retry_failed
                 metadata = self._prepare_source(source, staging, control, retries, request_timeout,
-                    force_download and allowed, allowed)
+                    force_download and allowed, allowed and not local_only)
                 control.source_state(source.repository, "completed", "来源已完整校验并保存在本地缓存。")
                 control.check()
             except (BuildCancelled, BuildTimeout):
@@ -265,6 +285,9 @@ class BankBuildService:
                                       path_aliases=path_aliases)
         if not bank:
             raise BuildError("import", "所选 ZIP 中没有可用题目，请选择包含题目正文的来源后重试。")
+        from ..provenance import question_sources
+        for question in bank:
+            question["sources"] = question_sources(question, provenance)
         control.phase("tag", "构建知识标签", len(bank))
         tag_report = tag_questions(bank, checkpoint=control.ticker("tag", len(bank)))
         control.phase("concepts", "构建概念档案", len(bank))
@@ -299,7 +322,8 @@ class BankBuildService:
         control.phase("activate", "切换到完整的新题库，保留旧数据")
         final = self.project_root / "data" / "banks" / generation
         final.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staging, final)
+        replace_with_sharing_wait(staging, final, control)
         control.check()
-        atomic_json(pointer, {"schema_version": 1, "generation": generation})
+        if activate:
+            atomic_json(pointer, {"schema_version": 1, "generation": generation})
         return BuildResult(generation, final, len(bank), previous, tuple(control.sources.values()))

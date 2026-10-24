@@ -186,4 +186,5 @@ def build_window(parent=None):
 
 
 if __name__ == "__main__":
-    build_window().mainloop()
+    from .desktop import main
+    raise SystemExit(main(["--configure"]))

@@ -162,6 +162,11 @@ def test_incomplete_scan_reports_missing_files_instead_of_silent_zero(installed,
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk inventory")
 @pytest.mark.parametrize("scale", [1, 1.5, 2])
 def test_panel_background_refresh_delete_and_narrow_dpi_layout(installed, http_archive, monkeypatch, scale):
+    from bagu_trainer.store import Store
+    installed.learning.unlink()
+    Store(installed.learning).close()
+    (installed.data / "sources.json").write_text(json.dumps({"sources": [{
+        "repository": REPOSITORY, "commit": COMMIT, "directory": "JavaGuide"}]}))
     from bagu_trainer.bank_panel import BankPanel
     from bagu_trainer.task_controller import TaskController
     from bagu_trainer.tk_runtime import create_root

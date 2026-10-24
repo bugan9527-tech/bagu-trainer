@@ -50,7 +50,7 @@ class CleanupResult:
     @property
     def message(self):
         note = "已切换为空题库；需要重新下载并构建来源后才能练习。" if self.empty else "题库清理已处理。"
-        return note + "学习数据库和历史答题快照保留。" + ("\n未完成：" + "\n".join(self.failures) if self.failures else "")
+        return note + ("\n清理未完成，可重试：" + "\n".join(self.failures) if self.failures else "\n已完成残留核验。")
 
 
 def _link(path):
@@ -83,8 +83,9 @@ class BankCleanupService:
     def _target(self, relative):
         relative = Path(relative)
         parts = relative.parts
-        allowed = ((len(parts) == 2 and parts[0] in {"banks", "source-cache"} and re.fullmatch(r"[0-9a-f]{32}", parts[1]))
-                   or (len(parts) == 1 and parts[0] in LEGACY_FILES))
+        from .legacy_artifacts import legacy_name
+        allowed = ((len(parts) == 2 and parts[0] in {"banks", "source-cache", ".bank-builds"} and re.fullmatch(r"[0-9a-f]{32}", parts[1]))
+                   or (len(parts) == 1 and (parts[0] in LEGACY_FILES or legacy_name(parts[0]))))
         if relative.is_absolute() or not allowed:
             raise ValueError(f"不是应用管理的题库清理路径：{relative}")
         path = self.data / relative
@@ -243,6 +244,9 @@ class BankCleanupService:
     def plan(self, kind, repositories=(), *, protected=()):
         self._roots()
         with _build_lock(self.data / ".bank-builds"):
+            if kind == "sources":
+                from .source_deletion import SourceDeletion
+                return SourceDeletion(self).plan(repositories, protected)
             return self._plan(kind, repositories, protected)
 
     def _empty_bank(self, previous):
@@ -262,8 +266,12 @@ class BankCleanupService:
             raise ValueError("空题库落盘校验失败")
         atomic_json(self.data / "active-bank.json", {"schema_version": 1, "generation": generation})
 
-    def execute(self, plan, *, engine=None, protected=()):
+    def execute(self, plan, *, engine=None, protected=(), include_unknown=False, progress=None):
         """Called on the serial engine worker, never Tk. Revalidate approval first."""
+        if plan.kind == "sources":
+            from .source_deletion import SourceDeletion
+            return SourceDeletion(self).execute(plan, engine=engine, protected=protected,
+                include_unknown=include_unknown, progress=progress)
         self._roots()
         state_lock = getattr(engine, "_STATE_LOCK", None)
         with state_lock if state_lock is not None else nullcontext():

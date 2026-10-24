@@ -50,6 +50,8 @@ class BuildProgress:
     source_total: int = 0
     remaining_seconds: float = 0
     generation: str = ""
+    repository: str = ""
+    commit: str = ""
 
 
 class BuildControl:
@@ -105,7 +107,8 @@ class BuildControl:
             try:
                 self.progress(BuildProgress(stage, message, completed, total,
                     source.attempt if source else (attempt or 1), source, index, len(self.sources),
-                    max(0, self.deadline - self.clock()), self.generation))
+                    max(0, self.deadline - self.clock()), self.generation,
+                    source.repository if source else "", source.commit if source else ""))
             except Exception:
                 pass
 

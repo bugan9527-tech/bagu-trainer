@@ -12,8 +12,18 @@ from multiprocessing import AuthenticationError
 from multiprocessing.connection import Client, Listener
 from .config import USER_DATA_ROOT
 
-RUNTIME = Path(USER_DATA_ROOT) / "runtime"
-WINDOW_COMMANDS = frozenset({"_show_dashboard", "_desktop_status"})
+def runtime_directory():
+    # Production ownership is independent of EXE location and data profile.
+    # Test identities must be explicit, never inferred from a custom data path.
+    import hashlib
+    identity = os.environ.get("BAGU_TEST_INSTANCE", "")
+    if identity:
+        return Path(USER_DATA_ROOT) / "runtime"
+    return Path(os.environ.get("LOCALAPPDATA", str(Path(USER_DATA_ROOT).parent))) / "BaguTrainer" / "runtime"
+
+
+RUNTIME = runtime_directory()
+WINDOW_COMMANDS = frozenset({"_show_dashboard", "_desktop_status", "_navigate"})
 
 
 class OwnerLock:

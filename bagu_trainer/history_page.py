@@ -18,6 +18,18 @@ def _query(events, page_id, token, kind, function, arguments):
 
 
 class HistoryPage:
+    def invalidate_content(self):
+        """Invalidate late queries and discard all cached snapshot text on Tk."""
+        self.token += 1
+        self.dirty = True
+        self._copy_snapshot = None
+        self.tree.delete(*self.tree.get_children())
+        if self.detail_frame is not None:
+            self.detail_frame.destroy()
+            self.detail_frame = None
+        self.detail_id = None
+        self.message.set("题库内容已变化，请刷新记录。")
+
     def __init__(self, app, content_host=None):
         self.app, self.root, self.theme = app, app.root, app.theme
         self.page_id, self.token = uuid.uuid4().hex, 0
@@ -28,6 +40,7 @@ class HistoryPage:
         self.dirty = self.restore_list = False
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="bagu-history")
         self.future = None
+        self.futures = []
         self.page = self.total = 0
         self.project_paths = [None]
         self.detail_id = None
@@ -105,6 +118,8 @@ class HistoryPage:
         if self.future:
             self.future.cancel()
         self.future = self.executor.submit(_query, self.app.events, self.page_id, self.token, kind, function, arguments)
+        self.futures = [future for future in self.futures if not future.done()]
+        self.futures.append(self.future)
 
     def refresh(self):
         if self.closed or self.retry_busy:
@@ -128,7 +143,10 @@ class HistoryPage:
         self.previous.state(["disabled"])
         self.next.state(["disabled"])
         selected = max(0, self.project.current())
-        self.query("list", self.app.monitor.engine.get_answer_history, page=self.page,
+        if getattr(getattr(self.app, "tasks", None), "bank", None) and self.app.tasks.bank.cleaning:
+            self.message.set("正在维护学习数据，完成后可刷新。")
+            return
+        self.query("list", getattr(self.app, "history_service", self.app.monitor.engine).get_answer_history, page=self.page,
                    result=("all", "wrong", "correct")[max(0, self.result.current())],
                    project=self.project_paths[selected], keyword=self.keyword.get())
 
@@ -146,7 +164,9 @@ class HistoryPage:
         self._layout()
         self.back_button.state(["!disabled"])
         self.message.set("正在读取完整题目快照…")
-        self.query("detail", self.app.monitor.engine.get_answer_detail, attempt_id=self.detail_id)
+        if getattr(getattr(self.app, "tasks", None), "bank", None) and self.app.tasks.bank.cleaning:
+            return
+        self.query("detail", getattr(self.app, "history_service", self.app.monitor.engine).get_answer_detail, attempt_id=self.detail_id)
 
     def receive(self, page_id, token, kind, data):
         if self.closed or page_id != self.page_id or token != self.token:

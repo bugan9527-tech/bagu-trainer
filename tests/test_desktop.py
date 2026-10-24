@@ -270,7 +270,7 @@ def test_desktop_runtime_entrypoint_starts_tk_without_loading_user_config():
 
 
 def test_window_broker_is_not_a_learning_interface():
-    assert bridge.WINDOW_COMMANDS == {"_show_dashboard", "_desktop_status"}
+    assert bridge.WINDOW_COMMANDS == {"_show_dashboard", "_desktop_status", "_navigate"}
     monitor = DesktopMonitor(engine)
     assert monitor.window_command("submit_answer", {})["ok"] is False
     assert monitor.window_command("get_learning_stats", {})["ok"] is False

@@ -8,7 +8,7 @@ import json
 import os
 import re
 
-from ..bank_storage import atomic_json
+from ..bank_storage import atomic_json, replace_with_sharing_wait
 
 
 def cache_directory(root, source):
@@ -60,5 +60,5 @@ def publish_archive(root, source, archive, metadata, control):
     directory.mkdir(parents=True, exist_ok=True)
     # Immutable content-addressed blobs precede the atomic completion record.
     # An interrupted forced refresh leaves the previous record/blob usable.
-    os.replace(archive, directory / (metadata["archive_sha256"][:32] + ".zip"))
+    replace_with_sharing_wait(archive, directory / (metadata["archive_sha256"][:32] + ".zip"), control)
     atomic_json(directory / "complete.json", {"schema_version": 1, "source": metadata})

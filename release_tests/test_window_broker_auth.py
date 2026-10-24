@@ -95,7 +95,7 @@ def test_repeated_bad_auth_never_dispatches_or_changes_identity(service, count):
     assert not service.dispatched and not service.handled
     assert len(service.broker.auth) == 32
     assert hashlib.sha256(service.broker.endpoint.read_bytes()).digest() == service.signature
-    assert bridge.WINDOW_COMMANDS == {"_show_dashboard", "_desktop_status"}
+    assert bridge.WINDOW_COMMANDS == {"_show_dashboard", "_desktop_status", "_navigate"}
     assert bridge.remote_call("_desktop_status", {"value": "中文状态"})["value"] == "中文状态"
 
 
@@ -183,7 +183,7 @@ print("rejected, queried, activated")
                              capture_output=True, text=True, timeout=5)
     assert process.returncode == 0, process.stderr
     assert process.stdout.strip() == "rejected, queried, activated"
-    assert coordinator.events.get(timeout=1) == ("show", None)
+    assert coordinator.events.get(timeout=1) == ("show", "dashboard")
     assert coordinator.events.empty()
     assert bridge.remote_call("_desktop_status", {})["ok"]
 

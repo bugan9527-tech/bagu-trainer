@@ -15,8 +15,24 @@ from bagu_trainer.bank_build.service import _build_lock, load_sources
 from bagu_trainer.bank_build.source_cache import cache_directory
 from bagu_trainer.bank_storage import active_bank_dir
 from bagu_trainer.knowledge_base import KnowledgeBase
-from release_tests.test_bank_batch import batch, REPOS
+from release_tests.test_bank_batch import batch as original_batch, REPOS
 from release_tests.test_bank_build import installed
+
+
+@pytest.fixture
+def batch(original_batch, monkeypatch):
+    from bagu_trainer import config
+    from bagu_trainer.store import Store
+    value = original_batch
+    # The previous cache-only tests used a deliberately invalid learning DB
+    # and an unattributed legacy bank. Full deletion requires real ownership.
+    store = Store(value.install.learning)
+    store.close()
+    (value.install.data / "sources.json").write_text(json.dumps({"sources": [{
+        "repository": REPOS[0], "commit": "a" * 40, "directory": "Repo0"}]}))
+    monkeypatch.setattr(config, "CONFIG_PATH", value.install.settings)
+    value.original[value.install.learning] = value.install.learning.read_bytes()
+    return value
 
 
 def fake_engine(batch):
@@ -24,6 +40,7 @@ def fake_engine(batch):
     def reload():
         engine.kb = KnowledgeBase(active_bank_dir(batch.install.project) / "questions.json")
     engine.reload_bank = reload
+    engine.invalidate_content = lambda: None
     return engine
 
 
@@ -101,7 +118,7 @@ def test_pending_engine_version_is_switched_before_cache_cleanup(batch):
     result = cleanup.execute(plan, engine=engine)
     assert result.switched and not result.failures
     assert engine.kb.concepts_path.parent == current.directory
-    assert not cache(batch, 0).exists() and old_loaded.exists()
+    assert not cache(batch, 0).exists() and not old_loaded.exists()
 
 
 def test_confirmation_marks_usage_for_each_object_individually(batch):
@@ -186,7 +203,8 @@ def test_shared_hardlinked_cache_stays_valid_and_release_estimate_excludes_share
     original = shared.read_bytes()
     cleanup = BankCleanupService(batch.service)
     plan = cleanup.plan("sources", [REPOS[1]])
-    assert plan.estimated_bytes == (cache(batch, 1) / "complete.json").stat().st_size
+    expected = sum(path.stat().st_size for target in plan.targets for path, _ in cleanup._files(cleanup._target(target.relative)) if path.stat().st_nlink == 1)
+    assert plan.estimated_bytes == expected
     cleanup.execute(plan, engine=fake_engine(batch))
     assert shared.read_bytes() == original
     assert cache(batch, 0).exists()
@@ -198,15 +216,16 @@ def test_permission_failure_reports_partial_actual_result_without_affecting_curr
     cleanup = BankCleanupService(batch.service)
     plan = cleanup.plan("sources", [REPOS[1]])
     old = active_bank_dir(batch.install.project)
-    import bagu_trainer.bank_cleanup as module
-    actual = module.os.replace
-    def denied(source, destination):
+    import bagu_trainer.source_deletion as module
+    actual = module.shutil.rmtree
+    def denied(source, *args, **kwargs):
         if Path(source) == cache(batch, 1):
             raise PermissionError("合成权限错误")
-        return actual(source, destination)
-    monkeypatch.setattr(module.os, "replace", denied)
+        return actual(source, *args, **kwargs)
+    monkeypatch.setattr(module.shutil, "rmtree", denied)
     result = cleanup.execute(plan, engine=fake_engine(batch))
-    assert result.failures and "权限" in result.message and not result.removed
+    assert result.failures and "权限" in result.message
+    assert str(cache(batch, 1).relative_to(batch.install.data)) not in result.removed
     assert cache(batch, 1).exists() and active_bank_dir(batch.install.project) == old
 
 
@@ -291,12 +310,17 @@ from release_tests.test_answer_history import history, desktop, dispose, pump, s
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk cleanup confirmation")
-def test_main_window_confirmation_cancel_last_source_and_history_preservation(history, batch, monkeypatch):
+def test_main_window_confirmation_cancel_last_source_and_history_deletion(history, batch, monkeypatch):
     engine, store, _ = history
     monkeypatch.setattr(engine, "matcher", engine.matcher)
     engine.reload_bank()
-    attempt = seed(store)
-    original = list(store._conn.iterdump())
+    from release_tests.test_answer_history import SNAP
+    from bagu_trainer import config
+    settings = json.loads(batch.install.settings.read_text())
+    settings["db_path"] = store.path
+    batch.install.settings.write_text(json.dumps(settings))
+    monkeypatch.setattr(config, "CONFIG_PATH", batch.install.settings)
+    attempt = seed(store, snapshot={**SNAP, "sources": [{"repository": REPOS[0], "commit": "a" * 40}]})
     app, _, errors = desktop(history)
     app.monitor.poll = lambda: {"state": "bank_empty" if getattr(engine.kb, "explicit_empty", False) else "watching", "projects": 1}
     app._start_worker()
@@ -321,8 +345,10 @@ def test_main_window_confirmation_cancel_last_source_and_history_preservation(hi
         assert engine.kb.explicit_empty and "无题库" in app.feedback.get()
         assert app.resume_button.instate(["disabled"])
         assert app.practice.current is None and not old.exists()
-        assert list(store._conn.iterdump()) == original
-        assert engine.get_answer_detail(attempt)["snapshot"]
+        assert not engine.get_answer_detail(attempt)["ok"]
+        from bagu_trainer.store import Store
+        with Store._history_connection(store.path) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 0
         assert not errors
     finally:
         dispose(app)

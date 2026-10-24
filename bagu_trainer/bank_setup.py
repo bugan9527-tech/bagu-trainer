@@ -3,8 +3,11 @@ import queue
 import threading
 import time
 
+from . import config
 from .bank_build.control import BuildCancelled, BuildError
 from .bank_build.service import BankBuildService, load_sources
+from .bank_build.source_snapshot import download_label
+from .bank_inventory import BankInventory
 from .ui_theme import apply_theme, SPACE, PRIMARY, TITLE, MUTED
 from .ui_state import cancel_timer, set_text, window_var
 
@@ -36,6 +39,12 @@ class BankSetupWindow:
         self.poll = None
         self.source_statuses = {}
         self.last_batch = None
+        self.inventory = None
+        self._scanner = BankInventory(getattr(self.service, "project_root", config.USER_DATA_ROOT),
+                                      limits=getattr(self.service, "limits", None))
+        self._scan_revision = 0
+        self._scanning = self._rescan = False
+        self._scan_cancel = threading.Event()
         self.budget_text = window_var(parent, "总时限自动按所选来源数 × 900 秒设置；包含下载、重试和构建。")
         self.root = ttk.Frame(parent) if embedded else tk.Toplevel(parent)
         if not embedded:
@@ -48,23 +57,23 @@ class BankSetupWindow:
         if not embedded:
             ttk.Label(panel, text="选择首次下载的题库来源", style=TITLE).grid(row=0, column=0, sticky="w")
         wrapped_label(panel, self.theme, text="按 Ctrl 可多选。使用清单中的固定 commit 版本；请阅读所选来源的声明。\n"
-                  "第三方完整题库仅下载到本机，构建全部成功后才切换，旧题库和学习记录保留。",
+                  "已下载表示本地有该 commit 的完整来源，不代表当前用于练习；全部构建成功后才切换。",
                   style=MUTED).grid(row=1, column=0, sticky="ew", pady=px(SPACE.md))
         listing = ttk.Frame(panel)
         listing.grid(row=2, column=0, sticky="nsew")
-        self.source_list = ttk.Treeview(listing, columns=("commit", "license", "state", "stage", "retries", "reason"), selectmode="extended", height=3 if embedded else 11)
+        self.source_list = ttk.Treeview(listing, columns=("commit", "license", "state", "stage", "retries", "reason", "download"), selectmode="extended", height=3 if embedded else 11)
         self.source_list.bind("<<TreeviewSelect>>", lambda _event: self._sync_controls())
         self.source_list.heading("#0", text="来源仓库")
         self.source_list.heading("commit", text="固定版本")
         self.source_list.heading("license", text="观察到的声明")
         self.source_list.column("commit", width=px(110), minwidth=px(110), stretch=False)
-        for name, title, width in (("state", "状态", 80), ("stage", "阶段", 100), ("retries", "重试次数", 80),
+        for name, title, width in (("download", "下载状态", 100), ("state", "本次任务", 80), ("stage", "阶段", 100), ("retries", "重试次数", 80),
                                    ("reason", "原因 / 处理建议", 420)):
             self.source_list.heading(name, text=title)
             self.source_list.column(name, width=px(width), minwidth=px(width), stretch=False)
         self.source_list.column("#0", width=px(230), minwidth=px(180))
         self.source_list.column("license", width=px(140), minwidth=px(120))
-        self.source_list.configure(displaycolumns=("state", "stage", "retries", "commit", "license", "reason"))
+        self.source_list.configure(displaycolumns=("download", "state", "stage", "retries", "commit", "license", "reason"))
         scroll = ttk.Scrollbar(listing, orient="vertical", command=self.source_list.yview)
         self.source_list.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -74,7 +83,7 @@ class BankSetupWindow:
         self.source_list.pack(fill="both", expand=True)
         for repository, source in self.sources.items():
             self.source_list.insert("", "end", iid=repository, text=repository,
-                                    values=(source.commit[:12], source.license, "等待", "准备", 0, ""))
+                                    values=(source.commit[:12], source.license, "等待", "准备", 0, "", "未下载"))
         row = ttk.Frame(panel)
         row.grid(row=3, column=0, sticky="ew", pady=px(SPACE.sm))
         ttk.Label(row, text="任务总时限（秒）").pack(side="left")
@@ -113,8 +122,42 @@ class BankSetupWindow:
         if not embedded:
             self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.bind("<Destroy>", self._destroyed, add="+")
+        self.root.bind("<Map>", self._mapped, add="+")
         self._sync_controls()
+        self._request_scan()
         self.poll = self.root.after(100, self._drain)
+
+    def _request_scan(self):
+        if self.closed:
+            return
+        if self._scanning:
+            self._rescan = True
+            return
+        self._scanning, self._rescan = True, False
+        scanner, events, cancel = self._scanner, self.events, self._scan_cancel
+        sources, revision = dict(self.sources), self._scan_revision
+
+        def scan():
+            try:
+                value = scanner.scan(sources, cancel=cancel)
+            except BuildCancelled:
+                return
+            except Exception:
+                value = None
+            events.put(("scan", (revision, value)))
+        self.scan_worker = threading.Thread(target=scan, daemon=True, name="bagu-setup-inventory")
+        self.scan_worker.start()
+
+    def _mapped(self, event):
+        if event.widget is self.root:
+            self._scan_revision += 1
+            self._request_scan()
+
+    def _render_downloads(self):
+        for repo, source in self.sources.items():
+            row = self.inventory.sources.get(repo) if self.inventory else None
+            self.source_list.set(repo, "download", download_label(
+                source, row.downloaded if row else False, self.source_statuses.get(repo), self.busy))
 
     def _evidence(self):
         import webbrowser
@@ -179,6 +222,9 @@ class BankSetupWindow:
         self._update_budget()
         self.cancel = threading.Event()
         self.busy = True
+        self._scan_revision += 1
+        self._request_scan()
+        self._render_downloads()
         self.result = None
         self._set_busy(True)
         self.stage = "prepare"
@@ -252,11 +298,14 @@ class BankSetupWindow:
         self.sources = sources
         self.last_batch = None
         self.source_statuses = {}
+        self.inventory = None
+        self._scan_revision += 1
         for repository, source in sources.items():
             self.source_list.insert("", "end", iid=repository, text=repository,
-                                    values=(source.commit[:12], source.license, "等待", "准备", 0, ""))
+                                    values=(source.commit[:12], source.license, "等待", "准备", 0, "", "未下载"))
         self.source_list.selection_set(list(selected.intersection(sources)))
         self._sync_controls()
+        self._request_scan()
 
     def _cancel(self):
         if not self.closed and self.busy and not self.cancel.is_set():
@@ -272,7 +321,15 @@ class BankSetupWindow:
         try:
             while True:
                 name, value = self.events.get_nowait()
-                if name == "progress":
+                if name == "scan":
+                    self._scanning = False
+                    revision, inventory = value
+                    if revision == self._scan_revision:
+                        self.inventory = inventory
+                        self._render_downloads()
+                    if self._rescan:
+                        self._request_scan()
+                elif name == "progress":
                     self.stage = value.stage
                     if value.source is not None:
                         self._render_source(value.source)
@@ -304,6 +361,9 @@ class BankSetupWindow:
                         self.status.set(("已取消" if isinstance(value, BuildCancelled) else "失败") + f" · {value.stage}：{value}")
                     if self.closed:
                         return
+                    self._scan_revision += 1
+                    self._render_downloads()
+                    self._request_scan()
                     self._sync_controls()
                     if self.close_when_idle:
                         self._close()
@@ -318,8 +378,10 @@ class BankSetupWindow:
     def _render_source(self, source):
         self.source_statuses[source.repository] = source
         if self.source_list.exists(source.repository):
-            self.source_list.item(source.repository, values=(source.commit[:12], self.sources[source.repository].license,
-                STATES[source.state], STAGES.get(source.stage, source.stage), max(0, source.attempt - 1), source.reason))
+            for column, value in (("state", STATES[source.state]), ("stage", STAGES.get(source.stage, source.stage)),
+                                  ("retries", max(0, source.attempt - 1)), ("reason", source.reason)):
+                self.source_list.set(source.repository, column, value)
+            self._render_downloads()
 
     def _update_budget(self):
         remaining = max(0, self.deadline - time.monotonic())
@@ -330,6 +392,7 @@ class BankSetupWindow:
     def _destroyed(self, event):
         if event.widget is self.root:
             self.closed = True
+            self._scan_cancel.set()
             self.cancel.set()
             cancel_timer(self.root, self.poll)
             self.poll = None

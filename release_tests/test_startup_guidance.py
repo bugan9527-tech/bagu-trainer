@@ -111,6 +111,8 @@ def test_restored_configuration_notice_and_existing_page_actions(installation, l
         apps.append(app)
         app.root.withdraw()
         try:
+            app._start_worker()
+            wait_ui(app, lambda: app.restored_notice is not None)
             assert app.restored_message.get() == "已恢复当前 Windows 用户保存在本机的配置。"
             notice = app.restored_notice
             app.show_restored_configuration()
@@ -137,6 +139,8 @@ def test_restored_configuration_notice_and_existing_page_actions(installation, l
             app.edit_restored_button.invoke()
             assert app.shell.current_page == "model" and app._cached_pages["model"] is panel
         finally:
+            app.stop.set()
+            app.worker_thread.join(3)
             app.root.destroy()
 
     monkeypatch.setattr(DesktopApp, "run", run)

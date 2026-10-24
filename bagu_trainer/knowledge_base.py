@@ -42,6 +42,12 @@ class KnowledgeBase:
                 f"题库不存在：{path}。源码发布版不附带第三方题库；"
                 "请按项目根目录 QUESTION_BANK.md 的步骤在本地构建后再启动。")
         self.questions = json.loads(path.read_text(encoding="utf-8"))
+        record = path.parent / "sources.json"
+        if record.is_file():
+            from .provenance import question_sources
+            entries = json.loads(record.read_text(encoding="utf-8")).get("sources", [])
+            for question in self.questions:
+                question["sources"] = question_sources(question, entries)
         self.explicit_empty = not self.questions and (path.parent / "empty-bank.json").is_file()
         self._by_id = {q["id"]: q for q in self.questions}
 

@@ -89,7 +89,7 @@ def check_pristine_start(installed, setup, work, data, bundle, entries):
                 # Retain only the public state and readiness booleans for diagnostics.
                 last_status = {"startup_state": status.get("startup_state"),
                                "checks": status.get("checks")}
-                return status.get("startup_state") == "initialization" and status.get("checks") == {
+                return status.get("startup_state") == "running" and status.get("checks") == {
                     "bank": False, "model": False, "projects": False}
             except (OSError, ValueError):
                 return False
@@ -98,7 +98,7 @@ def check_pristine_start(installed, setup, work, data, bundle, entries):
         except AssertionError as error:
             raise AssertionError("Installed first-use readiness timed out: " + json.dumps(last_status)) from error
         screenshot = capture_window(work, "installed-pristine-first-use", pid=child.pid,
-                                    expected_title="AI 八股训练器 · 首次使用向导")
+                                    expected_title="AI 八股训练器")
         check(screenshot["captured"], "Could not capture installed first-use wizard")
         # The real production EXE holds the existing OwnerLock. The installer
         # must fail while it runs and must leave that owned process alive.

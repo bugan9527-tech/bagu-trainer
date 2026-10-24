@@ -12,7 +12,7 @@ sys.path.insert(0, str(root / "packaging"))
 from windows_assets import ICON, version_resource
 resources = root / "build" / "portable-resources"
 datas = [(str(root / name), str(Path(name).parent)) for name in (
-    "LICENSE", "FIRST_USE.md", "QUESTION_BANK.md", "BANK_BUILD.md", "PORTABLE_README.md",
+    "LICENSE", "FIRST_USE.md", "QUESTION_BANK.md", "BANK_BUILD.md", "PORTABLE_README.md", "FEATURE_DELIVERY.md",
     "WINDOWS_PORTABLE.md", "WINDOWS_INSTALLER.md", "DESKTOP_MODE.md", "KEY_MIGRATION.md", "STARTUP.md",
     "VALIDATION.md", "CLEAN_WINDOWS_ACCEPTANCE.md", "UI_DESIGN.md", "UI_LAYOUT.md", "UI_STATES.md", "UI_DISPLAY.md", "THIRD_PARTY_NOTICES.md",
     "interview-banks/sources.json", "interview-banks/README.md")]
@@ -29,4 +29,7 @@ pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="BaguTrainer", console=False,
           debug=False, strip=False, upx=False, contents_directory="_internal",
           icon=str(ICON), version=version_resource())
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="BaguTrainer")
+cleanup = EXE(pyz, a.scripts, [], exclude_binaries=True, name="BaguCleanup", console=False,
+          debug=False, strip=False, upx=False, contents_directory="_internal",
+          icon=str(ICON), version=version_resource())
+coll = COLLECT(exe, cleanup, a.binaries, a.datas, strip=False, upx=False, name="BaguTrainer")

@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS concept_state (
 CREATE INDEX IF NOT EXISTS idx_state_next ON concept_state(next_review_at);
 CREATE INDEX IF NOT EXISTS idx_quizzes_status_expires
     ON quizzes(status, expires_at);
+CREATE TABLE IF NOT EXISTS quiz_sources (
+    quiz_id TEXT NOT NULL REFERENCES quizzes(quiz_id) ON DELETE CASCADE,
+    repository TEXT NOT NULL,
+    commit_id TEXT NOT NULL,
+    PRIMARY KEY (quiz_id, repository, commit_id)
+);
+CREATE INDEX IF NOT EXISTS idx_quiz_sources_repo ON quiz_sources(repository);
 """
 
 _INSERT_QUIZ = (
@@ -84,6 +91,7 @@ class Store:
     """SQLite 学习数据存储。所有写路径带提交，读路径只读。"""
 
     def __init__(self, path):
+        self._writable()
         self.path = str(path)
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -102,8 +110,17 @@ class Store:
 
     def close(self):
         with self._lock:
+            if getattr(self, "_closed", False):
+                return
             self._conn.commit()
             self._conn.close()
+            self._closed = True
+
+    @staticmethod
+    def _writable():
+        from .app_cleanup import maintenance_active
+        if maintenance_active():
+            raise RuntimeError("应用正在完整卸载，禁止写入学习数据库。")
 
     @staticmethod
     def _history_connection(path):
@@ -176,6 +193,17 @@ class Store:
         except (ValueError, TypeError):
             snapshot = {}
         out["snapshot"] = snapshot if isinstance(snapshot, dict) else {}
+        # Repractice inherits the original association, including exact legacy
+        # associations recovered during a prior maintenance transaction.
+        conn = cls._history_connection(path)
+        try:
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='quiz_sources'").fetchone():
+                sources = [{"repository": r[0], "commit": r[1]} for r in conn.execute(
+                    "SELECT repository,commit_id FROM quiz_sources WHERE quiz_id=?", (out["quiz_id"],))]
+                if sources:
+                    out["snapshot"]["sources"] = sources
+        finally:
+            conn.close()
         return out
 
     def unfinished_repractice(self, attempt_id, now):
@@ -191,16 +219,100 @@ class Store:
     def create_quiz(self, quiz_id, kp_id, snapshot, status, project_root,
                     source_summary, created_at, expires_at,
                     delivered_at=None, answered_at=None):
+        self._writable()
         with self._lock:
             self._conn.execute(_INSERT_QUIZ, (
                 quiz_id, kp_id or "",
                 json.dumps(snapshot or {}, ensure_ascii=False),
                 status, project_root or "", (source_summary or "")[:200],
                 created_at, expires_at, delivered_at, answered_at))
+            from .provenance import normalize
+            self._conn.executemany("INSERT OR IGNORE INTO quiz_sources VALUES (?,?,?)",
+                [(quiz_id, source["repository"], source["commit"]) for source in normalize((snapshot or {}).get("sources"))])
             self._conn.commit()
+
+    def source_manifest(self, repositories, index=None):
+        """Read-only approval snapshot. Includes every row in the revision hash."""
+        import hashlib
+        from .provenance import normalize
+        selected = {r.casefold() for r in repositories}
+        associations, unknown, affected, kps = {}, [], [], set()
+        with self._lock:
+            dump = "\n".join(self._conn.iterdump())
+            rows = self._conn.execute("SELECT quiz_id,kp_id,snapshot FROM quizzes ORDER BY quiz_id").fetchall()
+            for row in rows:
+                try:
+                    snapshot = json.loads(row[2])
+                    snapshot = snapshot if isinstance(snapshot, dict) else {}
+                except ValueError:
+                    snapshot = {}
+                raw_sources = snapshot.get("sources")
+                uncertain = raw_sources is not None and (not isinstance(raw_sources, list) or len(normalize(raw_sources)) != len(raw_sources))
+                sources = [{"repository": r[0], "commit": r[1]} for r in self._conn.execute(
+                    "SELECT repository,commit_id FROM quiz_sources WHERE quiz_id=?", (row[0],))]
+                if not sources:
+                    try:
+                        sources = normalize(snapshot.get("sources"))
+                    except (ValueError, AttributeError):
+                        sources = []
+                if not sources and not uncertain:
+                    sources = index.resolve(row[1], snapshot) if hasattr(index, "resolve") else (index or {}).get(row[1], [])
+                if uncertain:
+                    sources = []
+                associations[row[0]] = normalize(sources)
+                if not sources:
+                    unknown.append(row[0])
+                elif selected.intersection(s["repository"].casefold() for s in sources):
+                    affected.append(row[0])
+                    kps.add(row[1])
+            for row in self._conn.execute("SELECT DISTINCT quiz_id FROM attempts WHERE quiz_id NOT IN (SELECT quiz_id FROM quizzes)"):
+                unknown.append(row[0])
+                associations[row[0]] = []
+            affected_states, unknown_states = [], []
+            for row in self._conn.execute("SELECT kp_id FROM concept_state WHERE kp_id NOT IN (SELECT kp_id FROM quizzes)"):
+                sources = (index or {}).get(row[0], [])
+                if not sources:
+                    unknown_states.append(row[0])
+                elif selected.intersection(s["repository"].casefold() for s in sources):
+                    affected_states.append(row[0])
+            count = sum(self._conn.execute("SELECT COUNT(*) FROM attempts WHERE quiz_id=?", (qid,)).fetchone()[0] for qid in affected)
+        return {"revision": hashlib.sha256(dump.encode()).hexdigest(), "affected": affected,
+                "unknown": unknown, "attempts": count, "associations": associations,
+                "affected_states": affected_states, "unknown_states": unknown_states}
+
+    def remove_sources(self, manifest, *, include_unknown=False):
+        """Use only on a private backup, then VACUUM to remove deleted payloads."""
+        from .scheduler import next_state
+        ids = set(manifest["affected"]) | (set(manifest["unknown"]) if include_unknown else set())
+        with self._lock, self._conn:
+            self._conn.execute("PRAGMA secure_delete=ON")
+            kps = set(manifest.get("affected_states", [])) | (set(manifest.get("unknown_states", [])) if include_unknown else set())
+            for qid, sources in manifest["associations"].items():
+                self._conn.executemany("INSERT OR IGNORE INTO quiz_sources VALUES (?,?,?)",
+                    [(qid, s["repository"], s["commit"]) for s in sources])
+            for qid in ids:
+                row = self._conn.execute("SELECT kp_id FROM quizzes WHERE quiz_id=?", (qid,)).fetchone()
+                if row:
+                    kps.add(row[0])
+                self._conn.execute("DELETE FROM attempts WHERE quiz_id=?", (qid,))
+                self._conn.execute("DELETE FROM quiz_sources WHERE quiz_id=?", (qid,))
+                self._conn.execute("DELETE FROM quizzes WHERE quiz_id=?", (qid,))
+            for kp in kps:
+                self._conn.execute("DELETE FROM concept_state WHERE kp_id=?", (kp,))
+                state = None
+                for row in self._conn.execute("SELECT a.correct,a.answered_at FROM attempts a JOIN quizzes q USING(quiz_id) WHERE q.kp_id=? ORDER BY a.answered_at,a.id", (kp,)):
+                    state = next_state(bool(row[0]), state, row[1])
+                if state:
+                    self._conn.execute(_UPSERT_STATE, (kp, *(state[key] for key in (
+                        "attempts", "correct_count", "mastery", "last_reviewed_at", "next_review_at", "interval_days", "ease", "streak"))))
+        self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        self._conn.execute("VACUUM")
+        assert self._conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert not self._conn.execute("PRAGMA foreign_key_check").fetchall()
 
     def set_status(self, quiz_id, status, delivered_at=None, answered_at=None):
         """更新状态；仅更新非 None 的时间字段（quiz 不存在时静默忽略）。"""
+        self._writable()
         with self._lock:
             sets, vals = ["status = ?"], [status]
             if delivered_at is not None:
@@ -229,6 +341,7 @@ class Store:
         """服务重启水合：返回未过期且未作答的题（按创建顺序）。
         同时把已过期的 ready/delivered 题写通为 expired。
         """
+        self._writable()
         with self._lock:
             self._conn.execute(
                 "UPDATE quizzes SET status='expired'"
@@ -246,6 +359,7 @@ class Store:
     def record_attempt(self, quiz_id, kp_id, answer, normalized_answer,
                        correct, answered_at, state, *, once=False):
         """单事务：写入 attempt + 更新 concept_state + 标记 quiz 已作答。"""
+        self._writable()
         with self._lock, self._conn:
             if once and self._conn.execute("SELECT 1 FROM attempts WHERE quiz_id=? LIMIT 1", (quiz_id,)).fetchone():
                 return False

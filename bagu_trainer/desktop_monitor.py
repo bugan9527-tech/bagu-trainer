@@ -101,6 +101,7 @@ class ActivityDiffReader(DiffReader):
 class DesktopMonitor:
     def __init__(self, engine, quiet_seconds=15, clock=time.monotonic):
         self.engine = engine
+        self.capabilities_ready = engine is not None
         self.quiet_seconds = quiet_seconds
         self.clock = clock
         self.observed = {}
@@ -115,6 +116,8 @@ class DesktopMonitor:
         self.ui_state = {"window_state": "starting"}
 
     def poll(self):
+        if self.engine is None or not self.capabilities_ready:
+            return {"state": "not_ready", "projects": 0}
         if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
             self.waiting.clear()
             self.failed_generations.clear()
@@ -247,6 +250,8 @@ class DesktopMonitor:
         return None
 
     def list_pending(self):
+        if self.engine is None or not self.capabilities_ready:
+            return []
         """Read-only pending list (待答列表): ready + delivered, unanswered, in
         project scope (or manual), oldest first.  Viewing the list must NOT mark
         anything delivered — it only reads the current state after cleanup.
@@ -343,9 +348,12 @@ class DesktopMonitor:
     def window_command(self, name, arguments):
         if name == "_desktop_status":
             return {"ok": True, **self.ui_state}
-        if name == "_show_dashboard":
+        if name in {"_show_dashboard", "_navigate"}:
+            page = arguments.get("page", "dashboard") if name == "_navigate" else "dashboard"
+            if page not in {"dashboard", "practice", "history", "projects", "bank", "model", "settings"}:
+                return {"ok": False}
             if self.ui_post:
-                self.ui_post(("show", None))
+                self.ui_post(("show", page))
             return {"ok": self.ui_post is not None}
         return {"ok": False, "note": "不支持的窗口操作"}
 

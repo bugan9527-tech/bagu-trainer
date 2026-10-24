@@ -148,7 +148,6 @@ def phase(options):
     errors, milestones, screenshots, ui_pages = [], [], [], {}
     def capture(name, root):
         screenshots.append(capture_window(work, options.phase + "-" + name, root=root))
-    old_wizard = first_use.FirstUseWizard.__init__
     old_dashboard = desktop.DesktopApp.__init__
     bank_service = BankBuildService(manifest=work / "fixture-sources.json",
         opener=lambda request, timeout: urllib.request.urlopen(options.base_url + "/bank.zip", timeout=timeout))
@@ -166,71 +165,6 @@ def phase(options):
                 return
             root.after(40, tick)
         root.after(80, tick)
-    def wizard_init(app, coordinator, **kwargs):
-        check(options.phase == "first", "Restart unexpectedly opened first-use wizard")
-        old_wizard(app, coordinator, bank_service=bank_service)
-        stage = [0]
-        def step():
-            if app.busy or app._build_busy():
-                return False
-            if stage[0] == 0:
-                check(app.step == "bank", "Expected bank step")
-                check("bagu_trainer.engine" not in sys.modules, "Engine loaded before readiness")
-                capture("wizard-bank", app.root)
-                app.bank_setup._start()
-                check("选择" in app.bank_setup.status.get(), "Missing selection guidance")
-                app.bank_setup.source_list.selection_set(REPOSITORY)
-                app.bank_setup._start()
-            elif stage[0] == 1:
-                check("503" in app.bank_setup.status.get(), "Missing download failure guidance")
-                check(not (config.data_dir() / "active-bank.json").exists(), "Failed build became active")
-                milestones.append("download_failure_and_automatic_retries")
-                app.bank_setup._start()
-            elif stage[0] == 2:
-                check(app.step == "model", "Build did not advance wizard")
-                check((active_bank_dir() / "question_concepts.json").is_file(), "Concept build missing")
-                milestones.append("bank_download_extract_import_tag_concepts")
-                provenance = json.loads((active_bank_dir() / "sources.json").read_text(encoding="utf-8"))
-                aliases = provenance["sources"][0]["path_aliases"]
-                check(set(aliases) == {"docs/Async.md", "docs/async.md"}, "Case aliases missing")
-                for stored in aliases.values():
-                    check((active_bank_dir() / "repos" / "JavaGuide" / stored).read_text(encoding="utf-8") == TEXT,
-                          "Case-distinct source content lost")
-                milestones.append("bank_case_distinct_paths_preserved")
-                app.base_url.set("bad-url")
-                app.model_name.set("local-model")
-                app.api_key.set(KEY)
-                app._test_model()
-            elif stage[0] == 3:
-                check(app.verified is None and "地址" in app.status.get(), "Invalid URL guidance missing")
-                app.base_url.set(options.base_url + "/v1")
-                app.model_name.set("missing-model")
-                app._test_model()
-            elif stage[0] == 4:
-                check(app.verified is None and "404" in app.status.get(), "Invalid model guidance missing")
-                milestones.append("invalid_config_and_model_404_recovery")
-                app.model_name.set("local-model")
-                app._test_model()
-            elif stage[0] == 5:
-                check(app.verified is not None, "Valid local model did not pass test")
-                capture("wizard-model-verified", app.root)
-                app._next()
-            elif stage[0] == 6:
-                check(app.step == "projects" and not app.api_key.get(), "Model was not saved securely")
-                check(KEY not in config.CONFIG_PATH.read_text(encoding="utf-8"), "Plaintext key in configuration")
-                milestones.append("model_explicit_test_and_secure_save")
-                app.projects = [str(watched)]
-                app._render_projects()
-                capture("wizard-projects", app.root)
-                app._next()
-            elif stage[0] == 7:
-                check(app.step == "finish", "Projects did not advance wizard")
-                milestones.append("project_selection")
-                app._next()
-                return True
-            stage[0] += 1
-            return False
-        schedule(app.root, step, lambda: app.root.destroy())
     def dashboard_init(app, monitor, *args, **kwargs):
         old_dashboard(app, monitor, *args, **kwargs)
         stage = [0]
@@ -249,7 +183,78 @@ def phase(options):
                 app._close()
             finally:
                 messagebox.askyesno = previous
+        setup_stage = [0 if options.phase == "first" else 9]
+        def prepare_inline():
+            if setup_stage[0] >= 9:
+                return False
+            bank = app._page_frame("bank")
+            model = app._page_frame("model")
+            if app.tasks.bank.busy or model.busy:
+                return True
+            n = setup_stage[0]
+            if n == 0:
+                check("bagu_trainer.engine" not in sys.modules, "Engine loaded before readiness")
+                app._navigate_page("bank")
+                capture("main-bank-empty", app.root)
+                bank._start()
+                check("选择" in bank.status.get(), "Missing selection guidance")
+                bank.source_list.selection_set(REPOSITORY)
+                bank._start()
+            elif n == 1:
+                check("503" in bank.status.get(), "Missing download failure guidance")
+                check(not (config.data_dir() / "active-bank.json").exists(), "Failed build became active")
+                milestones.append("download_failure_and_automatic_retries")
+                bank._start()
+            elif n == 2:
+                check((active_bank_dir() / "question_concepts.json").is_file(), "Concept build missing")
+                milestones.append("bank_download_extract_import_tag_concepts")
+                provenance = json.loads((active_bank_dir() / "sources.json").read_text(encoding="utf-8"))
+                aliases = provenance["sources"][0]["path_aliases"]
+                check(set(aliases) == {"docs/Async.md", "docs/async.md"}, "Case aliases missing")
+                for stored in aliases.values():
+                    check((active_bank_dir() / "repos" / "JavaGuide" / stored).read_text(encoding="utf-8") == TEXT,
+                          "Case-distinct source content lost")
+                milestones.append("bank_case_distinct_paths_preserved")
+                app._navigate_page("model")
+                model.base_url.set("bad-url")
+                model.model_name.set("local-model")
+                model.api_key.set(KEY)
+                model._test()
+            elif n == 3:
+                check(model.verified is None and "地址" in model.status.get(), "Invalid URL guidance missing")
+                model.base_url.set(options.base_url + "/v1")
+                model.model_name.set("missing-model")
+                model._test()
+            elif n == 4:
+                check(model.verified is None and "404" in model.status.get(), "Invalid model guidance missing")
+                milestones.append("invalid_config_and_model_404_recovery")
+                model.model_name.set("local-model")
+                model._test()
+            elif n == 5:
+                check(model.verified is not None, "Valid local model did not pass test")
+                capture("main-model-verified", app.root)
+                model._save()
+            elif n == 6:
+                check(not model.api_key.get(), "Model key was not cleared after save")
+                check(KEY not in config.CONFIG_PATH.read_text(encoding="utf-8"), "Plaintext key in configuration")
+                milestones.append("model_explicit_test_and_secure_save")
+                app._navigate_page("projects")
+                projects = app._page_frame("projects")
+                projects.projects = [str(watched)]
+                projects._render()
+                projects._mark_dirty()
+                projects._save()
+                milestones.append("project_selection")
+                capture("main-projects", app.root)
+            elif n == 7:
+                if not app.ready:
+                    return True
+                app._navigate_page("dashboard")
+            setup_stage[0] += 1
+            return True
         def step():
+            if prepare_inline():
+                return False
             engine = monitor.engine
             if options.phase == "restart":
                 if not monitor.initialized:
@@ -434,7 +439,12 @@ def phase(options):
                 return True
             return False
         schedule(app.root, step, cleanup)
-    first_use.FirstUseWizard.__init__ = wizard_init
+    from bagu_trainer.bank_panel import BankPanel
+    original_bank_panel = BankPanel.__init__
+    def fixture_bank_panel(self, *args, **kwargs):
+        kwargs["service"] = bank_service
+        original_bank_panel(self, *args, **kwargs)
+    BankPanel.__init__ = fixture_bank_panel
     desktop.DesktopApp.__init__ = dashboard_init
     try:
         desktop.main([])

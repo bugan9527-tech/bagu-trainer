@@ -16,7 +16,8 @@ REPOS = ["fixture/first", "fixture/middle", "fixture/last"]
 COMMITS = [letter * 40 for letter in "abc"]
 SNAPSHOT = {"question": "中文历史题干\n如何减少索引扫描？", "kp_name": "索引",
             "options": {letter: f"中文选项 {letter}\n多行说明" for letter in "ABCD"},
-            "answer": "A", "analysis": "索引缩小扫描范围。\n需要额外存储与维护成本。", "generated_by": "llm"}
+            "answer": "A", "analysis": "索引缩小扫描范围。\n需要额外存储与维护成本。", "generated_by": "llm",
+            "sources": [{"repository": REPOS[0], "commit": COMMITS[0]}]}
 
 
 def check(value, message):
@@ -153,13 +154,16 @@ def run(work, phase):
             result = cleanup.execute(plan, engine=engine, protected=[current])
             check(not result.failures and active_bank_dir(user) == current and current.exists(), "History cleanup changed current bank")
             check(BankInventory(user).scan(load_sources(manifest)).totals["history"] == 0, "History space was not refreshed")
+            check(engine.get_learning_stats()["total_attempts"] == 1,
+                  "Cleanup changed unrelated learning records")
             check(list(engine._store._conn.iterdump()) == json.loads((work / "learning.json").read_text(encoding="utf-8")),
-                  "Cleanup changed learning records")
+                  "Cleanup changed unrelated quizzes, attempts or learning state")
             check(engine.get_answer_detail(1)["snapshot"] == SNAPSHOT, "Cleanup lost history snapshot")
             check((work / "项目 文件" / "keep.py").read_text(encoding="utf-8") == "# 不得删除项目文件\n", "Project file changed")
             milestones.append("history_cleanup_keeps_current_and_learning")
         finally:
-            engine._store.close()
+            if engine._store is not None:
+                engine._store.close()
             engine._store = None
     result = {"passed": True, "phase": phase, "pid": os.getpid(), "frozen": bool(getattr(sys, "frozen", False)),
               "transport": "in-memory generated ZIP; no external network", "milestones": milestones}

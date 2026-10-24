@@ -42,10 +42,7 @@ from bagu_trainer import desktop, engine
 assert not hasattr(engine, 'mcp')
 assert not (project / 'bagu_trainer' / 'server.py').exists()
 settings = runpy.run_path(str(project / 'scripts' / 'config_window.py'))
-window = settings['build_window']()
-window.withdraw()
-window.update_idletasks()
-window.destroy()
+assert settings['main'] is desktop.main
 
 initialise = desktop.DesktopApp.__init__
 status = {}
@@ -58,7 +55,7 @@ def bounded_init(self, *args, **kwargs):
         self.root.destroy()
     self.root.after(1000, finish)
 desktop.DesktopApp.__init__ = bounded_init
-assert desktop.main([]) == 0
+assert desktop.main(['--configure']) == 0
 assert 'Error' not in status['value'], status
 assert 'mcp' not in sys.modules
 print('desktop and settings started without protocol SDK')
