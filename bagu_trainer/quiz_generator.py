@@ -32,6 +32,7 @@ import urllib.request
 
 from . import fallback_bank, secrets
 from .config import load_config
+from .model_http import http_error_message, open_model_request
 from .source_extractor import MIN_USABLE_EXCERPT_CHARS, assess_excerpt
 from .quiz_validation import (QuizValidationError, grounding_receipt, parse_object,
                               validate_grounding, validate_review)
@@ -91,15 +92,14 @@ def test_llm(base_url: str, api_key: str, model: str, timeout: int = 8) -> str:
         headers={"Content-Type": "application/json",
                  "Authorization": f"Bearer {api_key}"})
     try:
-        with urllib.request.urlopen(req, timeout=max(4, timeout)) as resp:
+        with open_model_request(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         reply = (data.get("choices") or [{}])[0].get("message", {}).get("content", "")
         reply = secrets.redact_text(str(reply), [api_key])
         return f"连接成功，模型 {model} 正常响应（{reply[:20]}…）" if reply.strip() else "连接成功"
     except urllib.error.HTTPError as e:
-        msg = {401: "API Key 无效或未授权", 404: "接口路径不存在(检查 base_url)",
-               429: "请求过于频繁/余额不足"}
-        return f"HTTP {e.code}: {msg.get(e.code, e.reason)}"
+        e.close()
+        return http_error_message(e.code)
     except (urllib.error.URLError, TimeoutError):
         return "网络失败/超时：检查网络、代理或 base_url"
 
@@ -109,7 +109,7 @@ class QuizGenerator:
         # 构造参数仅作兼容（config.json 不存在等场景）；出题时始终实时读配置
         self._config = config or {}
         # urlopen 可注入（测试用 fake，避免真实网络）
-        self._urlopen = urlopen or urllib.request.urlopen
+        self._urlopen = urlopen or open_model_request
 
     @staticmethod
     def _current_llm() -> dict:
@@ -174,7 +174,7 @@ class QuizGenerator:
                 except urllib.error.HTTPError as e:
                     # Status is useful for diagnosis; response bodies and headers
                     # can contain credentials and must never be logged.
-                    fail_reason = f"LLM 调用失败: HTTP {e.code}"
+                    fail_reason = "LLM 调用失败: " + http_error_message(e.code)
                     e.close()
                 except Exception as e:
                     # 只保留异常类名：异常文本可能携带请求/响应细节（含密钥）
@@ -220,7 +220,7 @@ class QuizGenerator:
             reviewed = self._request_model(llm, REVIEW_PROMPT, review_input, 0, deadline)
         except urllib.error.HTTPError as e:
             e.close()
-            raise QuizValidationError(f"AI 关联性审核调用失败: HTTP {e.code}，请重试。") from None
+            raise QuizValidationError("AI 关联性审核调用失败: " + http_error_message(e.code)) from None
         except Exception as e:
             raise QuizValidationError(f"AI 关联性审核未完成（{type(e).__name__}），请重试。") from None
         review = validate_review(parse_object(reviewed), quiz["answer"])

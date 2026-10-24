@@ -389,6 +389,23 @@ def phase(options):
                 if not hasattr(page, "retry_button"):
                     return False
                 capture("history-snapshot", app.root)
+                from bagu_trainer.ui_copy import question_text, solution_text
+                import tkinter as tk
+                try:
+                    clipboard_before = app.root.clipboard_get()
+                except tk.TclError:
+                    clipboard_before = None
+                try:
+                    page.copy_question_button.invoke()
+                    check(app.root.clipboard_get() == question_text(QUESTION["question"], QUESTION["options"]),
+                          "Frozen history question copy mismatch")
+                    page.copy_solution_button.invoke()
+                    check(app.root.clipboard_get() == solution_text(QUESTION["answer"], QUESTION["analysis"]),
+                          "Frozen history answer/analysis copy mismatch")
+                finally:
+                    app.root.clipboard_clear()
+                    if clipboard_before is not None:
+                        app.root.clipboard_append(clipboard_before)
                 check(page.retry_button.instate(["!disabled"]), "AI snapshot cannot be repracticed")
                 page.retry()
                 stage[0] = 7
@@ -525,6 +542,10 @@ def orchestrate(options):
             results["production_dirty"] = production_manifest.get("source_dirty")
             results["production_source_tree"] = production_manifest.get("source_tree", {}).get("sha256")
             if results.get("source_tree"):
+                check(results["source_commit"] == results["production_commit"],
+                      "Frozen driver and production commits differ")
+                check(results["source_dirty"] == results["production_dirty"],
+                      "Frozen driver and production dirty states differ")
                 check(results["source_tree"]["sha256"] == results["production_source_tree"],
                       "Frozen driver and production code fingerprints differ")
             prod_env = dict(environment)
@@ -585,6 +606,19 @@ def orchestrate(options):
             results["updated_model_production_restart"] = {"model": UPDATED_MODEL, "direct_main": True,
                                                           "no_new_model_requests": counts == expected_counts}
         check(counts == expected_counts, "Production restart unexpectedly sent model requests")
+        # Independent profile, same two processes in source and frozen runs.
+        # No acceptance hook is added to the production executable.
+        lifecycle = work / "bank-lifecycle"
+        lifecycle_env = dict(environment, BAGU_USER_DATA_DIR=str(lifecycle / "user"),
+                             PYTHON_KEYRING_BACKEND="keyring.backends.null.Keyring")
+        for name in ("prepare", "resume"):
+            child = subprocess.run([*command, "--work", str(lifecycle), "--phase", "bank-" + name],
+                                   env=lifecycle_env, capture_output=True, timeout=90)
+            error_file = lifecycle / "ERROR.json"
+            check(child.returncode == 0, "Bank lifecycle failed: " +
+                  (error_file.read_text(encoding="utf-8") if error_file.exists() else
+                   child.stderr.decode("utf-8", errors="replace")[-3000:]))
+            results["bank_" + name] = json.loads((lifecycle / (name + "-result.json")).read_text(encoding="utf-8"))
         results["requests"] = counts
         results["model_requests"] = models
         results["passed"] = True
@@ -609,12 +643,15 @@ def orchestrate(options):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=lambda p: Path(p).resolve(), required=True)
-    parser.add_argument("--phase", choices=["first", "restart"])
+    parser.add_argument("--phase", choices=["first", "restart", "bank-prepare", "bank-resume"])
     parser.add_argument("--base-url")
     parser.add_argument("--memory-credentials", action="store_true")
     parser.add_argument("--production-exe", type=lambda p: Path(p).resolve())
     options = parser.parse_args()
-    if options.phase:
+    if options.phase and options.phase.startswith("bank-"):
+        from scripts.acceptance.bank_lifecycle import run
+        run(options.work, options.phase.removeprefix("bank-"))
+    elif options.phase:
         phase(options)
     else:
         orchestrate(options)

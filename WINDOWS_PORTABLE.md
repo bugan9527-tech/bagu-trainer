@@ -17,7 +17,7 @@ python -m venv .venv-build
 输出：
 
 - `dist/BaguTrainer/`：可直接启动的完整目录。
-- `dist/BaguTrainer-0.3.0-windows-x64.zip`：分发压缩包，文件名版本由 `version.py` 生成。
+- `dist/BaguTrainer-0.3.1-windows-x64.zip`：分发压缩包，文件名版本由 `version.py` 生成。
 - 同名 `.zip.sha256`：压缩包校验值。
 - 包内 `BUILD_MANIFEST.json`：架构、版本、构建依赖版本及逐文件 SHA256。
 
@@ -52,7 +52,7 @@ PR 只运行构建/测试，不获得 Release 写权限。手动运行要求文�
 依据 [GitHub 手动运行规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 
 ```powershell
-gh workflow run windows-portable.yml --ref main -f tag=v0.3.0
+gh workflow run windows-portable.yml --ref main -f tag=v0.3.1
 gh run list --workflow windows-portable.yml
 ```
 

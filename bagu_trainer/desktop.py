@@ -282,7 +282,8 @@ class DesktopApp:
         if page == "bank":
             from .bank_panel import BankPanel
             panel = BankPanel(self.content_host, self.theme, tasks=self.tasks,
-                              on_built=self._bank_built)
+                              on_built=self._bank_built, on_cleanup=self._queue_bank_cleanup,
+                              protected_versions=self._protected_bank_versions)
             return panel
         if page == "model":
             from .model_panel import ModelPanel
@@ -314,6 +315,21 @@ class DesktopApp:
         # A completed build does not touch the running bank; the engine reloads
         # at a safe boundary (generation/submit) only.
         self.status.set(f"新题库已构建（{result.questions} 道题），将在生成/提交安全边界应用。")
+
+    def _protected_bank_versions(self):
+        path = getattr(getattr(getattr(self.monitor, "engine", None), "kb", None), "concepts_path", None)
+        return [path.parent] if path is not None else []
+
+    def _bank_empty(self):
+        return bool(getattr(getattr(getattr(self.monitor, "engine", None), "kb", None), "explicit_empty", False))
+
+    def _queue_bank_cleanup(self, cleanup, plan):
+        if self.closed or self.closing or self.pending_actions:
+            return False
+        self.pending_actions.add("bank_cleanup")
+        self.jobs.put(("bank_cleanup", (cleanup, plan)))
+        self._sync_actions()
+        return True
 
     def _model_saved(self):
         self.status.set("模型配置已保存，即时生效。")
@@ -350,7 +366,7 @@ class DesktopApp:
 
     def _enter_pending(self, quiz_id):
         """按题进入: request the worker to deliver a specific ready/delivered quiz."""
-        if self.closed or self.closing or "enter_quiz" in self.pending_actions:
+        if self.closed or self.closing or self.tasks.bank.cleaning or self._bank_empty() or "enter_quiz" in self.pending_actions:
             return False
         if not self.practice.begin_enter(quiz_id):
             return False
@@ -360,6 +376,10 @@ class DesktopApp:
         return True
 
     def _continue_practice(self):
+        if self._bank_empty():
+            self.status.set("当前无题库，请重新下载并构建来源后练习。")
+            self._navigate_page("bank")
+            return
         self._navigate_page("practice")
         if self.practice.current is None and not self.practice.busy:
             self._request_action("resume")
@@ -448,13 +468,17 @@ class DesktopApp:
                              ("configure", self.configure_button), ("bank", self.bank_button), ("pause", self.pause_button)):
             disabled = (locked or name in self.pending_actions)
             button.state(["disabled"] if disabled else ["!disabled"])
-        self.resume_button.state(["disabled"] if locked or self.generation_busy else ["!disabled"])
-        retry_ok = self.generation_retryable and not self.generation_busy and not self.monitor.paused
+        bank_empty = self._bank_empty()
+        self.resume_button.state(["disabled"] if locked or self.generation_busy or bank_empty else ["!disabled"])
+        retry_ok = self.generation_retryable and not self.generation_busy and not self.monitor.paused and not bank_empty
         self.retry_button.state(["!disabled"] if retry_ok and not locked and "retry_generation" not in self.pending_actions else ["disabled"])
         self.retry_button.configure(text="正在重试…" if "retry_generation" in self.pending_actions else "重试出题")
         if self.closing:
             hint = "正在安全退出：当前出题请求或记录写入不可取消，将在任务结束后关闭。"
             self.listen_state.set("正在安全退出")
+        elif bank_empty:
+            hint = "当前无题库，请重新下载并构建来源后练习；学习记录和历史快照保留。"
+            self.listen_state.set("无题库 · 请重新下载来源")
         elif self.generation_busy:
             hint = "进行中：模型出题。当前请求不支持取消；可暂停后续监听，请勿重复重试。"
             if "pause" in self.pending_actions:
@@ -484,7 +508,7 @@ class DesktopApp:
                             break
                         # Already queued writes must finish during normal exit;
                         # never start another generation or scan while closing.
-                        if self.stop.is_set() and name not in {"submit", "repractice"}:
+                        if self.stop.is_set() and name not in {"submit", "repractice", "bank_cleanup"}:
                             continue
                         try:
                             if name == "submit":
@@ -504,7 +528,7 @@ class DesktopApp:
                                 self.events.put(("repractice", (page_id, result)))
                             elif name == "resume":
                                 quiz = self.monitor.resume_quiz()
-                                self.events.put(("quiz", quiz)) if quiz else self.events.put(("status", "空状态：当前没有已展示的待答题。等待新题或新的代码改动。"))
+                                self.events.put(("quiz", quiz)) if quiz else self.events.put(("status", "空状态：当前没有可用的待答题或到期复习题。可等待新题或新的代码改动。"))
                             elif name == "enter_quiz":
                                 try:
                                     quiz = self.monitor.enter_quiz(value)
@@ -524,6 +548,17 @@ class DesktopApp:
                                     self.events.put(("bank_applied", f"新题库应用失败（{type(error).__name__}），可重新构建后重试。"))
                                 else:
                                     self.events.put(("bank_applied", None))
+                            elif name == "bank_cleanup":
+                                cleanup, plan = value
+                                try:
+                                    result = cleanup.execute(plan, engine=self.monitor.engine)
+                                    if result.empty:
+                                        self.monitor.active = None
+                                        self.monitor.waiting.clear()
+                                        self.monitor.failed_generations.clear()
+                                    self.events.put(("bank_cleaned", (result, None)))
+                                except Exception as error:
+                                    self.events.put(("bank_cleaned", (None, str(error))))
                             elif name == "apply_projects":
                                 DesktopApp._apply_projects_serial(self, value)
                                 self.events.put(("status", f"成功：监听项目已更新为 {len(value)} 个，未变化项目基线保留。"))
@@ -557,6 +592,7 @@ class DesktopApp:
                         "quiz_ready": "成功：题目准备就绪。",
                         "generation_unavailable": "出题失败，请查看原因并重试；监听仍在运行。",
                         "project_unavailable": "监听目录不可用，请恢复目录或添加有效项目后重试。",
+                        "bank_empty": "当前无题库：请重新下载并构建来源后练习；学习记录和历史快照保留。",
                     }
                     self.events.put(("status", labels[result["state"]]))
                     DesktopApp._post_dashboard(self, result["state"])
@@ -590,7 +626,8 @@ class DesktopApp:
         if self.closed or self.closing:
             return
         labels = {"paused": "监听已暂停", "watching": "正在监听代码改动", "quiz_ready": "练习已就绪",
-                  "generation_unavailable": "监听中 · 出题暂不可用", "project_unavailable": "请检查监听目录"}
+                  "generation_unavailable": "监听中 · 出题暂不可用", "project_unavailable": "请检查监听目录",
+                  "bank_empty": "无题库 · 请重新下载来源"}
         self.listen_state.set("进行中 · 正在准备题目" if self.generation_busy else labels.get(snapshot.get("state"), "正在准备监听"))
         roots = snapshot.get("projects")
         if roots is not None:
@@ -658,6 +695,26 @@ class DesktopApp:
                     self.practice.finish_enter(value)
                     self._refresh_practice()
                     self._sync_actions()
+                elif name == "bank_cleaned":
+                    result, error = value
+                    panel = self._cached_pages.get("bank")
+                    if panel is not None:
+                        panel.finish_cleanup(result=result, error=error)
+                    else:
+                        self.tasks.bank.cleaning = False
+                    if result is not None:
+                        if result.switched:
+                            self.tasks.bank.state = "applied"
+                        self.status.set(result.message)
+                        if result.empty:
+                            self.practice.clear()
+                            self._pending_items = []
+                            self._refresh_practice()
+                            self.generation_reason = "当前无题库，请重新下载并构建来源后练习。历史答题快照保留。"
+                            self.generation_retryable = False
+                            self.feedback.set(self.generation_reason)
+                            self.listen_state.set("无题库 · 请重新下载来源")
+                            self._sync_actions()
                 elif name == "bank_applied":
                     self._bank_reload_pending = False
                     if value:
@@ -702,7 +759,7 @@ class DesktopApp:
             if self._exit_tasks_finished():
                 self.root.destroy()
                 return
-        elif self.tasks.bank.state == "built" and not self._bank_reload_pending:
+        elif self.tasks.bank.state == "built" and not self.tasks.bank.cleaning and not self._bank_reload_pending:
             # The existing serial engine worker is the safety boundary. Tk
             # never waits on the generation lock or mutates a running bank.
             self._bank_reload_pending = True
@@ -716,13 +773,15 @@ class DesktopApp:
 
     def _show_quiz(self, quiz, manual=False):
         """Route a delivered quiz through the single practice entry point."""
-        if self.closed or self.closing or not quiz:
+        if self.closed or self.closing or not quiz or self._bank_empty():
             return
         self.practice.deliver(quiz, manual=manual)
         self._refresh_practice()
 
     def _can_submit_quiz(self, quiz_id):
         return (not self.closed and not self.closing
+                and not self.tasks.bank.cleaning
+                and not self._bank_empty()
                 and self.practice.entering_quiz_id is None
                 and quiz_id not in self.inflight_submissions)
 

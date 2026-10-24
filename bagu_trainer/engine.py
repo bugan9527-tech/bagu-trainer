@@ -858,6 +858,8 @@ def repractice_attempt(attempt_id):
     requests and survives restarts. Persist before publishing in-memory state.
     """
     with _STATE_LOCK:
+        if getattr(kb, "explicit_empty", False):
+            return {"ok": False, "note": "当前无题库，请重新下载并构建来源后练习；历史快照仍可查看。"}
         detail = get_answer_detail(attempt_id)
         if not detail.get("ok") or not detail.get("can_retry"):
             return {"ok": False, "note": detail.get("retry_reason") or detail.get("note")}

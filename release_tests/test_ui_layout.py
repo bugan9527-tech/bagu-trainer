@@ -95,7 +95,7 @@ def test_window_content_reflows_and_actions_remain_reachable(monkeypatch, scale,
         app.root.geometry("%dx%d" % app.theme.px((1000, 700)))
         app.root.update()
         assert practice.question_label.winfo_reqheight() <= narrow_height
-        assert int(practice.question_label.cget("wraplength")) <= practice.question_label.winfo_width()
+        assert practice.question_label.cget("wrap") == "word"
         app.practice.apply_grade({"ok": True, "correct": True, "correct_answer": "A",
                                   "analysis": text * 4, "schedule": {"interval_days": 1}})
         app.root.update()

@@ -6,12 +6,17 @@ import stat
 import urllib.error
 import urllib.request
 import zipfile
+from contextlib import nullcontext
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 from .control import BuildError
+
+
+class ArchiveLimitError(BuildError):
+    """A local resource policy failure does not mean an archive is corrupt."""
 
 
 @dataclass(frozen=True)
@@ -42,6 +47,7 @@ def download_archive(source, destination, control, *, opener=None, retries=2,
                                                    "Accept": "application/vnd.github+json"})
     destination = Path(destination)
     for attempt in range(1, retries + 2):
+        control.emit("download", f"准备请求 {source.repository}", attempt=attempt)
         control.phase("download", f"下载 {source.repository} @ {source.commit[:12]}")
         control.emit("download", f"下载 {source.repository}", attempt=attempt)
         try:
@@ -49,7 +55,7 @@ def download_archive(source, destination, control, *, opener=None, retries=2,
                 length = response.headers.get("Content-Length")
                 total = int(length) if length else 0
                 if total < 0 or total > limits.download_bytes:
-                    raise BuildError("download", "ZIP 下载大小超出限制。")
+                    raise ArchiveLimitError("download", "ZIP 下载大小超出限制。")
                 downloaded = 0
                 digest = hashlib.sha256()
                 read = getattr(response, "read1", response.read)
@@ -62,7 +68,7 @@ def download_archive(source, destination, control, *, opener=None, retries=2,
                             break
                         downloaded += len(chunk)
                         if downloaded > limits.download_bytes:
-                            raise BuildError("download", "ZIP 下载大小超出限制。")
+                            raise ArchiveLimitError("download", "ZIP 下载大小超出限制。")
                         output.write(chunk)
                         digest.update(chunk)
                         control.emit("download", source.repository, downloaded, total, attempt)
@@ -80,7 +86,17 @@ def download_archive(source, destination, control, *, opener=None, retries=2,
             retryable = not isinstance(error, urllib.error.HTTPError) or error.code in {408, 429} or error.code >= 500
             if not retryable or attempt > retries:
                 status = f"HTTP {error.code}" if isinstance(error, urllib.error.HTTPError) else type(error).__name__
-                raise BuildError("download", f"下载 {source.repository} 失败（{status}），可重试。") from error
+                if isinstance(error, urllib.error.HTTPError):
+                    reason = ("仓库或 commit 不可访问，请核对固定版本和仓库访问权限" if error.code == 404
+                              else "请求被限流，请稍后重试" if error.code == 429
+                              else "远端服务拒绝请求或暂时不可用，请检查网络与仓库访问权限后重试")
+                elif isinstance(error, TimeoutError) or isinstance(getattr(error, "reason", None), TimeoutError):
+                    reason = f"单次网络请求等待超时（上限 {request_timeout:g} 秒），请检查网络或增大单次请求超时后重试"
+                elif isinstance(error, http.client.IncompleteRead):
+                    reason = "下载响应不完整，请检查网络连接后重试，残缺内容不会作为缓存使用"
+                else:
+                    reason = f"网络连接失败：{getattr(error, 'reason', error)}，请检查网络、代理或证书配置后重试"
+                raise BuildError("download", f"下载 {source.repository} 失败（{status}）：{reason}。") from error
             control.emit("retry", f"下载失败，准备第 {attempt + 1} 次尝试", attempt=attempt + 1)
             control.wait(min(2 ** (attempt - 1), 4))
     raise AssertionError("unreachable")
@@ -132,15 +148,18 @@ def _portable_paths(validated, control):
     return physical
 
 
-def safe_extract(archive, destination, control, *, limits=None):
+def safe_extract(archive, destination, control, *, limits=None, verify_only=False):
     """Extract safely; return original -> stored aliases for case-distinct files."""
     limits = limits or ArchiveLimits()
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=False)
+    destination = Path(destination) if not verify_only else None
+    if destination is not None:
+        destination.mkdir(parents=True, exist_ok=False)
     try:
         with zipfile.ZipFile(archive) as bundle:
             members = bundle.infolist()
-            if not members or len(members) > limits.members:
+            if len(members) > limits.members:
+                raise ArchiveLimitError("unpack", "ZIP 条目数量超出限制。")
+            if not members:
                 raise BuildError("unpack", "ZIP 条目数量不合法。")
             seen, root, expanded = set(), None, 0
             validated = []
@@ -170,21 +189,24 @@ def safe_extract(archive, destination, control, *, limits=None):
                 expanded += member.file_size
                 if (member.file_size > limits.file_bytes or expanded > limits.unpack_bytes
                         or member.file_size > max(1, member.compress_size) * limits.compression_ratio):
-                    raise BuildError("unpack", "ZIP 解压大小或压缩比超出限制。")
+                    raise ArchiveLimitError("unpack", "ZIP 解压大小或压缩比超出限制。")
                 validated.append((member, relative))
             physical = _portable_paths(validated, control)
             aliases = {}
             for index, (member, relative) in enumerate(validated, 1):
                 control.check()
                 stored = physical[relative.parts if relative != Path() else ()]
-                target = destination / stored
-                target.resolve().relative_to(destination.resolve())
+                target = destination / stored if destination is not None else None
+                if target is not None:
+                    target.resolve().relative_to(destination.resolve())
                 if member.is_dir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    if target is not None:
+                        target.mkdir(parents=True, exist_ok=True)
                 else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target is not None:
+                        target.parent.mkdir(parents=True, exist_ok=True)
                     count = 0
-                    with bundle.open(member) as incoming, target.open("xb") as output:
+                    with bundle.open(member) as incoming, (target.open("xb") if target is not None else nullcontext()) as output:
                         while True:
                             control.check()
                             block = incoming.read(64 * 1024)
@@ -193,7 +215,8 @@ def safe_extract(archive, destination, control, *, limits=None):
                             count += len(block)
                             if count > member.file_size or count > limits.file_bytes:
                                 raise BuildError("unpack", "ZIP 实际解压大小超出声明。")
-                            output.write(block)
+                            if output is not None:
+                                output.write(block)
                     if count != member.file_size:
                         raise BuildError("unpack", "ZIP 内容不完整。")
                     if stored != relative:

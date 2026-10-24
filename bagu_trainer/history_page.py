@@ -6,6 +6,7 @@ from tkinter import ttk
 from .ui_layout import ScrollableFrame, FlowActions, wrapped_label
 from .ui_state import window_var
 from .ui_theme import SPACE, SECTION, MUTED, PRIMARY
+from .ui_copy import ReadOnlyText, copy_text, question_text, solution_text
 
 
 def _query(events, page_id, token, kind, function, arguments):
@@ -30,6 +31,7 @@ class HistoryPage:
         self.page = self.total = 0
         self.project_paths = [None]
         self.detail_id = None
+        self._copy_snapshot = None
         self.selection, self.scroll = (), 0
         self.frame = ttk.Frame(content_host if content_host is not None else self.root,
                                padding=self.theme.px(SPACE.lg))
@@ -187,6 +189,7 @@ class HistoryPage:
             "detail", self.app.monitor.engine.get_answer_detail, attempt_id=self.detail_id)).pack(anchor="w")
 
     def _new_detail(self):
+        self._copy_snapshot = None
         if self.detail_frame:
             self.detail_frame.destroy()
         self.detail_frame = ttk.Frame(self.workspace)
@@ -199,15 +202,20 @@ class HistoryPage:
         self.detail_view = ScrollableFrame(self.detail_frame, self.theme)
         self.detail_view.grid(row=0, column=0, sticky="nsew")
         body, snapshot = self.detail_view.body, data["snapshot"]
+        self.detail_texts = {}
         missing = "旧记录未提供"
         def show(title, text):
             wrapped_label(body, self.theme, text=title, style=SECTION).pack(fill="x", pady=(12, 4))
-            wrapped_label(body, self.theme, text=str(text) if text not in (None, "") else missing).pack(fill="x")
+            content = ReadOnlyText(body, self.theme, text=str(text) if text not in (None, "") else missing)
+            content.pack(fill="x")
+            self.detail_texts[title] = content
         self.message.set(f"{data['time_text']} · {'答对' if data['correct'] else '答错'} · 记录 #{data['id']}（历史快照）")
         show("知识点与项目", f"{snapshot.get('kp_name') or data.get('kp_id') or missing}\n{data.get('project_root') or missing}")
         show("题干", snapshot.get("question"))
         options = snapshot.get("options")
         options = options if isinstance(options, dict) else {}
+        self._copy_snapshot = {"id": data["id"], "question": snapshot.get("question"), "options": dict(options),
+                               "answer": snapshot.get("answer"), "analysis": snapshot.get("analysis")}
         for letter in "ABCD":
             show(f"选项 {letter}", options.get(letter))
         show("当次选择", data.get("answer"))
@@ -223,12 +231,31 @@ class HistoryPage:
         reason = self.base_retry_reason
         self.retry_reason = window_var(self.detail_frame, reason or "使用该快照重新练习，不调用 AI。提交后才显示答案与解析。")
         wrapped_label(self.detail_frame, self.theme, textvariable=self.retry_reason, style=MUTED).grid(row=1, column=0, sticky="ew", pady=8)
-        self.retry_button = ttk.Button(self.detail_frame, text="重新练习本题", style=PRIMARY, command=self.retry)
-        self.retry_button.grid(row=2, column=0, sticky="w")
+        actions = FlowActions(self.detail_frame, self.theme)
+        actions.grid(row=2, column=0, sticky="ew")
+        self.retry_button = actions.add(ttk.Button(actions, text="重新练习本题", style=PRIMARY, command=self.retry))
+        self.copy_question_button = actions.add(ttk.Button(actions, text="复制题目（含选项）", command=self._copy_question))
+        self.copy_solution_button = actions.add(ttk.Button(actions, text="复制答案与解析", command=self._copy_solution))
+        if not (snapshot.get("answer") or snapshot.get("analysis")):
+            self.copy_solution_button.state(["disabled"])
         if reason:
             self.retry_button.state(["disabled"])
         if self.visible:
             self.detail_view.canvas.focus_set()
+
+    def _copy_detail(self):
+        snapshot = self._copy_snapshot
+        return snapshot if not self.closed and self.visible and snapshot and snapshot["id"] == self.detail_id else None
+
+    def _copy_question(self):
+        snapshot = self._copy_detail()
+        if snapshot:
+            copy_text(self.frame, question_text(snapshot["question"], snapshot["options"]))
+
+    def _copy_solution(self):
+        snapshot = self._copy_detail()
+        if snapshot and (snapshot["answer"] or snapshot["analysis"]):
+            copy_text(self.frame, solution_text(snapshot["answer"], snapshot["analysis"]))
 
     def retry(self):
         if self.closed or self.retry_busy or self.retry_button.instate(["disabled"]):

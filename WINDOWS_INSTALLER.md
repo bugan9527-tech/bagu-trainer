@@ -13,7 +13,7 @@
 
 以下工具和命令仅供开发者构建/验收，普通用户不需要执行。
 
-产品版本只维护 `bagu_trainer/version.py`，当前为 0.3.0。安装器入口为
+产品版本只维护 `bagu_trainer/version.py`，当前为 0.3.1。安装器入口为
 `packaging/windows-installer.iss`；AppId 永久固定为
 `{C95D2707-83B5-4D34-A88D-7F30C5AC6E19}`。
 
@@ -49,7 +49,7 @@ PE 产品名、文件版本和产品版本通过该模块由 `version.py` 派生
 
 ## 输出与安全边界
 
-- `BaguTrainer-0.3.0-windows-x64-Setup.exe`。
+- `BaguTrainer-0.3.1-windows-x64-Setup.exe`（安装器构建后的预期文件名；本轮仅生成便携验证包）。
 - 同名 `.exe.sha256`。
 - `INSTALLER_MANIFEST.json`：输入清单摘要、源码来源、固定 AppId、工具版本、
   构建输入 hash、安装器 hash 和解包检查结果。

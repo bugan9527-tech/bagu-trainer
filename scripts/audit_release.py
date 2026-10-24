@@ -29,10 +29,11 @@ SECRET_PATTERNS = (
 )
 # Reviewed self-authored privacy test fixtures. Exact-file hashes mean that
 # adding another token, even in these files, invalidates the exemption.
+# Hashes use the LF bytes enforced by .gitattributes (identical Git blobs).
 SYNTHETIC_TEST_FILES = {
-    "source/release_tests/test_first_use.py": "85580d5ec3215c7750c7d4f7e971164f5731e7100702d7278bc6c45906caacbc",
-    "source/tests/test_privacy.py": "9e13912e971b9d41e98147670fbaccad1f05ba2046590a810d7fbf5282197990",
-    "source/tests/test_secret_migration.py": "a3d01cd50252567bbcffdcc04ed118f0b1b153e56a98fd88b4a89bf5f7cc1efc",
+    "source/release_tests/test_first_use.py": "97e3da75ee6758ea2093a5e94e87dbdb43359d3c21b18a53f356ce9cb6145d4e",
+    "source/tests/test_privacy.py": "7846ccf1c07d85e94d50c3874ed2243de20b5bdd2addae5d1e8803237971bedc",
+    "source/tests/test_secret_migration.py": "408dd3fb3473ac04fed0b14b090b6b5ea17ef41ba5bc230f047b625e470c9e03",
 }
 
 

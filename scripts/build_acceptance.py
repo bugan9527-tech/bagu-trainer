@@ -18,8 +18,12 @@ def main():
     parser.add_argument("--work", type=Path, default=ROOT / "build" / "frozen-acceptance")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
     parser.add_argument("--production-exe", type=Path)
+    parser.add_argument("--require-clean", action="store_true")
     options = parser.parse_args()
     output = options.output_dir.resolve()
+    if options.require_clean and subprocess.check_output(
+            ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True).strip():
+        raise ValueError("Acceptance build requires a clean source checkout")
     prepare_notices()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True).strip())

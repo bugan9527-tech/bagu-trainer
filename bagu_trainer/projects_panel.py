@@ -45,6 +45,7 @@ class ProjectsPanel(ttk.Frame):
         self.projects = []
         self.dirty = False
         self.busy = False
+        self.save_error = ""
         self.wide = False
 
         from . import config
@@ -75,7 +76,7 @@ class ProjectsPanel(ttk.Frame):
         listing.columnconfigure(0, weight=1)
         listing.rowconfigure(0, weight=1)
         self.listbox = self._tk_listbox(listing)
-        self.listbox.bind("<<ListboxSelect>>", lambda _event: self._sync_detail())
+        self.listbox.bind("<<ListboxSelect>>", self._selection_changed)
         self.listbox.grid(row=0, column=0, sticky="nsew")
         vertical = ttk.Scrollbar(listing, orient="vertical", command=self.listbox.yview)
         vertical.grid(row=0, column=1, sticky="ns")
@@ -132,6 +133,10 @@ class ProjectsPanel(ttk.Frame):
         self._sync_detail()
         self._sync_controls()
 
+    def _selection_changed(self, _event=None):
+        self._sync_detail()
+        self._sync_controls()
+
     def _sync_detail(self):
         selection = self.listbox.curselection()
         if not selection:
@@ -146,12 +151,19 @@ class ProjectsPanel(ttk.Frame):
         selected = bool(self.listbox.curselection())
         self.remove_button.state(["!disabled"] if selected and not locked else ["disabled"])
         self.save_button.state(["!disabled"] if self.dirty and not locked else ["disabled"])
-        self.hint.set("正在保存并应用监听范围…" if locked else
-                      ("有未保存的更改，点击“保存并应用”生效。" if self.dirty else
-                       "更改监听项目后需点击“保存并应用”才影响监听范围。"))
+        if locked:
+            hint = "正在保存并应用监听范围…"
+        elif self.save_error:
+            hint = self.save_error
+        elif self.dirty:
+            hint = "有未保存的更改，点击“保存并应用”生效。"
+        else:
+            hint = "更改监听项目后需点击“保存并应用”才影响监听范围。"
+        set_text(self.hint, hint)
 
     def _mark_dirty(self):
         self.dirty = True
+        self.save_error = ""
         self._sync_controls()
         if self.on_changed is not None:
             self.on_changed()
@@ -176,6 +188,7 @@ class ProjectsPanel(ttk.Frame):
     def _save(self):
         if self.busy or not self.dirty:
             return
+        self.save_error = ""
         self.busy = True
         self._sync_controls()
         try:
@@ -183,7 +196,7 @@ class ProjectsPanel(ttk.Frame):
             startup.set_projects(self.projects)
         except Exception as error:
             self.busy = False
-            self.hint.set(f"保存失败（{type(error).__name__}）：{error} 列表未更改。")
+            self.save_error = f"保存失败（{type(error).__name__}）：{error} 已保存的配置未更改，请修正后重试。"
             self._sync_controls()
             return
         self.busy = False

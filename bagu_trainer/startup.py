@@ -128,9 +128,10 @@ def set_projects(paths):
     check = _projects_check({"project_roots": roots})
     if not check.ready:
         raise ValueError(check.detail)
-    configuration = read_configuration()
-    configuration["project_roots"] = roots
-    config._write_config_atomic(configuration)
+    with config.config_transaction():
+        configuration = read_configuration()
+        configuration["project_roots"] = roots
+        config._write_config_atomic(configuration)
 
 
 class StartupCoordinator:

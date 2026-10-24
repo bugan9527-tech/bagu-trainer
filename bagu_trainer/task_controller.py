@@ -30,10 +30,17 @@ class BankTask:
     events: queue.Queue = field(default_factory=queue.Queue)
     worker: threading.Thread = None
     error: str = ""
+    sources: dict = field(default_factory=dict)
+    generation: str = ""
+    repositories: list = field(default_factory=list)
+    versions: dict = field(default_factory=dict)
+    force_download: bool = False
+    download_sizes: dict = field(default_factory=dict)
+    cleaning: bool = False
 
     @property
     def busy(self):
-        return self.state == "building"
+        return self.state == "building" or self.cleaning
 
 
 class TaskController:
@@ -48,7 +55,7 @@ class TaskController:
         self.bank = BankTask()
 
     # -- bank build -----------------------------------------------------------
-    def start_build(self, service, repositories, *, timeout=900):
+    def start_build(self, service, repositories, *, timeout=None, versions=None, retry_failed=None, force_download=False):
         if self.bank.busy:
             return False
         self.bank.state = "building"
@@ -57,17 +64,24 @@ class TaskController:
         self.bank.progress = {}
         self.bank.result = None
         self.bank.error = ""
+        self.bank.sources = {}
+        self.bank.generation = ""
+        self.bank.repositories = list(repositories)
+        self.bank.versions = dict(versions or {})
+        self.bank.force_download = force_download
+        self.bank.download_sizes = {}
         self.bank.cancel = threading.Event()
         events = self.bank.events
         cancel = self.bank.cancel
 
         def work():
             try:
-                result = service.build(repositories, cancel=cancel, timeout=timeout,
+                result = service.build(repositories, cancel=cancel, timeout=timeout, versions=versions,
+                    retry_failed=retry_failed, force_download=force_download,
                     progress=lambda event: events.put(("progress", event)))
                 events.put(("result", result))
             except BuildError as error:
-                events.put(("error", (error.stage, str(error), isinstance(error, BuildCancelled))))
+                events.put(("error", error))
             except Exception as error:
                 events.put(("error", ("prepare", f"初始化失败（{type(error).__name__}），可重试。", False)))
 
@@ -76,7 +90,7 @@ class TaskController:
         return True
 
     def cancel_build(self):
-        if self.bank.busy and not self.bank.cancel.is_set():
+        if self.bank.state == "building" and not self.bank.cancel.is_set():
             self.bank.cancel.set()
             return True
         return False
@@ -91,12 +105,25 @@ class TaskController:
                     self.bank.stage = value.stage
                     self.bank.message = value.message
                     self.bank.progress = {"completed": value.completed, "total": value.total}
+                    if value.source:
+                        self.bank.sources[value.source.repository] = value.source
+                        if value.stage == "download" and value.total:
+                            self.bank.download_sizes[value.source.repository] = value.total
+                    if value.generation:
+                        self.bank.generation = value.generation
                 elif name == "result":
                     self.bank.result = value
                     self.bank.state = "built"
+                    for source in getattr(value, "sources", ()):
+                        self.bank.sources[source.repository] = source
                     changed = True
                 elif name == "error":
-                    stage, message, cancelled = value
+                    if isinstance(value, BuildError):
+                        stage, message, cancelled = value.stage, str(value), isinstance(value, BuildCancelled)
+                        for source in getattr(value, "sources", ()):
+                            self.bank.sources[source.repository] = source
+                    else:
+                        stage, message, cancelled = value
                     self.bank.error = message
                     self.bank.state = "cancelled" if cancelled else "failed"
                     changed = True
