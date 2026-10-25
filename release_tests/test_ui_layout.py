@@ -127,3 +127,22 @@ def test_dashboard_reads_existing_aggregates_through_worker_queue():
     assert calls == ["read"] and name == "dashboard"
     assert snapshot["projects"] == ["C:/one", "C:/two"]
     assert snapshot["stats"]["total_attempts"] == 4
+
+
+def test_single_line_message_height_is_not_expanded_by_scrollbar():
+    from bagu_trainer.tk_runtime import create_root
+    from bagu_trainer.ui_theme import apply_theme, SPACE
+    from bagu_trainer.ui_layout import MessageArea
+    from bagu_trainer.ui_state import window_var
+    root = create_root()
+    try:
+        root.tk.call("tk", "scaling", 2 * 96 / 72)
+        theme = apply_theme(root)
+        root.geometry("600x300")
+        area = MessageArea(root, window_var(root, "需要滚动查看的说明。" * 100), theme, lines=1)
+        area.pack(fill="x")
+        root.update()
+        assert area.scrollbar.winfo_ismapped()
+        assert area.winfo_height() == area.text.winfo_reqheight() + 2 * theme.px(SPACE.md)
+    finally:
+        root.destroy()

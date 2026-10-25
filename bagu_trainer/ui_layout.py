@@ -233,8 +233,17 @@ class MessageArea(ttk.Frame):
         self.text.bind("<Shift-Tab>", lambda _event: self._traverse(True))
         self.text.bind("<Control-a>", self._select_all)
         self.text.grid(row=0, column=0, sticky="nsew")
-        self.scrollbar = ttk.Scrollbar(self, command=self.text.yview)
-        self.scrollbar.grid(row=0, column=1, sticky="ns")
+        # A scrollbar can request more height than a one-line Text. Let the
+        # Text determine height, otherwise showing the bar makes all text fit,
+        # hides the bar again and starts an endless geometry feedback loop.
+        self.scrollbar_host = ttk.Frame(self, height=1)
+        self.scrollbar_host.grid(row=0, column=1, sticky="ns")
+        self.scrollbar_host.grid_propagate(False)
+        self.scrollbar_host.rowconfigure(0, weight=1)
+        self.scrollbar_host.columnconfigure(0, weight=1)
+        self.scrollbar = ttk.Scrollbar(self.scrollbar_host, command=self.text.yview)
+        self.scrollbar.grid(row=0, column=0, sticky="nsew")
+        self.scrollbar_host.configure(width=self.scrollbar.winfo_reqwidth())
         self.text.configure(yscrollcommand=self._scroll_state)
         self.variable = variable
         self.trace = variable.trace_add("write", self._update)
@@ -244,9 +253,9 @@ class MessageArea(ttk.Frame):
     def _scroll_state(self, first, last):
         self.scrollbar.set(first, last)
         if float(first) <= 0 and float(last) >= 1:
-            self.scrollbar.grid_remove()
+            self.scrollbar_host.grid_remove()
         else:
-            self.scrollbar.grid()
+            self.scrollbar_host.grid()
 
     def _update(self, *_):
         self.text.configure(state="normal")
@@ -267,7 +276,7 @@ class MessageArea(ttk.Frame):
         if event.widget is self:
             self.variable.trace_remove("write", self.trace)
             # Drop Tk variables on the UI thread, not in a later worker GC.
-            self.variable = self.text = self.scrollbar = None
+            self.variable = self.text = self.scrollbar = self.scrollbar_host = None
 
 
 class FlowActions(ttk.Frame):

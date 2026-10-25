@@ -279,6 +279,10 @@ def test_all_seven_routes_use_one_shell_and_mount_real_pages(history):
 
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
 def test_sidebar_keyboard_and_real_pages_at_four_tk_scales(history, monkeypatch, scale):
+    if scale == 2:
+        from bagu_trainer import ui_theme
+        # Keep the hosted runner's small work area reproducible on larger monitors.
+        monkeypatch.setattr(ui_theme, "work_area", lambda _: (0, 0, 1024, 728))
     from bagu_trainer.tk_runtime import prepare_tk
     prepare_tk()
     import tkinter as tk
