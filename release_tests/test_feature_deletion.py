@@ -380,9 +380,16 @@ def test_junction_and_replaced_external_database_are_rejected(tmp_path, monkeypa
 def test_cleanup_file_lock_is_reported_and_retry_verifies(tmp_path):
     import ctypes
     from ctypes import wintypes
+    from bagu_trainer.desktop_instance import OwnerLock
+    from bagu_trainer.cleanup_manifest import identity
     root = tmp_path / "profile"
     root.mkdir()
     (root / "config.json").write_text(json.dumps({"project_roots": []}))
+    owner = OwnerLock(root / "runtime")
+    assert owner.acquire()
+    owner.close()
+    lock_path = root / "runtime/owner.lock"
+    original_identity = identity(lock_path)
     cleaner = AppCleanup([root], tmp_path / "retry.json", credential_services=[])
     plan = cleaner.plan()
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -396,10 +403,14 @@ def test_cleanup_file_lock_is_reported_and_retry_verifies(tmp_path):
         failed = cleaner.execute(plan, environment=lambda: [])
         assert not failed["ok"] and any("config.json" in failure for failure in failed["failures"])
         assert cleaner.journal.exists()
+        assert lock_path.exists(), "Keep maintenance lock identity until data cleanup succeeds"
     finally:
         kernel.CloseHandle(handle)
+    assert owner.acquire()
+    owner.close()
+    assert identity(lock_path) == original_identity
     assert cleaner.execute(environment=lambda: [])["ok"]
-    assert not cleaner.journal.exists() and not (root / "config.json").exists()
+    assert not cleaner.journal.exists() and not (root / "config.json").exists() and not lock_path.exists()
 
 
 def test_publishing_waits_for_short_lived_inventory_read_handle(expanded):

@@ -148,6 +148,28 @@ def validate_target(target, *, expected_source=None, driver=None):
     return result
 
 
+def verify_installed_payload(executable, bundle):
+    """Bind an installed EXE to an already validated clean production bundle.
+
+    Installer metadata and unrelated user files are outside the production
+    inventory. Read only original payload members; preserve every extra file.
+    """
+    from bagu_trainer.cleanup_manifest import safe_path as safe_file
+    from scripts.build_installer import safe_path as safe_relative
+    executable = safe_file(Path(executable).absolute())
+    if executable.name != "BaguTrainer.exe":
+        raise ValueError("Installed payload must name BaguTrainer.exe")
+    manifest_path = Path(bundle) / "BUILD_MANIFEST.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    expected = [*manifest["files"], {"path": "BUILD_MANIFEST.json", "sha256": sha256(manifest_path)}]
+    for item in expected:
+        safe_relative(item["path"])
+        path = safe_file(executable.parent / item["path"])
+        if not path.is_file() or sha256(path) != item["sha256"]:
+            raise ValueError("Installed payload differs from verified production: " + item["path"])
+    return {"exe": str(executable), "manifest_sha256": sha256(manifest_path)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path)

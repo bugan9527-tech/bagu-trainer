@@ -464,6 +464,9 @@ def phase(options):
 
 def orchestrate(options):
     work = options.work
+    installed_exe = getattr(options, "installed_exe", None)
+    if installed_exe and not options.production_exe:
+        raise ValueError("--installed-exe requires a verified --production-exe bundle")
     # Gate all production inputs BEFORE GUI children, HTTP mocks or credentials.
     artifact = None
     if options.production_exe or options.output_dir or options.archive or getattr(sys, "frozen", False):
@@ -477,6 +480,10 @@ def orchestrate(options):
         artifact = validate_target(target, expected_source=expected,
                                    driver=Path(sys.executable) if getattr(sys, "frozen", False) else None)
         options.production_exe = target.bundle / "BaguTrainer.exe"
+        if installed_exe:
+            from scripts.portable_artifacts import verify_installed_payload
+            artifact["installed"] = verify_installed_payload(installed_exe, target.bundle)
+            options.production_exe = installed_exe
     work.mkdir(parents=True, exist_ok=False)
     if artifact is not None:
         # Keep target identity even when a later GUI milestone fails.
@@ -677,6 +684,8 @@ def main():
     parser.add_argument("--base-url")
     parser.add_argument("--memory-credentials", action="store_true")
     parser.add_argument("--production-exe", type=lambda p: Path(p).resolve())
+    parser.add_argument("--installed-exe", type=lambda p: Path(p).absolute(),
+                        help="Exercise this installed EXE after verifying it against the clean production bundle")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--archive", type=Path)
     options = parser.parse_args()

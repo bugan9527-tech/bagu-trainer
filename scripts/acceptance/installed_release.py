@@ -602,7 +602,8 @@ def run(setup, bundle, driver, work, output, *, previous_setup, previous_bundle,
                 report["frozen_requested"] = True
                 try:
                     subprocess.run([str(driver), "--work", str(work / "frozen"), "--production-exe",
-                        str(installed / "BaguTrainer.exe"), "--memory-credentials", "--output-dir", str(setup.parent)],
+                        str(bundle / "BaguTrainer.exe"), "--installed-exe", str(installed / "BaguTrainer.exe"),
+                        "--memory-credentials", "--output-dir", str(setup.parent)],
                         env=environment(data), check=True, timeout=300)
                     from scripts.release_portable import acceptance_summary
                     acceptance_summary(work / "frozen/ACCEPTANCE.json", manifest["source_commit"])

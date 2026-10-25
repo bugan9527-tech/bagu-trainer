@@ -146,6 +146,33 @@ def test_renamed_extracted_directory_still_binds_to_canonical_zip(target, tmp_pa
     assert artifacts.validate_target(artifacts.resolve_target(target.output_dir, bundle=renamed))["passed"]
 
 
+def test_installed_payload_preserves_extra_files_and_keeps_portable_gate_strict(target, tmp_path):
+    installed = tmp_path / "installed"
+    shutil.copytree(target.bundle, installed)
+    for name in ("unins000.exe", "unins000.dat", "BaguTrainer.install-files.txt", "unrelated-user-note.txt"):
+        (installed / name).write_bytes(b"synthetic installer or unrelated content")
+    with pytest.raises(ValueError, match="BUILD_MANIFEST"):
+        artifacts.validate_target(artifacts.resolve_target(target.output_dir, bundle=installed))
+    result = artifacts.verify_installed_payload(installed / "BaguTrainer.exe", target.bundle)
+    assert result["exe"] == str(installed / "BaguTrainer.exe")
+    assert result["manifest_sha256"] == artifacts.sha256(target.bundle / "BUILD_MANIFEST.json")
+    assert (installed / "unrelated-user-note.txt").read_bytes() == b"synthetic installer or unrelated content"
+
+
+@pytest.mark.parametrize("mutation", ["modified", "missing", "manifest"])
+def test_installed_payload_still_requires_every_original_hash(target, tmp_path, mutation):
+    installed = tmp_path / "installed"
+    shutil.copytree(target.bundle, installed)
+    if mutation == "modified":
+        (installed / "BaguTrainer.exe").write_bytes(b"changed executable")
+    elif mutation == "missing":
+        (installed / "_internal/runtime.dll").unlink()
+    else:
+        (installed / "BUILD_MANIFEST.json").write_text("{}")
+    with pytest.raises(ValueError, match="Installed payload"):
+        artifacts.verify_installed_payload(installed / "BaguTrainer.exe", target.bundle)
+
+
 def test_runner_binds_children_and_report_to_validated_target(target, tmp_path, monkeypatch):
     output = tmp_path / "reports/tests.xml"
     monkeypatch.setattr(runner.sys, "argv", ["runner", "--output-dir", str(target.output_dir),

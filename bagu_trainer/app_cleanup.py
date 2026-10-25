@@ -195,17 +195,22 @@ class AppCleanup:
                 failures.append(f"凭据 {service}：{type(error).__name__}，请修复凭据服务后重试。")
         failures.extend(environment())
         emit("正在清理学习数据库、题库、配置与日志")
-        for item in plan["files"]:
-            try:
-                path = safe_path(item["path"])
-                if path.exists():
-                    if identity(path) != item["identity"]:
-                        raise ValueError("文件身份变化，已保留")
-                    path.unlink()
-                if path.exists():
-                    raise OSError("删除后仍存在")
-            except Exception as error:
-                failures.append(f"{item['path']}：{type(error).__name__}，请解除占用或修复权限后重试。")
+        def remove_files(items):
+            for item in items:
+                try:
+                    path = safe_path(item["path"])
+                    if path.exists():
+                        if identity(path) != item["identity"]:
+                            raise ValueError("文件身份变化，已保留")
+                        path.unlink()
+                    if path.exists():
+                        raise OSError("删除后仍存在")
+                except Exception as error:
+                    failures.append(f"{item['path']}：{type(error).__name__}，请解除占用或修复权限后重试。")
+        # Maintenance probes reopen these files on every retry. Keep their
+        # original identities while a data/credential failure is retryable.
+        owner_locks = {root / "runtime/owner.lock" for root in self.profiles}
+        remove_files(item for item in plan["files"] if Path(item["path"]) not in owner_locks)
         # Keep the program/retry helper if *any* data/credential removal failed.
         if not failures:
             emit("数据已核验，正在删除本副本的受管程序文件")
@@ -218,6 +223,8 @@ class AppCleanup:
                         path.unlink()
                 except Exception as error:
                     failures.append(f"{item['path']}：{type(error).__name__}")
+        if not failures:
+            remove_files(item for item in plan["files"] if Path(item["path"]) in owner_locks)
         plan["failures"] = failures
         if failures:
             atomic_json(self.journal, plan)
