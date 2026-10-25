@@ -12,7 +12,7 @@ key 经 bagu_trainer.secrets 解析（环境变量 > 凭据管理器 > 旧配置
 产出契约（generate 返回 dict）：
   - available=True ：四选项齐备、答案/解析合法的可作答题目
       （generated_by=llm；所有新题必须经过模型生成）
-  - available=False：生成失败，带 unavailable_reason，
+  - available=False：生成失败，带 unavailable_reason 和 failure_kind（quality/service），
       绝不返回空选项/空答案的题目
 
 硬性规则：
@@ -126,7 +126,7 @@ class QuizGenerator:
     # ---- 对外入口 ----
     def generate(self, kp_question: dict, context_text: str) -> dict:
         """返回完整 quiz dict（available=True 时含 answer/analysis，作答前不外发；
-        available=False 时含 unavailable_reason，无 question/options/answer）。
+        available=False 时含 unavailable_reason/failure_kind，无 question/options/answer）。
         """
         excerpt = (kp_question.get("source_excerpt") or "").strip()
         quality = assess_excerpt(excerpt)
@@ -150,10 +150,13 @@ class QuizGenerator:
                 str(context_text or ""), [llm["api_key"]])[:CONTEXT_MAX_CHARS]
             excerpt = secrets.redact_text(excerpt, [llm["api_key"]])[:SOURCE_MAX_CHARS]
         fail_reason = None
+        failure_kind = "service"
         if llm and llm.get("api_key"):
             if not excerpt:
+                failure_kind = "quality"
                 fail_reason = "来源正文缺失(source_excerpt 为空)，拒绝无依据合成"
             elif not usable:
+                failure_kind = "quality"
                 fail_reason = (
                     f"来源片段不可用({quality['reason']}：有效正文"
                     f"{quality['effective_chars']}字符，低于"
@@ -169,8 +172,10 @@ class QuizGenerator:
                         quiz["generated_by"] = "llm"
                         return quiz
                     fail_reason = "LLM 输出校验失败(四选项/答案/解析/题长不合法)"
+                    failure_kind = "quality"
                 except QuizValidationError as e:
                     fail_reason = str(e)
+                    failure_kind = e.failure_kind
                 except urllib.error.HTTPError as e:
                     # Status is useful for diagnosis; response bodies and headers
                     # can contain credentials and must never be logged.
@@ -181,13 +186,15 @@ class QuizGenerator:
                     fail_reason = f"LLM 调用失败: {e.__class__.__name__}"
         else:
             fail_reason = "未配置 LLM（请在主窗口打开模型配置，或设置环境变量 BAGU_LLM_API_KEY）"
-        print(f"[quiz] {fail_reason} -> 本次不出题，等待重试 ({kp_question['id']})",
+        outcome = "本次不出题，等待新的改动" if failure_kind == "quality" else "本次不出题，等待重试"
+        print(f"[quiz] {fail_reason} -> {outcome} ({kp_question['id']})",
               file=sys.stderr)
         return {
             **base,
             "generated_by": "unavailable",
             "available": False,
             "unavailable_reason": fail_reason,
+            "failure_kind": failure_kind,
         }
 
     # ---- LLM 合成 ----
@@ -196,7 +203,7 @@ class QuizGenerator:
         timeout = llm.get("timeout_sec", 30)
         if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool)
                 or not math.isfinite(timeout) or timeout <= 0):
-            raise QuizValidationError("出题与审核超时配置必须是有效正数。")
+            raise QuizValidationError("出题与审核超时配置必须是有效正数。", failure_kind="service")
         deadline = time.monotonic() + timeout
         name = secrets.redact_text(str(kp_question["knowledge_point"]), [llm["api_key"]])[:500]
         title = secrets.redact_text(str(kp_question["question"]), [llm["api_key"]])[:500]
@@ -218,11 +225,15 @@ class QuizGenerator:
         }, ensure_ascii=False)
         try:
             reviewed = self._request_model(llm, REVIEW_PROMPT, review_input, 0, deadline)
+        except QuizValidationError:
+            raise
         except urllib.error.HTTPError as e:
             e.close()
-            raise QuizValidationError("AI 关联性审核调用失败: " + http_error_message(e.code)) from None
+            raise QuizValidationError("AI 关联性审核调用失败: " + http_error_message(e.code),
+                                      failure_kind="service") from None
         except Exception as e:
-            raise QuizValidationError(f"AI 关联性审核未完成（{type(e).__name__}），请重试。") from None
+            raise QuizValidationError(f"AI 关联性审核未完成（{type(e).__name__}），请重试。",
+                                      failure_kind="service") from None
         review = validate_review(parse_object(reviewed), quiz["answer"])
         quiz["grounding"] = grounding_receipt(evidence, review, context_text, excerpt, llm.get("model", ""))
         return quiz
@@ -252,11 +263,11 @@ class QuizGenerator:
         if time.monotonic() >= deadline:
             raise TimeoutError("model request deadline")
         if len(raw) > MODEL_RESPONSE_MAX_BYTES:
-            raise QuizValidationError("AI 响应过大，请重试。")
+            raise QuizValidationError("AI 响应过大，请重试。", failure_kind="service")
         data = json.loads(raw.decode("utf-8"))
         content = data["choices"][0]["message"]["content"]
         if not isinstance(content, str):
-            raise QuizValidationError("AI 响应内容格式不正确，请重试。")
+            raise QuizValidationError("AI 响应内容格式不正确，请重试。", failure_kind="service")
         return secrets.redact_text(content, [llm["api_key"]])
 
     # ---- 严格校验 ----

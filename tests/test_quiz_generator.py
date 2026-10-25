@@ -3,6 +3,9 @@
 无来源片段拒合成。全部 fake，不触碰真实 LLM 与真实 config.json。
 """
 import json
+import urllib.error
+
+import pytest
 
 import bagu_trainer.quiz_generator as qg
 
@@ -268,3 +271,57 @@ def test_generator_handles_missing_excerpt_status(monkeypatch):
     quiz = gen.generate(broken, "上下文")
     assert quiz.get("available") is False
     assert "未配置 LLM" in quiz["unavailable_reason"]
+
+
+@pytest.mark.parametrize("case", ["missing_source", "short_source", "invalid_quiz", "forged_quote",
+                                  "source_supported", "context_relevant", "answer_unique",
+                                  "no_answer_leak", "answer_conflict", "invalid_review"])
+def test_quality_rejections_are_classified_without_relaxing_validation(monkeypatch, case):
+    with_llm(monkeypatch, {"base_url": "https://fake.local/v1", "api_key": "sk-test", "model": "m"})
+    question = dict(UNVERIFIED)
+    content = json.loads(VALID_LLM_CONTENT)
+    review = dict(VALID_REVIEW)
+    if case == "missing_source":
+        question["source_excerpt"] = ""
+    elif case == "short_source":
+        question["source_excerpt"] = "正文太短"
+    elif case == "invalid_quiz":
+        content["options"]["B"] = content["options"]["A"]
+    elif case == "forged_quote":
+        content["grounding"]["source_quote"] = "这是实际来源中不存在的正文引用片段"
+    elif case == "answer_conflict":
+        review["correct_answer"] = "B"
+    elif case == "invalid_review":
+        review = {"source_supported": "true"}
+    else:
+        review[case] = False
+    monkeypatch.setitem(globals(), "VALID_REVIEW", review)
+    capture = {}
+    gen = qg.QuizGenerator(urlopen=make_urlopen(respond=json.dumps(content, ensure_ascii=False), capture=capture))
+    quiz = gen.generate(question, "为订单查询增加读写分离与主从复制")
+    assert quiz["available"] is False and quiz["failure_kind"] == "quality"
+    assert quiz["unavailable_reason"]
+    assert not {"question", "options", "answer", "analysis", "grounding"} & quiz.keys()
+    if case in ("missing_source", "short_source"):
+        assert not capture
+
+
+@pytest.mark.parametrize("stage", ["generation", "review"])
+@pytest.mark.parametrize("error_type", [TimeoutError, urllib.error.URLError, urllib.error.HTTPError, OSError])
+def test_service_errors_at_both_stages_remain_visible(monkeypatch, stage, error_type):
+    with_llm(monkeypatch, {"base_url": "https://fake.local/v1", "api_key": "sk-test", "model": "m"})
+    calls = []
+    normal = make_urlopen(respond=VALID_LLM_CONTENT)
+
+    def request(req, timeout=None):
+        calls.append(1)
+        if len(calls) == (1 if stage == "generation" else 2):
+            if error_type is urllib.error.HTTPError:
+                raise error_type("https://fake.local", 429, "private-response", {}, None)
+            raise error_type("private-response")
+        return normal(req, timeout=timeout)
+
+    quiz = qg.QuizGenerator(urlopen=request).generate(UNVERIFIED, "为订单查询增加读写分离与主从复制")
+    assert quiz["available"] is False and quiz["failure_kind"] == "service"
+    assert "private-response" not in str(quiz)
+    assert len(calls) == (1 if stage == "generation" else 2)

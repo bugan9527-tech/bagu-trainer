@@ -6,7 +6,7 @@ AI interview practice from your code changes.
 
 面向正在写项目、准备技术面试的开发者：监听项目变化，匹配题库知识点，生成贴近代码场景的 AI 情景题；作答后查看解析，按计划复习。
 
-**[下载 Windows 安装版 · v0.4.2](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.2/BaguTrainer-0.4.2-windows-x64-Setup.exe)** · [便携 ZIP](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.2/BaguTrainer-0.4.2-windows-x64.zip) · [最新发布与校验文件](https://github.com/bugan9527-tech/bagu-trainer/releases/latest) · [三步上手](#三步上手)
+**[下载 Windows 安装版 · v0.4.3](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.3/BaguTrainer-0.4.3-windows-x64-Setup.exe)** · [便携 ZIP](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.3/BaguTrainer-0.4.3-windows-x64.zip) · [最新发布与校验文件](https://github.com/bugan9527-tech/bagu-trainer/releases/latest) · [三步上手](#三步上手)
 
 适用于 Windows x64，无需安装 Python。首次使用需要下载题库来源并配置模型 API，模型请求可能产生服务商费用。
 
@@ -34,7 +34,7 @@ AI interview practice from your code changes.
 把日常代码修改变成与当前任务相关的面试练习：监听选定项目的代码变化，匹配题库知识点，
 结合来源正文和工作上下文生成四选一情景题，作答后查看解析并记录掌握度与复习计划。
 
-所有新题必须由 AI 生成；模型不可用、正文不足或输出不合格时提示失败与重试，不展示离线回退题。
+所有新题必须由 AI 生成；正文不足、输出或审核不合格时静默跳过，继续监听；模型配置、网络或接口故障仍提示失败并可重试，不展示离线回退题。
 复习可复用此前 AI 生成的题目；旧离线题和来源不明快照不再交付，已有作答记录与统计保留。
 新题还须通过上下文/来源引用校验及单独的 AI 关联审核。正常生成通常需要两次模型请求，
 共用配置的超时预算；服务商可能分别计费，失败不会自动循环调用。流程和限制见 [AI 出题规则](AI_QUIZ_POLICY.md)。

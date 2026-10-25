@@ -111,6 +111,7 @@ class DesktopMonitor:
         self.active = None
         self.delivery_paused = threading.Event()
         self.failed_generations = {}
+        self.failure_reasons = {}
         self.generating = False
         self.ui_post = None
         self.ui_state = {"window_state": "starting"}
@@ -121,6 +122,7 @@ class DesktopMonitor:
         if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
             self.waiting.clear()
             self.failed_generations.clear()
+            self.failure_reasons.clear()
             return {"state": "bank_empty", "projects": 0}
         if self.paused:
             return {"state": "paused", "projects": 0}
@@ -132,6 +134,8 @@ class DesktopMonitor:
             self.observed.pop(removed, None)
         self.initialized.intersection_update(roots)
         self.failed_generations = {r: f for r, f in self.failed_generations.items() if r in roots}
+        self.failure_reasons = {r: reason for r, reason in self.failure_reasons.items()
+                                if r in self.failed_generations}
         result = {"state": "watching" if roots else "not_ready", "projects": len(roots)}
         for root in roots:
             # All desktop activity shares the same scoped context and snapshot pipeline.
@@ -179,20 +183,33 @@ class DesktopMonitor:
         try:
             matches, generated, skipped, unavailable = engine.generate_activity(
                 root, info, retry_failed_ids=failed_ids)
-            if unavailable:
-                self.failed_generations[root] = (info, tuple(item["kp_id"] for item in unavailable))
-                reason = unavailable[0].get("reason") or "暂时无法出题，请检查模型配置后重试。"
+            service_failures = [item for item in unavailable if item.get("failure_kind") != "quality"]
+            if service_failures:
+                self.failed_generations[root] = (info, tuple(item["kp_id"] for item in service_failures))
+                reason = service_failures[0].get("reason") or "暂时无法出题，请检查模型配置后重试。"
+                self.failure_reasons[root] = reason
                 state = "generation_unavailable"
             else:
                 self.failed_generations.pop(root, None)
+                self.failure_reasons.pop(root, None)
                 if generated:
                     reason = "题目已准备好，可开始作答。"
+                elif unavailable:
+                    reason = "等待新的代码改动。"
                 elif not matches:
                     reason = (f"已检测到代码改动，但未匹配到题库知识点（当前 {len(engine.kb.all())} 个）；"
                               "未调用 AI。可更换或扩充题库来源。")
                 else:
                     reason = f"已匹配知识点，其中 {skipped} 个因重复、待答或复习冷却跳过；未调用 AI。"
                 state = "quiz_ready" if generated else "watching"
+            # A quiet skip in one project must not replace another project's
+            # actionable service diagnostic with a generic waiting message.
+            if self.failed_generations and not service_failures:
+                failed_root = next(iter(self.failed_generations))
+                reason = self.failure_reasons.get(failed_root) or "暂时无法出题，请检查模型配置后重试。"
+                state = "generation_unavailable"
+            elif self.paused and state == "watching":
+                state = "paused"
             # Counts only: never persist project code, prompts or credentials.
             logging.getLogger("bagu-trainer").info(
                 "[monitor] checked files=%d context_chars=%d bank=%d matched=%d generated=%d skipped=%d unavailable=%d state=%s",
@@ -208,6 +225,8 @@ class DesktopMonitor:
     def retry_generation(self):
         """Explicit retry of failed items; preserve scope, dedupe and cooldown."""
         if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
+            self.failed_generations.clear()
+            self.failure_reasons.clear()
             return {"state": "bank_empty", "projects": 0}
         if self.paused:
             return {"state": "paused", "projects": 0}
@@ -218,6 +237,7 @@ class DesktopMonitor:
         for root, (info, failed_ids) in list(self.failed_generations.items()):
             if root not in roots:
                 self.failed_generations.pop(root, None)
+                self.failure_reasons.pop(root, None)
                 continue
             result["state"] = self._generate(root, info, failed_ids)
         return result

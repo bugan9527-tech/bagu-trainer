@@ -7,6 +7,10 @@ import re
 class QuizValidationError(ValueError):
     """Messages are fixed diagnostics, never model text or project snippets."""
 
+    def __init__(self, message, *, failure_kind="quality"):
+        super().__init__(message)
+        self.failure_kind = "quality" if failure_kind == "quality" else "service"
+
 
 def parse_object(content):
     if not isinstance(content, str):

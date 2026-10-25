@@ -329,13 +329,15 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
             quiz = generator.generate(q, ctx)
             quiz["sources"] = q.get("sources", [])
         except Exception as error:
-            quiz = {"available": False, "unavailable_reason": f"出题失败（{type(error).__name__}），请检查模型配置后重试。"}
+            quiz = {"available": False, "failure_kind": "service",
+                    "unavailable_reason": f"出题失败（{type(error).__name__}），请检查模型配置后重试。"}
         failure = _generation_failure(quiz, require_review=True)
         if failure:
             unavailable.append({
                 "kp_id": q["id"],
                 "knowledge_point": q["knowledge_point"],
                 "reason": failure,
+                "failure_kind": "quality" if quiz.get("failure_kind") == "quality" else "service",
             })
             continue
         quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],

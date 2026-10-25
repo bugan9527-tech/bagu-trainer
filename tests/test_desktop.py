@@ -318,3 +318,42 @@ def test_desktop_ui_can_show_answer_and_feedback(env, monkeypatch):
     finally:
         app.stop.set()
         app.root.destroy()
+
+
+@pytest.mark.parametrize("paused", [False, True])
+def test_quality_skip_clears_failure_text_and_progress_in_real_ui(env, monkeypatch, paused):
+    monkeypatch.delenv("TCL_LIBRARY", raising=False)
+    monkeypatch.delenv("TK_LIBRARY", raising=False)
+    from bagu_trainer.desktop import DesktopApp
+    monitor = DesktopMonitor(engine)
+    app = DesktopApp(monitor)
+    app.root.withdraw()
+    root = engine._normalize_project_root(engine.PROJECT_ROOT)
+    kind = ["service"]
+
+    def generate(*_):
+        monitor.paused = paused and kind[0] == "quality"
+        return {"available": False, "failure_kind": kind[0], "unavailable_reason": "private diagnostic"}
+
+    monkeypatch.setattr(env["gen"], "generate", generate)
+    try:
+        monitor._generate(root, {"context": "redis edit"})
+        app._drain()
+        assert app.generation_retryable
+        assert "private diagnostic" in app.task_hint.get()
+        kind[0] = "quality"
+        state = monitor._generate(root, {"context": "redis edit"}, ("test-kp-1",))
+        app.events.put(("dashboard", {"state": state, "projects": [root], "stats": None}))
+        app._drain()
+        app.root.update_idletasks()
+        assert not app.generation_busy and not app.generation_retryable
+        assert app.retry_button.instate(["disabled"])
+        assert app.task_progress.winfo_manager() == ""
+        assert app.listen_state.get() == ("监听已暂停" if paused else "正在监听代码改动")
+        assert app.task_hint.get() == "等待新的代码改动。"
+        for text in (app.task_hint.get(), app.global_status.get(), app.listen_state.get()):
+            assert "失败" not in text and "不可用" not in text and "private diagnostic" not in text
+        assert not monitor.list_pending()
+    finally:
+        app.stop.set()
+        app.root.destroy()
