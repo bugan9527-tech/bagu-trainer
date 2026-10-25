@@ -5,6 +5,7 @@
   "sources": [
     {
       "repository": "CyC2018/CS-Notes",
+      "name_zh": "计算机基础笔记",
       "directory": "CS-Notes",
       "url": "https://github.com/CyC2018/CS-Notes",
       "audited_commit": "b70121d377cb6005eb65f12b098cd5decd905669",
@@ -16,6 +17,7 @@
     },
     {
       "repository": "Snailclimb/JavaGuide",
+      "name_zh": "Java 面试指南",
       "directory": "JavaGuide",
       "url": "https://github.com/Snailclimb/JavaGuide",
       "audited_commit": "50f02a5984c062fe7221629d0a6a40ec15c26fd7",
@@ -27,6 +29,7 @@
     },
     {
       "repository": "labuladong/fucking-algorithm",
+      "name_zh": "labuladong 算法笔记",
       "directory": "fucking-algorithm",
       "url": "https://github.com/labuladong/fucking-algorithm",
       "audited_commit": "b1f23cb9605f6146ff78bafad71e795176439b99",
@@ -38,6 +41,7 @@
     },
     {
       "repository": "doocs/advanced-java",
+      "name_zh": "Java 高阶面试指南",
       "directory": "advanced-java",
       "url": "https://github.com/doocs/advanced-java",
       "audited_commit": "bf2f31459c1ae0b70f40c5a23104c98c1715cf50",
@@ -49,6 +53,7 @@
     },
     {
       "repository": "youngyangyang04/leetcode-master",
+      "name_zh": "代码随想录",
       "directory": "leetcode-master",
       "url": "https://github.com/youngyangyang04/leetcode-master",
       "audited_commit": "b43def349578bdbda371f00da505d3099374910d",
@@ -60,6 +65,7 @@
     },
     {
       "repository": "xingshaocheng/architect-awesome",
+      "name_zh": "后端架构师知识体系",
       "directory": "architect-awesome",
       "url": "https://github.com/xingshaocheng/architect-awesome",
       "audited_commit": "a9b92bd4a384fd3f620a553a377612983d1ecbad",
@@ -71,6 +77,7 @@
     },
     {
       "repository": "scutan90/DeepLearning-500-questions",
+      "name_zh": "深度学习 500 问",
       "directory": "DeepLearning-500-questions",
       "url": "https://github.com/scutan90/DeepLearning-500-questions",
       "audited_commit": "6087a06b112c3c28b885ab2f794535c19a9e4326",
@@ -82,6 +89,7 @@
     },
     {
       "repository": "azl397985856/leetcode",
+      "name_zh": "力扣算法题解",
       "directory": "leetcode",
       "url": "https://github.com/azl397985856/leetcode",
       "audited_commit": "24b0b6284959e0f21539764a156595af7664b63f",
@@ -93,6 +101,7 @@
     },
     {
       "repository": "huihut/interview",
+      "name_zh": "C/C++ 面试知识",
       "directory": "interview",
       "url": "https://github.com/huihut/interview",
       "audited_commit": "7a7166804a0ffc8f156e906bf4c1a94bb9f6a94b",
@@ -104,6 +113,7 @@
     },
     {
       "repository": "0voice/interview_internal_reference",
+      "name_zh": "程序员面试内参",
       "directory": "interview_internal_reference",
       "url": "https://github.com/0voice/interview_internal_reference",
       "audited_commit": "a549376da3ff8430a03e00ad7e1878ca00a063ad",
@@ -115,6 +125,7 @@
     },
     {
       "repository": "Advanced-Frontend/Daily-Interview-Question",
+      "name_zh": "前端每日一题",
       "directory": "Daily-Interview-Question",
       "url": "https://github.com/Advanced-Frontend/Daily-Interview-Question",
       "audited_commit": "46a268536dc0918c2dd466d1b8421f78f4d99c0d",
@@ -126,6 +137,7 @@
     },
     {
       "repository": "haizlin/fe-interview",
+      "name_zh": "前端面试每日三问",
       "directory": "fe-interview",
       "url": "https://github.com/haizlin/fe-interview",
       "audited_commit": "79bab2c2a203705e1201051ae8c80b752a3d439e",
@@ -137,6 +149,7 @@
     },
     {
       "repository": "InterviewMap/CS-Interview-Knowledge-Map",
+      "name_zh": "计算机面试知识图谱",
       "directory": "CS-Interview-Knowledge-Map",
       "url": "https://github.com/InterviewMap/CS-Interview-Knowledge-Map",
       "audited_commit": "1de2dc983ea06dc56f7011cc629e4dc35f99a9f0",
@@ -148,6 +161,7 @@
     },
     {
       "repository": "taizilongxu/interview_python",
+      "name_zh": "Python 面试题",
       "directory": "interview_python",
       "url": "https://github.com/taizilongxu/interview_python",
       "audited_commit": "28fa4704a80ea1cc5bb8edfebe5c5b504e00f1c8",
@@ -159,6 +173,7 @@
     },
     {
       "repository": "wdndev/llm_interview_note",
+      "name_zh": "大模型面试笔记",
       "directory": "llm_interview_note",
       "url": "https://github.com/wdndev/llm_interview_note",
       "audited_commit": "581d54dd9a72e1d0a4eb28ae50859db83901b783",

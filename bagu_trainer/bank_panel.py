@@ -56,11 +56,11 @@ class BankPanel(ttk.Frame):
         listing.grid(row=1, column=0, sticky="ew")
         listing.columnconfigure(0, weight=1)
         listing.rowconfigure(0, weight=1)
-        self.source_list = ttk.Treeview(listing, columns=("download", "local", "task", "used", "size", "remote", "commit", "license"),
+        self.source_list = ttk.Treeview(listing, columns=("repository", "download", "local", "task", "used", "size", "remote", "commit", "license"),
                                         selectmode="extended", height=5)
-        self.source_list.heading("#0", text="来源仓库")
-        self.source_list.column("#0", width=px(210), minwidth=px(140))
-        for name, title, width in (("download", "下载状态", 100), ("local", "本地来源", 160), ("task", "本次任务", 90), ("used", "当前题库", 160),
+        self.source_list.heading("#0", text="中文名称")
+        self.source_list.column("#0", width=px(210), minwidth=px(210), stretch=False)
+        for name, title, width in (("repository", "来源仓库", 340), ("download", "下载状态", 100), ("local", "本地来源", 160), ("task", "本次任务", 90), ("used", "当前题库", 160),
                                     ("size", "本地跨版本合计", 130), ("remote", "远端下载大小", 110), ("commit", "固定 commit", 110),
                                     ("license", "观察到的声明", 140)):
             self.source_list.heading(name, text=title)
@@ -120,8 +120,8 @@ class BankPanel(ttk.Frame):
 
     def _populate(self):
         for repo, source in self.sources.items():
-            self.source_list.insert("", "end", iid=repo, text=repo,
-                values=("未下载", "待检查", "未参与", "待检查", "统计中", "未知", source.commit[:12], source.license), tags=("unknown",))
+            self.source_list.insert("", "end", iid=repo, text=source.display_name,
+                values=(repo, "未下载", "待检查", "未参与", "待检查", "统计中", "未知", source.commit[:12], source.license), tags=("unknown",))
 
     def _request_scan(self):
         if self.closed:
@@ -171,7 +171,7 @@ class BankPanel(ttk.Frame):
             if self.source_list.exists(repo):
                 remote = self.tasks.bank.download_sizes.get(repo)
                 downloaded = download_label(source, row.downloaded if row else False, task, self.tasks.bank.state == "building")
-                self.source_list.item(repo, values=(downloaded, local, task_text, row.used if row else "待检查",
+                self.source_list.item(repo, values=(repo, downloaded, local, task_text, row.used if row else "待检查",
                     format_bytes(row.local_bytes) if row else "统计中", format_bytes(remote) if remote else "未知", source.commit[:12], source.license), tags=(tag,))
         self._selection_changed()
 
@@ -187,7 +187,7 @@ class BankPanel(ttk.Frame):
             task = self.tasks.bank.sources.get(repo)
             remote = self.tasks.bank.download_sizes.get(repo)
             downloaded = download_label(self.sources[repo], row.downloaded if row else False, task, self.tasks.bank.state == "building")
-            self.local_detail.set(f"{repo} · 下载状态：{downloaded} · 本地：{LOCAL_LABELS[row.local_state] if row else '待检查'} · "
+            self.local_detail.set(f"{self.sources[repo].display_name}（{repo}） · 下载状态：{downloaded} · 本地：{LOCAL_LABELS[row.local_state] if row else '待检查'} · "
                                   f"跨版本占用 {format_bytes(row.local_bytes) if row else '统计中'} · "
                                   f"下载大小：{'本次响应 ' + format_bytes(remote) if remote else '未知'}")
             self.local_label.configure(foreground=(COLORS.danger if row and row.local_state in {"invalid", "incomplete"} else

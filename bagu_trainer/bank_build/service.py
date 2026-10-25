@@ -26,6 +26,11 @@ class BankSource:
     commit: str
     license: str
     evidence_url: str
+    name_zh: str = ""
+
+    @property
+    def display_name(self):
+        return self.name_zh or self.repository
 
 
 @dataclass(frozen=True)
@@ -50,8 +55,10 @@ def load_sources(manifest=None):
                 or repository in sources or directory.casefold() in directories):
             raise ValueError("来源清单包含无效或重复的来源/版本")
         directories.add(directory.casefold())
+        name_zh = value.get("name_zh", "")
+        name_zh = name_zh.strip() if isinstance(name_zh, str) else ""
         sources[repository] = BankSource(repository, directory, commit.lower(),
-                                         value.get("observed_license", "Unconfirmed"), value.get("evidence_url", ""))
+                                         value.get("observed_license", "Unconfirmed"), value.get("evidence_url", ""), name_zh)
     return sources
 
 
