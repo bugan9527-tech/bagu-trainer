@@ -91,9 +91,13 @@ class BuildControl:
             raise BuildTimeout(self.stage, f"整个任务总时限 {self.timeout:g} 秒已耗尽（来源就绪 {ready}/{len(self.sources)}），"
                                "当前题库保持不变。请增加任务总时限后重试，已完成缓存保留。")
 
+    def _remaining_seconds(self):
+        # Adding/subtracting a monotonic timestamp can round above the budget.
+        return min(self.timeout, max(0, self.deadline - self.clock()))
+
     def remaining(self):
         self.check()
-        return self.deadline - self.clock()
+        return self._remaining_seconds()
 
     def emit(self, stage, message, completed=0, total=0, attempt=None):
         self.stage = stage
@@ -107,7 +111,7 @@ class BuildControl:
             try:
                 self.progress(BuildProgress(stage, message, completed, total,
                     source.attempt if source else (attempt or 1), source, index, len(self.sources),
-                    max(0, self.deadline - self.clock()), self.generation,
+                    self._remaining_seconds(), self.generation,
                     source.repository if source else "", source.commit if source else ""))
             except Exception:
                 pass

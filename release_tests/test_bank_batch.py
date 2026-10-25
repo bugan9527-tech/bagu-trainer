@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer.bank_build.control import BuildCancelled, BuildTimeout, SourceBatchError
+from bagu_trainer.bank_build.control import BuildCancelled, BuildControl, BuildTimeout, SourceBatchError
 from bagu_trainer.bank_build.service import BankBuildService
 from bagu_trainer.bank_storage import active_bank_dir
 from bagu_trainer.knowledge_base import KnowledgeBase
@@ -21,6 +21,16 @@ from release_tests.test_bank_build import installed, archive_bytes, MARKDOWN, wa
 
 REPOS = ["fixture/first", "fixture/middle", "fixture/last"]
 COMMITS = [c * 40 for c in "abc"]
+
+
+@pytest.mark.parametrize("timeout", [.15, 42, 900, 2700])
+@pytest.mark.parametrize("surface", ["remaining", "progress"])
+def test_remaining_and_progress_never_exceed_configured_budget(timeout, surface):
+    events = []
+    control = BuildControl(timeout=timeout, clock=lambda: 224.1, progress=events.append)
+    control.emit("prepare", "fixture")
+    value = control.remaining() if surface == "remaining" else events[0].remaining_seconds
+    assert 0 < value <= timeout
 
 
 @pytest.fixture
@@ -182,9 +192,7 @@ def test_total_deadline_stops_batch_and_retains_finished_cache(batch):
     assert "整个任务总时限" in str(caught.value) and "来源就绪 1/3" in str(caught.value)
     assert [s.state for s in caught.value.sources] == ["completed", "failed", "cancelled"]
     assert [repo for repo, _ in batch.calls] == REPOS[:2]
-    # Windows may complete source one within a clock tick; subtraction can
-    # exceed the configured budget by a few picoseconds due to float rounding.
-    assert 0 < batch.calls[1][1] <= .15 + 1e-9
+    assert 0 < batch.calls[1][1] <= .15  # The socket wait cannot exceed the total budget.
     assert_previous_usable(batch)
     batch.delay.clear()
     batch.service.build(REPOS)
