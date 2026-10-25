@@ -61,9 +61,11 @@ class BankSetupWindow:
                   style=MUTED).grid(row=1, column=0, sticky="ew", pady=px(SPACE.md))
         listing = ttk.Frame(panel)
         listing.grid(row=2, column=0, sticky="nsew")
-        self.source_list = ttk.Treeview(listing, columns=("commit", "license", "state", "stage", "retries", "reason", "download"), selectmode="extended", height=3 if embedded else 11)
+        self.source_list = ttk.Treeview(listing, columns=("commit", "license", "state", "stage", "retries", "reason", "download", "repository"), selectmode="extended", height=3 if embedded else 11)
         self.source_list.bind("<<TreeviewSelect>>", lambda _event: self._sync_controls())
-        self.source_list.heading("#0", text="来源仓库")
+        self.source_list.heading("#0", text="中文名称")
+        self.source_list.heading("repository", text="来源仓库")
+        self.source_list.column("repository", width=px(340), minwidth=px(340), stretch=False)
         self.source_list.heading("commit", text="固定版本")
         self.source_list.heading("license", text="观察到的声明")
         self.source_list.column("commit", width=px(110), minwidth=px(110), stretch=False)
@@ -71,9 +73,9 @@ class BankSetupWindow:
                                    ("reason", "原因 / 处理建议", 420)):
             self.source_list.heading(name, text=title)
             self.source_list.column(name, width=px(width), minwidth=px(width), stretch=False)
-        self.source_list.column("#0", width=px(230), minwidth=px(180))
+        self.source_list.column("#0", width=px(210), minwidth=px(210), stretch=False)
         self.source_list.column("license", width=px(140), minwidth=px(120))
-        self.source_list.configure(displaycolumns=("download", "state", "stage", "retries", "commit", "license", "reason"))
+        self.source_list.configure(displaycolumns=("repository", "download", "state", "stage", "retries", "commit", "license", "reason"))
         scroll = ttk.Scrollbar(listing, orient="vertical", command=self.source_list.yview)
         self.source_list.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -82,8 +84,8 @@ class BankSetupWindow:
         self.source_list.configure(xscrollcommand=horizontal.set)
         self.source_list.pack(fill="both", expand=True)
         for repository, source in self.sources.items():
-            self.source_list.insert("", "end", iid=repository, text=repository,
-                                    values=(source.commit[:12], source.license, "等待", "准备", 0, "", "未下载"))
+            self.source_list.insert("", "end", iid=repository, text=source.display_name,
+                                    values=(source.commit[:12], source.license, "等待", "准备", 0, "", "未下载", repository))
         row = ttk.Frame(panel)
         row.grid(row=3, column=0, sticky="ew", pady=px(SPACE.sm))
         ttk.Label(row, text="任务总时限（秒）").pack(side="left")
@@ -181,7 +183,8 @@ class BankSetupWindow:
         text.pack(fill="both", expand=True)
         for source in self.source_statuses.values():
             if source.state in {"failed", "cancelled"}:
-                text.insert("end", f"{source.repository}\ncommit: {source.commit}\n"
+                name = self.sources[source.repository].display_name if source.repository in self.sources else source.repository
+                text.insert("end", f"{name}（{source.repository}）\ncommit: {source.commit}\n"
                             f"{STATES[source.state]} · {STAGES.get(source.stage, source.stage)} · 重试 {max(0, source.attempt - 1)} 次\n"
                             f"{source.reason}\n\n")
         text.configure(state="disabled")
@@ -301,8 +304,8 @@ class BankSetupWindow:
         self.inventory = None
         self._scan_revision += 1
         for repository, source in sources.items():
-            self.source_list.insert("", "end", iid=repository, text=repository,
-                                    values=(source.commit[:12], source.license, "等待", "准备", 0, "", "未下载"))
+            self.source_list.insert("", "end", iid=repository, text=source.display_name,
+                                    values=(source.commit[:12], source.license, "等待", "准备", 0, "", "未下载", repository))
         self.source_list.selection_set(list(selected.intersection(sources)))
         self._sync_controls()
         self._request_scan()
