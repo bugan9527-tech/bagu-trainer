@@ -341,6 +341,7 @@ class BankPanel(ttk.Frame):
         self.confirm_delete = actions.add(ttk.Button(actions, text="确认清理", command=confirm))
         self.confirm_text = text
         self.confirm_cancel.focus_set()
+        self.view.reveal(actions)
 
     def _execute_cleanup(self, plan, include_unknown=False):
         if self.on_cleanup:

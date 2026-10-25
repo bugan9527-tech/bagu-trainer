@@ -268,6 +268,7 @@ def test_panel_download_failure_retry_and_external_deletion_refresh(batch):
         panel.retry_button.invoke()
         wait_for_ui(ui, lambda: tasks.bank.state == "built")
         wait_for_ui(ui, lambda: panel.inventory.sources[REPOS[1]].local_state == "verified")
+        wait_for_ui(ui, lambda: panel.inventory.current_directory == str(tasks.bank.result.directory))
         assert [repo for repo, _ in batch.calls[count:]] == [REPOS[1]]
         assert all(row.used == "当前版本使用" for row in panel.inventory.sources.values())
         # File changes outside the page also invalidate the memo and refresh.

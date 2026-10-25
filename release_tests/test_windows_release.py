@@ -138,7 +138,7 @@ def test_each_real_install_lifecycle_case_is_required(tmp_path, case, status):
 
 
 @pytest.mark.parametrize("key,value", [("test_credentials_only", False), ("real_user_credentials_accessed", True),
-    ("previous_installer", {"version": "0.4.0", "sha256": "c" * 64}), ("schema_version", 1)])
+    ("previous_installer", {"version": release.__version__, "sha256": "c" * 64}), ("schema_version", 1)])
 def test_native_credential_and_previous_package_scope_is_mandatory(tmp_path, key, value):
     dist, evidence = fixture(tmp_path)
     path = evidence / "INSTALLED_ACCEPTANCE.json"
