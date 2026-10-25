@@ -12,14 +12,15 @@ import pytest
 def test_driver_explicitly_isolates_child_instances_from_the_real_desktop(tmp_path, monkeypatch):
     from scripts.acceptance import desktop_acceptance as driver
     monkeypatch.delenv("BAGU_TEST_INSTANCE", raising=False)
-    monkeypatch.setattr(driver.platform, "platform", lambda: "isolated Windows fixture")
     captured = []
     class ChildIntercepted(Exception):
         pass
     def child(*args, **kwargs):
         captured.append({key: kwargs["env"].get(key) for key in ("BAGU_TEST_INSTANCE", "BAGU_USER_DATA_DIR")})
         raise ChildIntercepted
-    monkeypatch.setattr(driver.subprocess, "run", child)
+    # Replace only the driver's binding: platform.machine() may itself launch
+    # a subprocess on a fresh Windows process and must keep its real runtime.
+    monkeypatch.setattr(driver, "subprocess", SimpleNamespace(run=child))
     work = tmp_path / "acceptance"
     options = SimpleNamespace(work=work, production_exe=None, output_dir=None, archive=None,
                               memory_credentials=True)
