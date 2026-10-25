@@ -55,7 +55,7 @@ class ProjectsPanel(ttk.Frame):
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
-        wrapped_label(self, theme, text="选择希望监听代码改动的项目文件夹，可添加多个。失效目录可先移除，再选择新位置。",
+        wrapped_label(self, theme, text="选择希望监听代码改动的项目文件夹，可添加多个。已不存在的本地目录会自动移除，学习记录保留。",
                       style=MUTED).grid(row=0, column=0, sticky="ew", pady=px((0, SPACE.sm)))
         self.hint = window_var(self, "更改监听项目后需点击“保存并应用”才影响监听范围。")
         wrapped_label(self, theme, textvariable=self.hint, style=SECTION).grid(row=1, column=0, sticky="ew", pady=px((0, SPACE.sm)))
@@ -207,6 +207,11 @@ class ProjectsPanel(ttk.Frame):
 
     def focus_target(self):
         return self.listbox
+
+    def forget_removed_projects(self, removed):
+        """Reflect worker cleanup while preserving any unsaved project edits."""
+        self.projects = [path for path in self.projects if path not in removed]
+        self._render()
 
     def current_projects(self):
         return list(self.projects)

@@ -124,8 +124,9 @@ def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch
     startup.set_projects([first])
     visited = []
     engine = SimpleNamespace(load_config=config.load_config, PROJECT_ROOT=config.PROJECT_ROOT,
-        _normalize_project_root=str, _STATE_LOCK=threading.RLock(), _diff_readers={},
-        _collect_context=lambda _description, path: visited.append(path) or {"context": ""})
+        _normalize_project_root=str,
+        session=SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None),
+        observe_project=lambda path, **_: visited.append(path) or {"context": ""})
     monitor = DesktopMonitor(engine)
     monitor.poll()
     assert visited == [first]

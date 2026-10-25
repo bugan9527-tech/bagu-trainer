@@ -1,12 +1,12 @@
 name: Isolated installer diagnostics (no release)
 on:
-  push:
-    branches: ['codex/v0.3.0-release-acceptance']
-    paths:
-      - '.github/workflows/windows-installer-diagnostic.yml'
-      - 'packaging/windows-installer-lifecycle.iss'
-      - 'scripts/acceptance/installed_release.py'
   workflow_dispatch:
+    inputs:
+      previous_tag:
+        description: 'Existing older production release, not a synthetic installer fixture'
+        required: true
+        default: 'v0.3.1'
+        type: string
 permissions:
   contents: read
 jobs:
@@ -47,10 +47,18 @@ jobs:
       - name: Build and inspect Setup
         run: .\.venv-build\Scripts\python.exe scripts/build_installer.py --iscc 'build/installer-tools/inno/{app}/ISCC.exe' --innounp build/installer-tools/unpacker/innounp.exe
       - name: Reproduce native installation in disposable runner
+        env:
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           $version = python -c "from bagu_trainer.version import __version__; print(__version__)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          .\.venv-build\Scripts\python.exe scripts/acceptance/installed_release.py --setup "dist/BaguTrainer-$version-windows-x64-Setup.exe" --work "$env:RUNNER_TEMP/bagu-installed-release"
+          if ($env:PREVIOUS_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid previous release tag' }
+          $previousVersion = $env:PREVIOUS_TAG.Substring(1)
+          gh release download "$env:PREVIOUS_TAG" --repo "$env:GITHUB_REPOSITORY" --dir build/previous-production --pattern "BaguTrainer-$previousVersion-windows-x64-Setup.exe" --pattern "BaguTrainer-$previousVersion-windows-x64-Setup.exe.sha256" --pattern "BaguTrainer-$previousVersion-windows-x64.zip" --pattern "BaguTrainer-$previousVersion-windows-x64.zip.sha256" --pattern INSTALLER_MANIFEST.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive -LiteralPath "build/previous-production/BaguTrainer-$previousVersion-windows-x64.zip" -DestinationPath build/previous-production
+          .\.venv-build\Scripts\python.exe scripts/acceptance/installed_release.py --setup "dist/BaguTrainer-$version-windows-x64-Setup.exe" --previous-setup "build/previous-production/BaguTrainer-$previousVersion-windows-x64-Setup.exe" --previous-bundle build/previous-production/BaguTrainer --work "$env:RUNNER_TEMP/bagu-installed-release"
       - name: Preserve diagnostics only (never release assets)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -60,8 +68,5 @@ jobs:
             validation/INSTALLED_ACCEPTANCE.json
             validation/portable-diagnostic.xml
             validation/portable-diagnostics/
-            ${{ runner.temp }}/bagu-installed-release/*.log
-            ${{ runner.temp }}/bagu-installed-release/screenshots/
-            ${{ runner.temp }}/bagu-installed-release/frozen/ERROR.json
-            ${{ runner.temp }}/bagu-installed-release/frozen/ACCEPTANCE.json
+            ${{ runner.temp }}/bagu-installed-release/
           if-no-files-found: warn

@@ -8,15 +8,17 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from bagu_trainer.version import __version__
+from scripts.portable_artifacts import require_new, resolve_target
 
 
-def prepare_notices():
-    resources = ROOT / "build" / "portable-resources"
+def prepare_notices(resources=None):
+    resources = resources or ROOT / "build" / "portable-resources"
     licenses = resources / "licenses"
     licenses.mkdir(parents=True, exist_ok=True)
     notices = ["BaguTrainer runtime components and bundled licenses", "",
@@ -89,22 +91,30 @@ def source_provenance():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--require-clean", action="store_true", help="Fail before building if tracked or untracked source changed")
     options = parser.parse_args()
-    output = options.output_dir.resolve()
+    target = resolve_target(options.output_dir)
+    output = target.output_dir
+    # PyInstaller --noconfirm may remove an existing onedir (possibly running).
+    archive_path = output / f"BaguTrainer-{__version__}-windows-x64.zip"
+    require_new(output / "BaguTrainer", archive_path, Path(str(archive_path) + ".sha256"))
     if sys.platform != "win32" or struct.calcsize("P") != 8:
         raise SystemExit("Windows x64 Python is required")
     if options.require_clean and subprocess.check_output(
             ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=ROOT, text=True).strip():
         raise ValueError("Release build requires a clean source checkout")
-    versions = prepare_notices()
+    (ROOT / "build").mkdir(exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix="portable-", dir=ROOT / "build"))
+    resources = work / "portable-resources"
+    versions = prepare_notices(resources)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=normal"],
                                         cwd=ROOT, text=True).strip())
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-                    "--distpath", str(output), "--workpath", str(ROOT / "build" / "pyinstaller"),
-                    str(ROOT / "packaging" / "windows.spec")], check=True, cwd=ROOT)
+                    "--distpath", str(output), "--workpath", str(work / "pyinstaller"),
+                    str(ROOT / "packaging" / "windows.spec")], check=True, cwd=ROOT,
+                   env=dict(os.environ, BAGU_BUILD_RESOURCES=str(resources)))
     bundle = output / "BaguTrainer"
     shutil.copyfile(ROOT / "PORTABLE_README.md", bundle / "使用说明.md")
     contents = audit(bundle)

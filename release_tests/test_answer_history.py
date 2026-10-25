@@ -32,10 +32,12 @@ def history(tmp_path, monkeypatch):
         "id": "fixture", "knowledge_point": "测试知识点", "question": "测试来源题目",
         "tags": ["缓存"], "keywords": ["缓存"]}], ensure_ascii=False), encoding="utf-8")
     from bagu_trainer import engine
+    session = engine.EngineSession()
+    monkeypatch.setattr(engine, "session", session)
     store = Store(tmp_path / "history.db")
-    monkeypatch.setattr(engine, "_store", store)
-    monkeypatch.setattr(engine, "_state", {"quizzes": {}, "pending": [], "seen": collections.deque(), "seen_set": set()})
-    monkeypatch.setattr(engine, "_diff_readers", {})
+    monkeypatch.setattr(engine.session, "_store", store)
+    monkeypatch.setattr(engine.session, "_state", {"quizzes": {}, "pending": [], "seen": collections.deque(), "seen_set": set()})
+    monkeypatch.setattr(engine.session, "_diff_readers", {})
     monkeypatch.setattr(engine, "_now", lambda: NOW)
     monkeypatch.setattr(engine, "load_config", lambda: {
         "project_roots": [str(tmp_path)], "quiz_ttl_seconds": 3600,
@@ -44,6 +46,7 @@ def history(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(engine, "generator", SimpleNamespace(generate=lambda *args: calls.append(args)))
     yield engine, store, calls
+    session.close()
     store.close()
 
 
@@ -93,7 +96,7 @@ def test_browse_is_read_only_and_independent_of_generation_lock(history):
     store.create_quiz("old-pending", "x", SNAP, "ready", "old", "", NOW-100, NOW-1)
     before = dump(store)
     with ThreadPoolExecutor(max_workers=1) as pool:
-        with engine._STATE_LOCK:  # model generation may hold this lock for minutes
+        with engine.session._lock:  # model generation may hold this lock for minutes
             page = pool.submit(engine.get_answer_history).result(timeout=1)
             detail = pool.submit(engine.get_answer_detail, attempt).result(timeout=1)
     assert page["total"] == 1 and detail["can_retry"]
@@ -117,8 +120,8 @@ def test_repractice_new_id_deduplicated_persisted_and_submission_once(history):
     snap = store.get_quiz(quiz_id)["snapshot"]
     assert snap["retry_of_attempt_id"] == attempt and snap["retry_of_quiz_id"] == "original-1"
     assert snap["question"] == SNAP["question"]
-    engine._state["quizzes"].clear()
-    engine._state["pending"].clear()
+    engine.session._state["quizzes"].clear()
+    engine.session._state["pending"].clear()
     assert engine.repractice_attempt(attempt)["quiz"]["quiz_id"] == quiz_id
     with ThreadPoolExecutor(max_workers=2) as pool:
         grades = list(pool.map(lambda _: engine.submit_answer(quiz_id, "A"), range(2)))
@@ -168,14 +171,14 @@ def test_pending_automatic_quiz_survives_manual_retry_and_caps(history):
     attempt = seed(store)
     snap = {**SNAP, "review": True}
     store.create_quiz("auto", "historic-kp", snap, "ready", engine.load_config()["project_roots"][0], "", NOW, NOW+3600)
-    engine._hydrate_pending_locked(store)
+    engine.session._hydrate_pending_locked(store)
     monitor = DesktopMonitor(engine)
     monitor.delivery_paused.set()
     assert monitor.take_quiz() is None
     retry = engine.repractice_attempt(attempt)
-    engine._cleanup_locked(engine._caps())
+    engine.session._cleanup_locked(engine._caps())
     assert store.get_quiz("auto")["status"] == "ready"
-    assert any(p["quiz_id"] == "auto" for p in engine._state["pending"])
+    assert any(p["quiz_id"] == "auto" for p in engine.session._state["pending"])
     monitor.delivery_paused.clear()
     assert monitor.take_quiz()["quiz_id"] == "auto"
     assert engine.submit_answer("auto", "B")["ok"]
@@ -191,7 +194,7 @@ def test_pending_list_count_and_enter_are_read_only_until_enter(history):
     project = engine.load_config()["project_roots"][0]
     for qid in ("p1", "p2"):
         store.create_quiz(qid, "historic-kp", {**SNAP, "review": True}, "ready", project, "", NOW, NOW + 3600)
-    engine._hydrate_pending_locked(store)
+    engine.session._hydrate_pending_locked(store)
     retry = engine.repractice_attempt(attempt)  # manual, outside project scope
     monitor = DesktopMonitor(engine)
     # Viewing the list must NOT deliver anything.  (The automatic cap here is 1,
@@ -370,15 +373,15 @@ def test_real_monitor_continues_file_observation_and_queues_during_history(histo
     def generate(context, root, *args, **kwargs):
         generated.append(context)
         store.create_quiz("from-watch", "historic-kp", {**SNAP, "review": True}, "ready", root, "", NOW, NOW+3600)
-        engine._hydrate_pending_locked(store)
+        engine.session._hydrate_pending_locked(store)
         return [1], [1], 0, []
     monkeypatch.setattr(engine, "_generate_matches_locked", generate)
     monitor.poll()
-    baseline = dict(engine._diff_readers)
+    baseline = dict(engine.session._diff_readers)
     monitor.delivery_paused.set()
     path.write_text("cache = 200\n# 文件变化触发监测\n", encoding="utf-8")
     assert monitor.poll()["state"] == "quiz_ready"
-    assert generated and baseline == engine._diff_readers
+    assert generated and baseline == engine.session._diff_readers
     assert monitor.take_quiz() is None
     assert store.get_quiz("from-watch")["status"] == "ready"
     monitor.delivery_paused.clear()

@@ -10,6 +10,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.build_portable import audit, source_provenance
+from scripts.portable_artifacts import require_new, resolve_target, validate_target
 from bagu_trainer.version import __version__
 
 
@@ -25,8 +26,11 @@ def verify(output):
     ).strip(), 'Audit requires a clean checkout'
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     tree = source_provenance()
-    production = output / 'BaguTrainer'
-    driver = output / 'BaguTrainerAcceptance'
+    target = resolve_target(output)
+    output = target.output_dir
+    artifact = validate_target(target, driver=target.driver)
+    production = target.bundle
+    driver = target.driver.parent
     manifest = json.loads((production / 'BUILD_MANIFEST.json').read_text('utf-8'))
     provenance = json.loads((driver / '_internal/acceptance-provenance.json').read_text('utf-8'))
     assert manifest['version'] == __version__
@@ -47,10 +51,10 @@ def verify(output):
         modules.add('.'.join(parts))
     result = {'version': __version__, 'source_commit': commit, 'source_dirty': False,
               'source_tree_sha256': tree['sha256'], 'payload_files': len(expected),
-              'artifacts': {}, 'modules': sorted(modules)}
+              'artifact': artifact, 'artifacts': {}, 'modules': sorted(modules)}
     for directory, name in ((production, f'BaguTrainer-{__version__}-windows-x64'),
                             (driver, 'BaguTrainerAcceptance-windows-x64')):
-        archive = output / (name + '.zip')
+        archive = target.archive if directory == production else output / (name + '.zip')
         digest = sha(archive)
         assert Path(str(archive) + '.sha256').read_text('ascii').split() == [digest, archive.name]
         inventory = {p.relative_to(directory).as_posix(): {'bytes': p.stat().st_size, 'sha256': sha(p)}
@@ -75,10 +79,11 @@ def verify(output):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output-dir', type=Path, required=True)
+    parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--report', type=Path, required=True)
     options = parser.parse_args()
-    report = verify(options.output_dir.resolve())
+    require_new(options.report)
+    report = verify(options.output_dir)
     options.report.parent.mkdir(parents=True, exist_ok=True)
     options.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), 'utf-8')
     print(json.dumps({k: v for k, v in report.items() if k not in {'artifacts', 'modules'}}))

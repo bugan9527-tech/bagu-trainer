@@ -17,7 +17,7 @@ def pending(history, monkeypatch):
     for qid, status in (("ready", "ready"), ("delivered", "delivered")):
         store.create_quiz(qid, "historic-kp", {**SNAP, "review": True}, status,
                           root, "", NOW, NOW + 3600)
-    engine._hydrate_pending_locked(store)
+    engine.session._hydrate_pending_locked(store)
     attempt = seed(store)  # historical project is outside the current scope
     manual = engine.repractice_attempt(attempt)["quiz"]["quiz_id"]
     return engine, store, calls, DesktopMonitor(engine), manual
@@ -78,9 +78,9 @@ def test_pause_preserves_expiry_scope_answered_and_ai_admission(pending, paused)
         ("unreviewed", SNAP, root, NOW + 3600),
     ):
         store.create_quiz(qid, "historic-kp", snapshot, "ready", scope, "", NOW - 10, expiry)
-    engine._hydrate_pending_locked(store)
+    engine.session._hydrate_pending_locked(store)
     # Also exercise cleanup of a once-valid resident quiz whose admission changed.
-    engine._state["quizzes"]["ready"]["generated_by"] = "offline"
+    engine.session._state["quizzes"]["ready"]["generated_by"] = "offline"
     monitor.paused = paused
     for qid in ("expired", "outside", "offline", "unreviewed", "original-1", "ready", "missing"):
         assert monitor.enter_quiz(qid) is None
@@ -93,8 +93,9 @@ def test_paused_poll_retry_and_automatic_delivery_do_no_work(pending, monkeypatc
     monitor.paused = True
     monitor.waiting["synthetic"] = (0, {"context": "cache"})
     monitor.failed_generations["synthetic"] = ({"context": "cache"}, ("historic-kp",))
-    for method in ("_collect_context", "_generate_matches_locked", "_deliver_pending_locked"):
+    for method in ("observe_project", "generate_activity"):
         monkeypatch.setattr(engine, method, lambda *a, **kw: pytest.fail("paused automatic work ran"))
+    monkeypatch.setattr(engine.session, "take_quiz", lambda: pytest.fail("paused delivery ran"))
     for _ in range(2):
         assert monitor.poll()["state"] == "paused"
         assert monitor.retry_generation()["state"] == "paused"

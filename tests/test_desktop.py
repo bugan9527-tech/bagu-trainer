@@ -241,9 +241,9 @@ def test_real_file_change_to_quiz_answer_and_persistent_record(env, tmp_path):
     assert quiz
     assert "+value = 'redis cache'" in env["gen"].last_ctx
     assert engine.submit_answer(quiz["quiz_id"], "A")["correct"]
-    row = engine._store.get_quiz(quiz["quiz_id"])
+    row = engine.session._store.get_quiz(quiz["quiz_id"])
     assert row["status"] == "answered"
-    assert engine._store.attempt_count(quiz["quiz_id"]) == 1
+    assert engine.session._store.attempt_count(quiz["quiz_id"]) == 1
 
 
 def test_two_watch_events_in_one_task_keep_both_contexts(env, monkeypatch):

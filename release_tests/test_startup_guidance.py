@@ -153,7 +153,7 @@ def test_restored_configuration_notice_and_existing_page_actions(installation, l
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk guidance")
 @pytest.mark.parametrize("missing", ["bank", "model", "projects"])
-def test_incomplete_configuration_resumes_first_missing_step_without_writes(installation, local_only, monkeypatch, missing):
+def test_incomplete_configuration_resumes_missing_step_and_only_prunes_deleted_projects(installation, local_only, monkeypatch, missing):
     cfg = seed_configuration(installation, verified=True)
     if missing == "bank":
         installation.bank.unlink()
@@ -166,6 +166,9 @@ def test_incomplete_configuration_resumes_first_missing_step_without_writes(inst
     before = capture_data(installation)
     coordinator = startup.StartupCoordinator(engine_loader=fail_automatic_action)
     assert coordinator.prepare() is None
+    if missing == "projects":
+        assert config.read_user_config() == {**cfg, "project_roots": []}
+        before.pop(config.CONFIG_PATH)  # Only automatic watch-list repair may write.
     from bagu_trainer.first_use import FirstUseWizard
     app = FirstUseWizard(coordinator)
     try:

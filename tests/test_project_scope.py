@@ -42,7 +42,7 @@ def test_ready_queue_and_unanswered_cooldown_are_project_scoped(
     assert len(generated_a["generated"]) == 1
     quiz_a = generated_a["generated"][0]
     pending_a = next(
-        p for p in engine._state["pending"] if p["quiz_id"] == quiz_a["quiz_id"])
+        p for p in engine.session._state["pending"] if p["quiz_id"] == quiz_a["quiz_id"])
     assert pending_a["status"] == "ready"
     assert quiz_a["project_root"] == _scope(project_a)
 
@@ -110,7 +110,7 @@ def test_concurrent_checks_do_not_cross_project_queues(env, two_projects):
     }
     actual = {
         p["quiz_id"]: _scope(p["project_root"])
-        for p in engine._state["pending"] if p["status"] == "delivered"
+        for p in engine.session._state["pending"] if p["status"] == "delivered"
     }
     assert actual == expected
 
@@ -125,11 +125,11 @@ def test_report_delivery_is_atomic_for_memory_and_store(env, two_projects):
     qid = quiz["quiz_id"]
     assert quiz["project_root"] == _scope(project_a)
 
-    pending = next(p for p in engine._state["pending"] if p["quiz_id"] == qid)
+    pending = next(p for p in engine.session._state["pending"] if p["quiz_id"] == qid)
     assert pending["status"] == "delivered"
     assert pending["delivered_at"] is not None
-    assert engine._state["quizzes"][qid]["_status"] == "delivered"
+    assert engine.session._state["quizzes"][qid]["_status"] == "delivered"
 
-    stored = engine._store.get_quiz(qid)
+    stored = engine.session._store.get_quiz(qid)
     assert stored["status"] == "delivered"
     assert stored["delivered_at"] is not None

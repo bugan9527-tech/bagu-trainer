@@ -38,8 +38,8 @@ def test_report_returns_unavailable_not_broken_quiz(env, monkeypatch):
     assert "未配置 LLM" in rep["unavailable"][0]["reason"]
     assert rep["note"] and "生成失败" in rep["note"]
     # 不产生任何 pending / quizzes 记录
-    assert engine._state["pending"] == []
-    assert engine._state["quizzes"] == {}
+    assert engine.session._state["pending"] == []
+    assert engine.session._state["quizzes"] == {}
 
 
 def test_check_pending_reports_unavailable(env, monkeypatch):

@@ -128,9 +128,9 @@ def run(work, phase):
         engine.reload_bank()
         check(not calls, "Process restart lost verified cache")
         milestones.append("process_restart_reuses_verified_cache")
-        engine._store = Store(str(user / "data" / "trainer.db"))
+        engine.session._store = Store(str(user / "data" / "trainer.db"))
         try:
-            check(list(engine._store._conn.iterdump()) == json.loads((work / "learning.json").read_text(encoding="utf-8")),
+            check(list(engine.session._store._conn.iterdump()) == json.loads((work / "learning.json").read_text(encoding="utf-8")),
                   "Upgrade changed learning records")
             check(engine.get_answer_detail(1)["snapshot"] == SNAPSHOT, "Upgrade lost history snapshot")
             check(config.read_user_config() == json.loads((work / "configuration.json").read_text(encoding="utf-8")),
@@ -156,15 +156,15 @@ def run(work, phase):
             check(BankInventory(user).scan(load_sources(manifest)).totals["history"] == 0, "History space was not refreshed")
             check(engine.get_learning_stats()["total_attempts"] == 1,
                   "Cleanup changed unrelated learning records")
-            check(list(engine._store._conn.iterdump()) == json.loads((work / "learning.json").read_text(encoding="utf-8")),
+            check(list(engine.session._store._conn.iterdump()) == json.loads((work / "learning.json").read_text(encoding="utf-8")),
                   "Cleanup changed unrelated quizzes, attempts or learning state")
             check(engine.get_answer_detail(1)["snapshot"] == SNAPSHOT, "Cleanup lost history snapshot")
             check((work / "项目 文件" / "keep.py").read_text(encoding="utf-8") == "# 不得删除项目文件\n", "Project file changed")
             milestones.append("history_cleanup_keeps_current_and_learning")
         finally:
-            if engine._store is not None:
-                engine._store.close()
-            engine._store = None
+            if engine.session._store is not None:
+                engine.session._store.close()
+            engine.session._store = None
     result = {"passed": True, "phase": phase, "pid": os.getpid(), "frozen": bool(getattr(sys, "frozen", False)),
               "transport": "in-memory generated ZIP; no external network", "milestones": milestones}
     write(work / (phase + "-result.json"), result)

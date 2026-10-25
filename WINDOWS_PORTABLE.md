@@ -3,7 +3,7 @@
 # Windows x64 便携应用构建与验证
 
 产物为 PyInstaller **onedir**：`BaguTrainer.exe` 与 `_internal/` 必须一起解压和移动。
-双击 EXE 会进入现有启动协调层，首次使用中文向导，准备齐全后直接打开主窗口。
+双击 EXE 直接进入唯一正式工作台；在题库管理、模型配置和监听项目页完成准备，始终使用同一主窗口。
 不需要用户安装 Python、Git 或 PowerShell。使用和迁移说明见 [PORTABLE_README.md](PORTABLE_README.md)。
 
 ## 构建
@@ -13,13 +13,15 @@
 ```powershell
 python -m venv .venv-build
 .\.venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
-.\.venv-build\Scripts\python.exe scripts/build_portable.py
+$version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+$buildOutput = "output/BaguTrainer-$version-$(Get-Date -Format yyyyMMdd-HHmmss)"
+.\.venv-build\Scripts\python.exe scripts/build_portable.py --output-dir $buildOutput
 ```
 
 输出：
 
-- `dist/BaguTrainer/`：可直接启动的完整目录。
-- `dist/BaguTrainer-0.3.1-windows-x64.zip`：分发压缩包，文件名版本由 `version.py` 生成。
+- `$buildOutput/BaguTrainer/`：可直接启动的完整目录。
+- `$buildOutput/BaguTrainer-<version>-windows-x64.zip`：分发压缩包，文件名版本由 `version.py` 生成。
 - 同名 `.zip.sha256`：压缩包校验值。
 - 包内 `BUILD_MANIFEST.json`：架构、版本、构建依赖版本及逐文件 SHA256。
 
@@ -27,15 +29,28 @@ python -m venv .venv-build
 
 ```powershell
 $env:BAGU_USER_DATA_DIR = Join-Path $env:TEMP 'bagu-isolated-build'
-.\.venv-build\Scripts\python.exe scripts/build_portable.py --output-dir dist/ui-redesign-stage6
-$env:BAGU_PORTABLE_BUNDLE = "$PWD/dist/BaguTrainer"
-$version = python -c "from bagu_trainer.version import __version__; print(__version__)"
-$env:BAGU_PORTABLE_ARCHIVE = "$PWD/dist/BaguTrainer-$version-windows-x64.zip"
-python -m pytest release_tests tests -q -W error --junitxml=validation/stage6/full.xml
-.\.venv-build\Scripts\python.exe scripts/build_acceptance.py --verify --memory-credentials --output-dir dist/ui-redesign-stage6 --work validation/stage6/frozen
+$evidence = "validation/portable-$(Get-Date -Format yyyyMMdd-HHmmss)"
+python scripts/portable_artifacts.py --output-dir $buildOutput --report "$evidence/target.json"
+python scripts/run_release_tests.py --output-dir $buildOutput --output "$evidence/release-tests.xml"
+.\.venv-build\Scripts\python.exe scripts/build_acceptance.py --verify --memory-credentials --output-dir $buildOutput --work "$evidence/frozen"
 ```
 
 上述命令不调用 Release 脚本。工作区有未提交修改时 manifest 如实记录 `source_dirty=true`；`source_tree` 给出运行/构建源码（包括新增模块）的逐文件指纹，冻结驱动与生产包必须匹配。它是本地工作区验收包，不代表已满足干净提交的发布门禁。完整测试仍要求匹配器的只读历史题库基准，详情见 README。
+
+所有正式构建、发布测试和验收入口共用 `--output-dir`。显式指定时，它优先于环境变量；
+也可设置 `BAGU_PORTABLE_OUTPUT_DIR`，或继续使用 `BAGU_PORTABLE_BUNDLE` / `BAGU_PORTABLE_ARCHIVE`。
+只指定 bundle 或 archive 时，另一项从同一父目录推导；同时指定两项时必须逐文件对应。
+未配置时仍以 `dist` 为约定，但不会查找“最新包”、回退旧版本或因缺包跳过 Windows EXE 测试。
+
+验收在启动任何应用前核对当前版本、已有 `source_provenance()` 完整指纹、BUILD_MANIFEST、
+目录清单、ZIP 内容及同名 SHA-256；冻结验收还核对独立驱动的版本、源码指纹、ZIP 与附件。
+`release-tests.artifact.json` 和冻结 `ACCEPTANCE.json` 的 `artifact` 记录实际绝对路径、版本、
+源码/清单/EXE/ZIP 摘要。失败的发布测试也产生 JUnit 错误及产物报告。
+构建输出、验收工作目录及报告必须使用新路径；已有产物和证据不会被清空或覆盖。
+
+仓库中 `dist/BaguTrainer` 的 0.3.0 与 `output/BaguTrainer-0.4.0-final` 均作为历史产物保留。
+修改构建/验收源码后，即使版本仍为 0.4.0，旧目录也会因源码指纹不符而被拒绝；请使用新目录重建，
+不要修改旧 manifest 或复制新附件来使旧包通过。干净提交发布继续使用 `--require-clean` 及原草稿发布门禁。
 
 `packaging/windows.spec` 通过 `_tkinter` hook 收集 Tcl/Tk，通过显式 backend 和 distribution
 metadata 收集 Windows keyring；补充延迟导入的 engine。窗口模式不弹终端，不使用 UPX。
@@ -54,7 +69,8 @@ PR 只运行构建/测试，不获得 Release 写权限。手动运行要求文�
 依据 [GitHub 手动运行规则](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow)。
 
 ```powershell
-gh workflow run windows-portable.yml --ref main -f tag=v0.3.1
+$version = python -c "from bagu_trainer.version import __version__; print(__version__)"
+gh workflow run windows-portable.yml --ref main -f tag="v$version"
 gh run list --workflow windows-portable.yml
 ```
 
@@ -68,16 +84,19 @@ gh run list --workflow windows-portable.yml
 4. 隔离 AppId/目录夹具检查跨版本覆盖、占用等待、快捷方式归属、同名便携副本和卸载数据保留。
 5. 从同一个生产目录构建 Setup、逐文件解包核对并生成独立 SHA-256。
 6. 在临时 runner 按默认当前用户目录试装最终生产 Setup，个人数据指向临时独立 profile，
-   核对空配置首次引导、运行时维护阻止、重复安装、实际注册和开始菜单/桌面入口，
-   复用冻结驱动验证已安装 EXE，再验证同版覆盖、已启用自启动入口、数据保留和卸载。
+   结合明确指定的真实旧 Release，核对首次工作台、实际跨版本升级、同版修复、完整卸载、
+   清理失败与重试、卸载后重装及对应注册/快捷方式。凭据检查使用该一次性账户中原生 WinCred 的合成测试值，
+   不能用空后端或凭据标记代替；另保留现有已安装 EXE 的完整冻结验收门禁。
 7. 以 `--prepare-evidence` 生成隐私扫描尚为 pending 的脱敏材料，扫描源码、载荷、嵌套归档、
    Setup、ZIP 和附件，再核对扫描绑定的摘要。全部通过后才生成可交付总结果。
 
 `scripts/acceptance/installed_release.py` 只允许 `GITHUB_ACTIONS=true` 且
 `RUNNER_ENVIRONMENT=github-hosted` 的 Windows，拒绝开发机及自托管 runner；
 预先发现应用注册、默认数据目录或同名入口也拒绝执行。生产 AppId 的注册和真实 shell 目录
-仅存在于临时 runner；程序在该用户默认目录，学习数据在 `RUNNER_TEMP` 的独立目录，凭据为内存/空 backend，
-不调用真实模型或 Windows 凭据接口。本地使用 `installer_lifecycle.py` 的重定向夹具。
+仅存在于临时 runner；程序在该用户默认目录，学习数据在 `RUNNER_TEMP` 的独立目录。
+六项生命周期测试使用真实 Windows 凭据接口存取合成测试值，不读取日常用户凭据，不调用真实模型。
+完整冻结 UI 的模拟链路仍使用内存凭据。本地使用 `installer_lifecycle.py` 的重定向夹具；
+真实 Setup 步骤、只读计划和未执行项见 [生命周期验收说明](INSTALLED_LIFECYCLE_ACCEPTANCE.md)。
 
 第二阶段仅下载同一 run/attempt 的已验证附件，使用该 job 的 `GITHUB_TOKEN`（contents write、actions read）
 重新计算 ZIP/Setup hash，复核版本、提交、源码指纹、相同 payload manifest、完整验收与脱敏报告，

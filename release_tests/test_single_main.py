@@ -74,6 +74,6 @@ def test_first_partial_failed_engine_complete_and_all_pages_share_one_root(tmp_p
             app.root.update()
             time.sleep(.01)
         assert app.closed
-        if monitor.engine is not None and monitor.engine._store is not None:
-            monitor.engine._store.close()
-            monitor.engine._store = None
+        if monitor.engine is not None and monitor.engine.session._store is not None:
+            monitor.engine.session._store.close()
+            monitor.engine.session._store = None

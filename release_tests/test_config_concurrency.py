@@ -210,8 +210,9 @@ def test_editors_serialize_latest_read_through_atomic_commit(installation, monke
 def make_monitor():
     visited = []
     engine = SimpleNamespace(load_config=config.load_config, PROJECT_ROOT=config.PROJECT_ROOT,
-        _normalize_project_root=str, _STATE_LOCK=threading.RLock(), _diff_readers={},
-        _collect_context=lambda _description, root: visited.append(root) or {"context": ""})
+        _normalize_project_root=str,
+        session=SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None),
+        observe_project=lambda root, **_: visited.append(root) or {"context": ""})
     return DesktopMonitor(engine), visited
 
 
@@ -229,7 +230,7 @@ def test_project_application_and_fresh_process_restore_only_new_scope(installati
             assert credentials.writing.wait(5)
             startup.set_projects([b])
             DesktopApp._apply_projects_serial(SimpleNamespace(monitor=monitor), [b])
-            assert a not in monitor.initialized and a not in monitor.engine._diff_readers
+            assert a not in monitor.initialized and a not in monitor.engine.session._diff_readers
             assert a not in monitor.waiting and a not in monitor.failed_generations
             visited.clear()
             monitor.poll()
@@ -252,8 +253,9 @@ assert report.ready
 assert onboarding.saved_model_verified()
 visited = []
 engine = SimpleNamespace(load_config=config.load_config, PROJECT_ROOT=config.PROJECT_ROOT,
-    _normalize_project_root=str, _STATE_LOCK=threading.RLock(), _diff_readers={},
-    _collect_context=lambda _d, root: visited.append(root) or {"context": ""})
+    _normalize_project_root=str,
+        session=SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None),
+    observe_project=lambda root, **_: visited.append(root) or {"context": ""})
 monitor = DesktopMonitor(engine)
 monitor.poll()
 assert visited == config.read_user_config()["project_roots"]

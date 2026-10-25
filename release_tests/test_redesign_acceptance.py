@@ -34,7 +34,8 @@ def test_project_apply_runs_on_data_only_worker_and_keeps_existing_baseline():
     events, jobs, stop = queue.Queue(), queue.Queue(), threading.Event()
     baseline = object()
     readers = {"kept": baseline, "removed": object()}
-    engine = SimpleNamespace(_normalize_project_root=str, _diff_readers=readers,
+    engine = SimpleNamespace(_normalize_project_root=str,
+                             session=SimpleNamespace(forget_projects=lambda roots: [readers.pop(root, None) for root in roots]),
                              PROJECT_ROOT="kept", load_config=lambda: {"project_roots": ["kept", "new"]},
                              get_learning_stats=lambda: {"ok": False})
     monitor = SimpleNamespace(engine=engine, initialized={"kept", "removed"},

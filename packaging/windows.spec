@@ -1,5 +1,6 @@
 # PyInstaller onedir: resource allowlist only; no project-local user data.
 import sys
+import os
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, copy_metadata
 from PyInstaller.utils.hooks.tcl_tk import tcltk_info
@@ -10,7 +11,7 @@ if not tcltk_info.available:
 root = Path(SPECPATH).parent
 sys.path.insert(0, str(root / "packaging"))
 from windows_assets import ICON, version_resource
-resources = root / "build" / "portable-resources"
+resources = Path(os.environ.get("BAGU_BUILD_RESOURCES", root / "build" / "portable-resources"))
 datas = [(str(root / name), str(Path(name).parent)) for name in (
     "LICENSE", "FIRST_USE.md", "QUESTION_BANK.md", "BANK_BUILD.md", "PORTABLE_README.md", "FEATURE_DELIVERY.md",
     "WINDOWS_PORTABLE.md", "WINDOWS_INSTALLER.md", "DESKTOP_MODE.md", "KEY_MIGRATION.md", "STARTUP.md",

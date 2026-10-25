@@ -16,7 +16,8 @@ sys.path.insert(0, str(ROOT))
 from bagu_trainer.version import __version__
 from scripts.build_installer import APP_ID, SCRIPT, TOOLCHAIN, lifecycle_summary, safe_path, sha256
 from scripts.build_portable import source_provenance
-from scripts.acceptance.contract import complete_milestones, REQUESTS
+from scripts.acceptance.contract import complete_milestones, complete_installed_lifecycle, REQUESTS
+from scripts.portable_artifacts import resolve_target
 
 
 def verify_checkout(target):
@@ -105,8 +106,8 @@ Setup SHA-256：`{setup_digest}`
 
 构建提交：[{target}]({base}/commit/{target})。{validation}
 模型链路自动化使用本地模拟 HTTP 接口，不调用真实模型或真实 Key。
-安装门禁包括隔离夹具的跨版本升级/入口归属，以及最终 Setup 在临时 runner 上的
-安装、快捷方式、同版覆盖、已安装 EXE 冻结验收、数据保留和卸载；脱敏报告随附件提供。
+安装门禁包括隔离夹具的入口归属检查，以及真实旧 Setup 到目标 Setup 的升级、同版修复、
+完整清理、清理失败后重试、重装和已安装 EXE 冻结验收；原生凭据仅用一次性账户中的合成测试值，脱敏报告随附件提供。
 GitHub Windows runner 自带开发工具，禁用 PATH 的测试不等同于全新系统上卸载 Python/Git。
 干净 Windows 实机验收、真实来源网络可用性、系统重启登录和未覆盖项以
 [验证记录]({base}/blob/{target}/VALIDATION.md) 为准；此包尚未代码签名。
@@ -196,14 +197,16 @@ def validate_dual_release(directory, tag, target, evidence, metadata=None, *, re
     same_source(installed, portable, target)
     required = ("passed", "production_installer_executed", "personal_data_isolated", "installation", "registration",
                 "shortcuts", "installed_frozen_acceptance", "same_version_overwrite", "enabled_startup_repaired",
-                "installed_runtime", "uninstall", "personal_data_preserved", "registration_removed",
+                "installed_runtime", "uninstall", "managed_data_removed", "test_credential_removed", "registration_removed",
                 "pristine_first_use", "no_preset_projects_history_or_key", "repeat_install", "running_upgrade_blocked", "running_uninstall_blocked",
-                "default_install_path")
-    if (any(installed.get(name) is not True for name in required)
+                "default_install_path", "upgrade_data_preserved", "upgrade_credentials_preserved", "repair_data_preserved",
+                "repair_credentials_preserved", "cleanup_failure_blocked", "cleanup_retry_succeeded",
+                "unrelated_files_preserved", "unrelated_credential_preserved", "owned_shortcuts_removed", "reinstall_pristine")
+    if (not complete_installed_lifecycle(installed) or any(installed.get(name) is not True for name in required)
             or installed.get("runner") != "github-hosted Windows"
-            or installed.get("windows_credentials_accessed") is not False
+            or installed.get("windows_credentials_accessed") is not True
             or installed.get("real_model_requests") is not False
-            or installed.get("credential_backend") != "memory fixtures / null diagnostic backend"
+            or installed.get("credential_backend") != "native Windows vault / synthetic entries in disposable account"
             or installed.get("installer_sha256") != setup_digest
             or installed.get("payload_manifest_sha256") != installer["payload_manifest_sha256"]):
         raise ValueError("Final production Setup acceptance is incomplete, unsafe or mismatched")
@@ -245,13 +248,20 @@ def write_public_evidence(result, source, output, target):
         "payload_manifest_sha256", "production_installer_executed", "runner", "credential_backend", "real_model_requests",
         "personal_data_isolated", "windows_credentials_accessed", "installation", "registration", "shortcuts",
         "installed_frozen_acceptance", "same_version_overwrite", "enabled_startup_repaired", "installed_runtime",
-        "uninstall", "personal_data_preserved", "registration_removed", "pristine_first_use", "no_preset_projects_history_or_key",
-        "repeat_install", "running_upgrade_blocked", "running_uninstall_blocked", "default_install_path")
+        "uninstall", "managed_data_removed", "test_credential_removed", "registration_removed", "pristine_first_use", "no_preset_projects_history_or_key",
+        "repeat_install", "running_upgrade_blocked", "running_uninstall_blocked", "default_install_path", "schema_version",
+        "test_credentials_only", "real_user_credentials_accessed", "upgrade_data_preserved", "upgrade_credentials_preserved",
+        "repair_data_preserved", "repair_credentials_preserved", "cleanup_failure_blocked", "cleanup_retry_succeeded",
+        "unrelated_files_preserved", "unrelated_credential_preserved", "owned_shortcuts_removed", "reinstall_pristine")
+    safe_installed = {key: result["installed"][key] for key in installed_keys}
+    safe_installed["previous_installer"] = {key: result["installed"]["previous_installer"][key] for key in ("version", "sha256")}
+    safe_installed["cases"] = {name: {key: case[key] for key in ("status", "passed")}
+                               for name, case in result["installed"]["cases"].items()}
     summary = {"passed": result["privacy"] is not None, "privacy_scan": "passed" if result["privacy"] else "pending",
                "version": __version__, "source_commit": target, "source_dirty": False,
                "tests": result["tests"], "zip_sha256": result["digest"], "setup_sha256": result["setup_digest"],
                "lifecycle_cases": result["lifecycle"]["cases_passed"], "production_setup_tested": True}
-    for filename, value in (("ACCEPTANCE.json", safe), ("INSTALLED_ACCEPTANCE.json", {key: result["installed"][key] for key in installed_keys}),
+    for filename, value in (("ACCEPTANCE.json", safe), ("INSTALLED_ACCEPTANCE.json", safe_installed),
                             ("RELEASE_VALIDATION.json", summary)):
         (output / filename).write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     raw_lifecycle = result["lifecycle_report"]
@@ -320,7 +330,7 @@ def publish_draft(repository, tag, target, notes, assets):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
-    parser.add_argument("--dist", type=Path, default=ROOT / "dist")
+    parser.add_argument("--dist", "--output-dir", dest="dist", type=Path)
     parser.add_argument("--output", type=Path, default=ROOT / "validation" / "public" / "RELEASE_NOTES.md")
     parser.add_argument("--evidence", type=Path, default=ROOT / "validation", help="Raw or already sanitized acceptance reports")
     parser.add_argument("--metadata", type=Path, help="Installer build/lifecycle reports; defaults to --dist")
@@ -329,6 +339,7 @@ def main():
     parser.add_argument("--publish-draft", action="store_true")
     parser.add_argument("--prepare-evidence", action="store_true", help="Prepare sanitized evidence before privacy scan; never upload")
     options = parser.parse_args()
+    options.dist = resolve_target(options.dist).output_dir
     target = options.target or subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     verify_checkout(target)
     if options.prepare_evidence and options.publish_draft:

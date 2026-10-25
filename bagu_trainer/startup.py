@@ -1,7 +1,7 @@
 """Desktop startup gate. Importing this module never loads the learning engine.
 
 Readiness is derived from existing files on every launch, rather than a separate
-first-run flag. Checks are local and read-only; they never rebuild the bank or DB.
+first-run flag. Probes are read-only; preparation first prunes deleted watch paths.
 """
 import importlib
 import json
@@ -149,6 +149,7 @@ class StartupCoordinator:
         """Recheck on every retry, and load the engine only after all gates pass."""
         self.state = "checking"
         try:
+            self.prune_projects()
             self.report = self.checker()
             if not self.report.ready:
                 self.state = "initialization"
@@ -156,6 +157,9 @@ class StartupCoordinator:
             self.state = "loading_engine"
             if self.engine is None:
                 self.engine = self.engine_loader()
+                initialize = getattr(self.engine, "initialize", None)
+                if initialize is not None:
+                    initialize()
             from .cleanup_manifest import register_profile
             register_profile(global_index=True)
             self.state = "ready"
@@ -165,6 +169,13 @@ class StartupCoordinator:
             self.report = replace(self.report, error=f"初始化失败（{type(error).__name__}），请检查本地文件和依赖后重试。")
             self.state = "failed"
             return None
+
+    def prune_projects(self):
+        from .project_cleanup import prune_missing_projects
+        removed, remaining = prune_missing_projects()
+        if removed:
+            self.events.put(("projects_pruned", (removed, remaining)))
+        return removed, remaining
 
     def window_command(self, name, arguments):
         if self.monitor is not None:
@@ -201,6 +212,6 @@ class StartupCoordinator:
             app.run()
         finally:
             self.state = "stopped"
-            if monitor.engine is not None and getattr(monitor.engine, "_store", None) is not None:
-                monitor.engine._store.close()
-                monitor.engine._store = None
+            session = getattr(monitor.engine, "session", None)
+            if session is not None:
+                session.close()

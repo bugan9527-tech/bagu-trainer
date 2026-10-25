@@ -23,7 +23,7 @@ def due_review(history, monkeypatch):
     # engine so the real scheduler persists the next review time in SQLite.
     snapshot = {**SNAP, "grounding": grounding_receipt(CANDIDATE["grounding"], REVIEW, CONTEXT, SOURCE, "fixture")}
     store.create_quiz("original", SNAP["kp_id"], snapshot, "delivered", root, "", NOW, NOW + 3600)
-    engine._hydrate_pending_locked(store)
+    engine.session._hydrate_pending_locked(store)
     grade = engine.submit_answer("original", "A")
     assert grade["ok"]
     clock[0] = grade["schedule"]["next_review_at"] + 1
@@ -36,7 +36,7 @@ def due_review(history, monkeypatch):
 
 def pending(store, engine, quiz_id, root, now, *, status="ready"):
     store.create_quiz(quiz_id, SNAP["kp_id"], {**SNAP, "review": True}, status, root, "", now, now + 3600)
-    engine._hydrate_pending_locked(store)
+    engine.session._hydrate_pending_locked(store)
 
 
 def test_continue_practice_delivers_due_ai_snapshot_without_new_activity(due_review):
@@ -211,17 +211,17 @@ def test_restart_rehydrates_existing_due_review_without_duplicate(due_review, mo
     engine, store, calls, monitor, _, _ = due_review
     quiz = monitor.resume_quiz()
     database = store._conn.execute("PRAGMA database_list").fetchone()[2]
-    monkeypatch.setattr(engine, "_store", None)
+    monkeypatch.setattr(engine.session, "_store", None)
     monkeypatch.setattr(engine, "_db_path", lambda: database)
-    engine._state["quizzes"].clear()
-    engine._state["pending"].clear()
+    engine.session._state["quizzes"].clear()
+    engine.session._state["pending"].clear()
     try:
         resumed = DesktopMonitor(engine).resume_quiz()
         assert resumed["quiz_id"] == quiz["quiz_id"]
-        assert engine._store._conn.execute("SELECT COUNT(*) FROM quizzes").fetchone()[0] == 2
+        assert engine.session._store._conn.execute("SELECT COUNT(*) FROM quizzes").fetchone()[0] == 2
         assert not calls
     finally:
-        engine._store.close()
+        engine.session._store.close()
 
 
 @pytest.mark.parametrize("missing", [False, True])

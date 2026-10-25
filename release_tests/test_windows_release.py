@@ -10,7 +10,7 @@ from scripts import build_installer as builder, release_portable as release
 from scripts import prepare_installer_tools as tools
 from scripts.acceptance import installed_release as installed
 from scripts.build_portable import source_provenance
-from scripts.acceptance.contract import FIRST_MILESTONES, RESTART_MILESTONES, REQUESTS
+from scripts.acceptance.contract import FIRST_MILESTONES, RESTART_MILESTONES, REQUESTS, INSTALLED_CASES
 
 SHA = "a" * 40
 
@@ -58,12 +58,18 @@ def fixture(root):
         "lifecycle_acceptance": builder.lifecycle_summary(dist / "INSTALLER_LIFECYCLE.json")}
     write(dist / "INSTALLER_MANIFEST.json", metadata)
     production = {**source, "installer_sha256": builder.sha256(setup), "payload_manifest_sha256": metadata["payload_manifest_sha256"],
-        "runner": "github-hosted Windows", "credential_backend": "memory fixtures / null diagnostic backend",
-        "windows_credentials_accessed": False, "real_model_requests": False}
+        "runner": "github-hosted Windows", "credential_backend": "native Windows vault / synthetic entries in disposable account",
+        "windows_credentials_accessed": True, "real_model_requests": False, "schema_version": 2,
+        "test_credentials_only": True, "real_user_credentials_accessed": False,
+        "previous_installer": {"version": "0.3.1", "sha256": "c" * 64},
+        "cases": {name: {"status": "passed", "passed": True} for name in INSTALLED_CASES}}
     production.update({name: True for name in ("passed", "production_installer_executed", "personal_data_isolated", "installation",
         "registration", "shortcuts", "installed_frozen_acceptance", "same_version_overwrite", "enabled_startup_repaired",
-        "installed_runtime", "uninstall", "personal_data_preserved", "registration_removed", "pristine_first_use",
-        "no_preset_projects_history_or_key", "repeat_install", "running_upgrade_blocked", "running_uninstall_blocked", "default_install_path")})
+        "installed_runtime", "uninstall", "managed_data_removed", "test_credential_removed", "registration_removed", "pristine_first_use",
+        "no_preset_projects_history_or_key", "repeat_install", "running_upgrade_blocked", "running_uninstall_blocked", "default_install_path",
+        "upgrade_data_preserved", "upgrade_credentials_preserved", "repair_data_preserved", "repair_credentials_preserved",
+        "cleanup_failure_blocked", "cleanup_retry_succeeded", "unrelated_files_preserved", "unrelated_credential_preserved",
+        "owned_shortcuts_removed", "reinstall_pristine")})
     write(evidence / "INSTALLED_ACCEPTANCE.json", production)
     frozen = {"passed": True, "frozen": True, "source_commit": SHA, "source_dirty": False, "production_commit": SHA,
         "production_dirty": False, "source_tree": tree, "production_source_tree": tree["sha256"],
@@ -104,6 +110,45 @@ def test_both_artifacts_and_current_evidence_pass_and_notes_prioritize_setup(tmp
     assert "草稿" in notes and "无需管理员" in notes and result["setup_digest"] in notes
 
 
+def test_legacy_uninstall_preserves_data_report_cannot_certify_040(tmp_path):
+    dist, evidence = fixture(tmp_path)
+    path = evidence / "INSTALLED_ACCEPTANCE.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    for key in ("schema_version", "cases", "previous_installer", "test_credentials_only", "real_user_credentials_accessed"):
+        report.pop(key, None)
+    report["personal_data_preserved"] = True
+    write(path, report)
+    with pytest.raises(ValueError, match="acceptance"):
+        validate(dist, evidence)
+
+
+@pytest.mark.parametrize("case", INSTALLED_CASES)
+@pytest.mark.parametrize("status", ["not_run", "running", "failed", "missing"])
+def test_each_real_install_lifecycle_case_is_required(tmp_path, case, status):
+    dist, evidence = fixture(tmp_path)
+    path = evidence / "INSTALLED_ACCEPTANCE.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    if status == "missing":
+        del report["cases"][case]
+    else:
+        report["cases"][case]["status"] = status
+    write(path, report)
+    with pytest.raises(ValueError, match="acceptance"):
+        validate(dist, evidence)
+
+
+@pytest.mark.parametrize("key,value", [("test_credentials_only", False), ("real_user_credentials_accessed", True),
+    ("previous_installer", {"version": "0.4.0", "sha256": "c" * 64}), ("schema_version", 1)])
+def test_native_credential_and_previous_package_scope_is_mandatory(tmp_path, key, value):
+    dist, evidence = fixture(tmp_path)
+    path = evidence / "INSTALLED_ACCEPTANCE.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report[key] = value
+    write(path, report)
+    with pytest.raises(ValueError, match="acceptance"):
+        validate(dist, evidence)
+
+
 @pytest.mark.parametrize("key,value", [("source_commit", "b" * 40), ("source_dirty", True), ("version", "9.9.9"),
     ("payload_manifest_sha256", "0" * 64), ("inspection", {}), ("lifecycle_acceptance", {}), ("build_inputs", {}), ("source_tree", {})])
 def test_setup_metadata_must_match_zip_clean_source_and_inspection(tmp_path, key, value):
@@ -117,7 +162,7 @@ def test_setup_metadata_must_match_zip_clean_source_and_inspection(tmp_path, key
 
 
 @pytest.mark.parametrize("key", ["passed", "production_installer_executed", "shortcuts", "installed_frozen_acceptance",
-    "same_version_overwrite", "enabled_startup_repaired", "uninstall", "registration_removed", "personal_data_preserved", "personal_data_isolated",
+    "same_version_overwrite", "enabled_startup_repaired", "uninstall", "registration_removed", "managed_data_removed", "personal_data_isolated",
     "pristine_first_use", "no_preset_projects_history_or_key", "repeat_install", "running_upgrade_blocked", "running_uninstall_blocked", "default_install_path"])
 def test_every_production_install_gate_is_mandatory(tmp_path, key):
     dist, evidence = fixture(tmp_path)
@@ -130,7 +175,7 @@ def test_every_production_install_gate_is_mandatory(tmp_path, key):
 
 
 @pytest.mark.parametrize("key,value", [("installer_sha256", "0" * 64), ("source_commit", "b" * 40), ("source_dirty", True),
-    ("source_tree_sha256", "0" * 64), ("windows_credentials_accessed", True), ("real_model_requests", True),
+    ("source_tree_sha256", "0" * 64), ("windows_credentials_accessed", False), ("real_model_requests", True),
     ("runner", "self-hosted"), ("credential_backend", "Windows vault")])
 def test_stale_or_unsafe_installer_run_blocks_release(tmp_path, key, value):
     dist, evidence = fixture(tmp_path)
@@ -170,6 +215,8 @@ def test_public_reports_remove_machine_paths_credentials_and_test_output_and_rev
         report = json.loads(path.read_text(encoding="utf-8"))
         report["private_path"] = marker
         report["synthetic_key"] = "test-only-credential-must-disappear"
+        if name == "INSTALLED_ACCEPTANCE.json":
+            report["cases"]["first_install"].update(private_path=marker, synthetic_key="test-only-credential-must-disappear")
         write(path, report)
     for name in ("INSTALLER_MANIFEST.json", "INSTALLER_LIFECYCLE.json"):
         path = dist / name

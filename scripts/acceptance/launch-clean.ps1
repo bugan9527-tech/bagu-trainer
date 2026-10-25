@@ -1,11 +1,19 @@
 ﻿param(
     [Parameter(Mandatory=$true)][string]$Archive,
+    [Parameter(Mandatory=$true)][string]$TargetReport,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [switch]$AllowDeveloperMachine,
     [switch]$FailDownload
 )
 $ErrorActionPreference = 'Stop'
 $Archive = (Resolve-Path -LiteralPath $Archive).Path
+$target = Get-Content -LiteralPath $TargetReport -Raw -Encoding UTF8 | ConvertFrom-Json
+if($target.passed -ne $true -or $target.version -ne $target.expected_version -or -not $target.source_tree_sha256){
+    throw 'A successful portable_artifacts.py target report is required.'
+}
+if((Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLower() -cne $target.portable.sha256){
+    throw 'Archive differs from the explicitly verified target report.'
+}
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $commands = @('python','python3','py','git') | ForEach-Object {
@@ -16,7 +24,9 @@ $installed = @($commands | Where-Object { $_.path -and -not $_.appAlias })
 $osInfo = Get-CimInstance Win32_OperatingSystem
 $report = @{date=(Get-Date).ToUniversalTime().ToString('o');os=$osInfo.Caption;version=$osInfo.Version;
     architecture=$osInfo.OSArchitecture;commands=$commands;cleanMachine=($installed.Count -eq 0);
-    mcpConfiguredByHarness=$false;externalToolsOnAppPath=$false;archiveSha256=(Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLower()}
+    mcpConfiguredByHarness=$false;externalToolsOnAppPath=$false;archiveSha256=(Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLower();
+    artifactPath=$Archive;artifactVersion=$target.version;sourceTreeSha256=$target.source_tree_sha256;manifestSha256=$target.manifest_sha256}
+if(Test-Path -LiteralPath (Join-Path $OutputDirectory 'ENVIRONMENT.json')){throw 'Existing evidence; choose a new -OutputDirectory.'}
 $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'ENVIRONMENT.json') -Encoding UTF8
 if ($installed.Count -gt 0 -and -not $AllowDeveloperMachine) {
     throw 'Python/Git commands were found. Use a clean Windows VM, or explicitly select -AllowDeveloperMachine for partial evidence only.'
@@ -24,9 +34,19 @@ if ($installed.Count -gt 0 -and -not $AllowDeveloperMachine) {
 $expected = (Get-Content -LiteralPath ($Archive + '.sha256') -Raw).Trim()
 if ($expected -cne ($report.archiveSha256 + '  ' + [IO.Path]::GetFileName($Archive))) { throw 'ZIP SHA-256 mismatch.' }
 $installation = Join-Path $OutputDirectory '中文 空格 程序'
-if (-not (Test-Path -LiteralPath $installation)) { Expand-Archive -LiteralPath $Archive -DestinationPath $installation }
+if(Test-Path -LiteralPath $installation){throw 'Existing extracted application; choose a new -OutputDirectory.'}
+Expand-Archive -LiteralPath $Archive -DestinationPath $installation
 $exe = Join-Path $installation 'BaguTrainer\BaguTrainer.exe'
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Portable EXE missing.' }
+$manifestPath = Join-Path $installation 'BaguTrainer\BUILD_MANIFEST.json'
+$manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if($manifest.version -ne $target.version -or $manifest.source_tree.sha256 -cne $target.source_tree_sha256 -or
+   (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLower() -cne $target.manifest_sha256){throw 'Extracted manifest differs from target.'}
+foreach($entry in $manifest.files){
+    $file = Join-Path (Split-Path -Parent $exe) $entry.path
+    if(-not (Test-Path -LiteralPath $file) -or (Get-Item -LiteralPath $file).Length -ne $entry.bytes -or
+       (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower() -cne $entry.sha256){throw 'Extracted payload differs from manifest.'}
+}
 $mockDirectory = Join-Path $OutputDirectory 'mock'
 $mockFile = Join-Path $mockDirectory 'mock.json'
 if (-not (Test-Path -LiteralPath $mockFile)) {

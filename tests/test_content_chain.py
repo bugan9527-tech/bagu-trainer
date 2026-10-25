@@ -240,7 +240,7 @@ def test_manual_quiz_by_offline_id_still_requires_ai(env, monkeypatch):
     result = engine.create_quiz("fallback-001", context="HTTP 并发场景")
     assert result["ok"] is False and "未配置 LLM" in result["reason"]
     assert "options" not in result and "quiz_id" not in result
-    assert engine._state["quizzes"] == {}
+    assert engine.session._state["quizzes"] == {}
 
 
 def test_startup_log_reports_ai_only_policy(env, capsys):

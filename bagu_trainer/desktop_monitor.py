@@ -125,20 +125,18 @@ class DesktopMonitor:
         if self.paused:
             return {"state": "paused", "projects": 0}
         engine = self.engine
-        roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
+        roots = engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
         roots = list(dict.fromkeys(engine._normalize_project_root(r) for r in roots))
         for removed in self.initialized - set(roots):
             self.waiting.pop(removed, None)
             self.observed.pop(removed, None)
         self.initialized.intersection_update(roots)
         self.failed_generations = {r: f for r, f in self.failed_generations.items() if r in roots}
-        result = {"state": "watching", "projects": len(roots)}
+        result = {"state": "watching" if roots else "not_ready", "projects": len(roots)}
         for root in roots:
             # All desktop activity shares the same scoped context and snapshot pipeline.
-            with engine._STATE_LOCK:
-                if root not in self.initialized:
-                    engine._diff_readers[root] = ActivityDiffReader(root)
-                info = engine._collect_context("", root)
+            info = engine.observe_project(
+                root, reader_factory=ActivityDiffReader if root not in self.initialized else None)
             if info.get("error"):
                 result["state"] = "project_unavailable"
                 continue
@@ -179,13 +177,8 @@ class DesktopMonitor:
         if self.ui_post:
             self.ui_post(("generation", {"busy": True, "project": root}))
         try:
-            with engine._STATE_LOCK:
-                caps = engine._caps()
-                kwargs = {"retry_failed_ids": failed_ids} if failed_ids else {}
-                matches, generated, skipped, unavailable = engine._generate_matches_locked(
-                    info["context"], root, engine.cfg["max_quizzes_per_hit"], caps,
-                    " / ".join(info.get("sources") or [])[:200], **kwargs)
-                engine._cleanup_locked(caps)
+            matches, generated, skipped, unavailable = engine.generate_activity(
+                root, info, retry_failed_ids=failed_ids)
             if unavailable:
                 self.failed_generations[root] = (info, tuple(item["kp_id"] for item in unavailable))
                 reason = unavailable[0].get("reason") or "暂时无法出题，请检查模型配置后重试。"
@@ -219,9 +212,9 @@ class DesktopMonitor:
         if self.paused:
             return {"state": "paused", "projects": 0}
         engine = self.engine
-        roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
+        roots = engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
         roots = {engine._normalize_project_root(r) for r in roots}
-        result = {"state": "watching", "projects": len(roots)}
+        result = {"state": "watching" if roots else "not_ready", "projects": len(roots)}
         for root, (info, failed_ids) in list(self.failed_generations.items()):
             if root not in roots:
                 self.failed_generations.pop(root, None)
@@ -232,118 +225,42 @@ class DesktopMonitor:
     def take_quiz(self):
         if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
             return None
-        """Only one automatic popup at a time; answered/delivered items are skipped."""
         if self.paused or self.active or self.delivery_paused.is_set():
             return None
-        engine = self.engine
-        with engine._STATE_LOCK:
-            engine._get_store_locked()
-            engine._cleanup_locked(engine._caps())
-            roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
-            scopes = {engine._normalize_project_root(r) for r in roots}
-            for pending in sorted(engine._state["pending"], key=lambda p: p["created_at"]):
-                if pending["status"] != "ready" or pending["project_root"] not in scopes:
-                    continue
-                engine._deliver_pending_locked(pending)
-                self.active = pending["quiz_id"]
-                return engine._public_pending(pending)
-        return None
+        quiz = self.engine.session.take_quiz()
+        if quiz:
+            self.active = quiz["quiz_id"]
+        return quiz
 
     def list_pending(self):
+        """Browsing and pause state never deliver a question."""
         if self.engine is None or not self.capabilities_ready:
             return []
-        """Read-only pending list (待答列表): ready + delivered, unanswered, in
-        project scope (or manual), oldest first.  Viewing the list must NOT mark
-        anything delivered — it only reads the current state after cleanup.
-        Monitoring/automatic-delivery pauses do not hide existing practice.
-        Expiry and dedupe/cooldown rules are enforced by _cleanup_locked."""
-        engine = self.engine
-        if getattr(getattr(engine, "kb", None), "explicit_empty", False):
+        if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
             return []
-        with engine._STATE_LOCK:
-            engine._get_store_locked()
-            engine._cleanup_locked(engine._caps())
-            roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
-            scopes = {engine._normalize_project_root(r) for r in roots}
-            out = []
-            for pending in sorted(engine._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
-                if pending["status"] not in ("ready", "delivered"):
-                    continue
-                manual = bool(engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review"))
-                if pending["project_root"] not in scopes and not manual:
-                    continue
-                public = engine._public_pending(pending)
-                public["status"] = pending["status"]
-                public["manual_review"] = manual
-                out.append(public)
-            return out
+        return self.engine.session.list_pending()
 
     def pending_count(self):
         """待答题数：未作答且未过期的 ready+delivered 题数（含人工重练）。"""
         return len(self.list_pending())
 
     def enter_quiz(self, quiz_id):
-        """按题进入：显式选中一条待答题交付作答。仅当用户主动选择时才把
-        ready 题交付；返回公开题目，题不存在/过期/越权时返回 None。
-        主动进入不受监听暂停或自动推送暂停限制；自动交付由 take_quiz 控制。"""
-        engine = self.engine
-        if getattr(getattr(engine, "kb", None), "explicit_empty", False):
+        """Explicit practice remains available while monitoring is paused."""
+        if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
             return None
-        with engine._STATE_LOCK:
-            engine._get_store_locked()
-            engine._cleanup_locked(engine._caps())
-            roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
-            scopes = {engine._normalize_project_root(r) for r in roots}
-            for pending in sorted(engine._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
-                if pending["quiz_id"] != quiz_id or pending["status"] not in ("ready", "delivered"):
-                    continue
-                manual = bool(engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review"))
-                if pending["project_root"] not in scopes and not manual:
-                    continue
-                if pending["status"] == "ready":
-                    engine._deliver_pending_locked(pending)
-                self.active = pending["quiz_id"]
-                public = engine._public_pending(pending)
-                if manual:
-                    public["manual_review"] = True
-                return public
-        return None
+        quiz = self.engine.session.enter_quiz(quiz_id)
+        if quiz:
+            self.active = quiz["quiz_id"]
+        return quiz
 
     def resume_quiz(self):
-        """Explicit practice: resume pending work, then replay a due AI snapshot.
-
-        Unlike automatic delivery, this remains available while monitoring or
-        popups are paused. Never scan project context or generate a new quiz.
-        """
-        engine = self.engine
-        if getattr(getattr(engine, "kb", None), "explicit_empty", False):
+        """Explicit practice remains available while monitoring is paused."""
+        if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
             return None
-        with engine._STATE_LOCK:
-            engine._get_store_locked()
-            caps = engine._caps()
-            engine._cleanup_locked(caps)
-            roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
-            roots = list(dict.fromkeys(engine._normalize_project_root(r) for r in roots))
-            scopes = set(roots)
-            pending_items = sorted(engine._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"]))
-            for status in ("delivered", "ready"):
-                for pending in pending_items:
-                    manual = engine._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review")
-                    if pending["status"] != status or (pending["project_root"] not in scopes and not manual):
-                        continue
-                    if status == "ready":
-                        engine._deliver_pending_locked(pending)
-                    self.active = pending["quiz_id"]
-                    return {**engine._public_pending(pending), **({"manual_review": True} if manual else {})}
-            for root in roots:
-                _, error = engine._resolve_project_root(root)
-                if error:
-                    continue
-                review = engine._deliver_due_review_locked(root, prefer=None, only_prefer=False, caps=caps)
-                if review:
-                    self.active = review["quiz_id"]
-                    return review
-        return None
+        quiz = self.engine.session.resume_quiz()
+        if quiz:
+            self.active = quiz["quiz_id"]
+        return quiz
 
     def window_command(self, name, arguments):
         if name == "_desktop_status":

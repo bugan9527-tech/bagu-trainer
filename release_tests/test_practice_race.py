@@ -170,7 +170,7 @@ def test_real_worker_sqlite_submit_survives_navigation(practice_app, history):
     app, page = practice_app
     engine, store, model_calls = history
     store.create_quiz("first", "historic-kp", {**SNAP, "review": True}, "delivered", "", "", NOW, NOW + 3600)
-    engine._hydrate_pending_locked(store)
+    engine.session._hydrate_pending_locked(store)
     entered, release = threading.Event(), threading.Event()
     def submit(qid, answer):
         entered.set()

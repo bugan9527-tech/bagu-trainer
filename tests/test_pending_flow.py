@@ -24,7 +24,7 @@ def test_check_generates_immediately(env):
     assert sorted(quiz["options"].keys()) == ["A", "B", "C", "D"]
     assert env["gen"].calls == 1
     # pending 记录包含要求的元数据字段
-    p = engine._state["pending"][0]
+    p = engine.session._state["pending"][0]
     for field in ("created_at", "delivered_at", "expires_at", "project_root", "kp_id"):
         assert field in p, field
     assert p["status"] == "delivered" and p["delivered_at"] is not None
@@ -83,7 +83,7 @@ def test_same_context_no_regeneration(env):
     _set_diff(env["diff"], "  redis\t\n缓存穿透   ")
     engine._poll_once()
     assert env["gen"].calls == 1
-    assert len(engine._state["pending"]) == 1
+    assert len(engine.session._state["pending"]) == 1
     r2 = engine.next_quiz()
     assert r2["has_pending"] is False and env["gen"].calls == 1
 
@@ -93,8 +93,8 @@ def test_monitor_then_check_reuses_ready(env):
     _set_diff(env["diff"], "redis 缓存预热")
     engine._poll_once()
     assert env["gen"].calls == 1
-    assert len(engine._state["pending"]) == 1
-    assert engine._state["pending"][0]["status"] == "ready"
+    assert len(engine.session._state["pending"]) == 1
+    assert engine.session._state["pending"][0]["status"] == "ready"
     r = engine.next_quiz()
     assert r["has_pending"] is True
     assert env["gen"].calls == 1
@@ -124,22 +124,22 @@ def test_report_then_check_no_double_generation(env):
 def test_expired_quiz_deterministically_cleaned(env):
     now = time.time()
     qid = "expired-1"
-    engine._state["quizzes"][qid] = {
+    engine.session._state["quizzes"][qid] = {
         "kp_id": "test-kp-1", "kp_name": "测试知识点", "difficulty": "easy",
         "question": "Q", "options": {"A": "a", "B": "b", "C": "c", "D": "d"},
         "answer": "A", "analysis": "p", "generated_by": "llm",
         "grounding": type(env["gen"])().generate(env["matcher"].KP, "历史测试上下文")["grounding"],
         "_created_at": now - 7200, "_expires_at": now - 1, "_status": "delivered",
     }
-    engine._state["pending"].append({
+    engine.session._state["pending"].append({
         "quiz_id": qid, "kp_id": "test-kp-1", "project_root": ".",
         "status": "delivered", "created_at": now - 7200, "delivered_at": now - 7100,
         "answered_at": None, "expires_at": now - 1,
     })
     r = engine.next_quiz()
     assert r["ok"] is True and r["has_pending"] is False
-    assert qid not in engine._state["quizzes"]
-    assert all(p["quiz_id"] != qid for p in engine._state["pending"])
+    assert qid not in engine.session._state["quizzes"]
+    assert all(p["quiz_id"] != qid for p in engine.session._state["pending"])
     assert engine.submit_answer(qid, "A")["ok"] is False
     assert env["gen"].calls == 0
 
@@ -153,27 +153,27 @@ def test_over_capacity_deterministic_eviction(env, monkeypatch):
     now = time.time()
     for i in range(7):
         qid = "q%d" % i
-        engine._state["quizzes"][qid] = {
+        engine.session._state["quizzes"][qid] = {
             "kp_id": "test-kp-1", "kp_name": "测试知识点", "difficulty": "easy",
             "question": "Q%d" % i, "options": {"A": "a", "B": "b", "C": "c", "D": "d"},
             "answer": "A", "analysis": "p", "generated_by": "llm",
             "grounding": type(env["gen"])().generate(env["matcher"].KP, "历史测试上下文")["grounding"],
             "_created_at": now - 100 + i, "_expires_at": now + 3600, "_status": "ready",
         }
-        engine._state["pending"].append({
+        engine.session._state["pending"].append({
             "quiz_id": qid, "kp_id": "test-kp-1", "project_root": ".",
             "status": "ready", "created_at": now - 100 + i, "delivered_at": None,
             "answered_at": None, "expires_at": now + 3600,
         })
     engine.next_quiz()
-    assert len(engine._state["quizzes"]) <= 5
-    assert len(engine._state["pending"]) <= 3
+    assert len(engine.session._state["quizzes"]) <= 5
+    assert len(engine.session._state["pending"]) <= 3
     # 淘汰确定性：最旧的先被清出
-    assert "q0" not in engine._state["quizzes"]
-    assert "q1" not in engine._state["quizzes"]
+    assert "q0" not in engine.session._state["quizzes"]
+    assert "q1" not in engine.session._state["quizzes"]
     # pending 不允许指向已被淘汰的 quiz
-    live = set(engine._state["quizzes"])
-    assert all(p["quiz_id"] in live for p in engine._state["pending"])
+    live = set(engine.session._state["quizzes"])
+    assert all(p["quiz_id"] in live for p in engine.session._state["pending"])
 
 
 # ---- 验收：无效 project_root 返回明确错误且不生成 ----
@@ -199,8 +199,8 @@ def test_seen_hash_capacity_bounded(env):
     cap = 3
     for i in range(10):
         key = "fp-%d" % i
-        engine._mark_seen_locked(key, cap)
-    assert len(engine._state["seen"]) == cap
-    assert len(engine._state["seen_set"]) == cap
-    assert "fp-0" not in engine._state["seen_set"]
-    assert "fp-9" in engine._state["seen_set"]
+        engine.session._mark_seen_locked(key, cap)
+    assert len(engine.session._state["seen"]) == cap
+    assert len(engine.session._state["seen_set"]) == cap
+    assert "fp-0" not in engine.session._state["seen_set"]
+    assert "fp-9" in engine.session._state["seen_set"]

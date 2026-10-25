@@ -147,12 +147,12 @@ def test_engine_reloads_active_bank_without_replacing_learning_state(installatio
     old_kb, old_matcher = engine.kb, engine.matcher
     monkeypatch.setattr(engine, "kb", old_kb)
     monkeypatch.setattr(engine, "matcher", old_matcher)
-    history = engine._state
+    history = engine.session._state
     pending = history["pending"]
-    store = engine._store
+    store = engine.session._store
     engine.reload_bank()
     assert engine.kb is not old_kb and engine.matcher is not old_matcher
     assert engine.kb.get(QUESTION["id"]) == QUESTION
     assert engine.matcher.kb is engine.kb
-    assert engine._state is history and engine._state["pending"] is pending
-    assert engine._store is store
+    assert engine.session._state is history and engine.session._state["pending"] is pending
+    assert engine.session._store is store

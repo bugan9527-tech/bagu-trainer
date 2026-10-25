@@ -295,7 +295,7 @@ def test_server_returns_and_internal_state_clean(env, tmp_path, monkeypatch):
         assert bad not in env["matcher"].last_text, bad
         assert bad not in env["gen"].last_ctx, bad
     # pending 公开记录也不含秘密
-    assert FAKE_KEY not in json.dumps(engine._state["pending"], ensure_ascii=False)
+    assert FAKE_KEY not in json.dumps(engine.session._state["pending"], ensure_ascii=False)
 
 
 def test_create_quiz_tool_redacts_user_context(env, monkeypatch):

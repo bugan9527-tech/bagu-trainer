@@ -1,5 +1,11 @@
 # 验证范围与复现
 
+> 历史记录版本说明：本页保留接入阶段原始结论，包含 0.1.0 → 0.2.0 合成安装夹具、v0.3.0 安装器构建及旧首次使用向导流程。
+> 各项通过/未通过只适用于当时的版本、提交和环境；旧“向导准备”“卸载保留数据”不适用于 0.4.0。
+> 0.4.0 当前流程见 [FIRST_USE.md](FIRST_USE.md) 和 [WINDOWS_INSTALLER.md](WINDOWS_INSTALLER.md)。
+> 最近的 0.4.0 工作区证据 `validation/artifact-path-fix-20261025/RESULTS.md`（未随仓库或发布包分发）记录相关回归通过，但完整冻结 UI 验收仍未通过，不能替代完整发布验收。
+> 0.4.0 [真实 Setup 生命周期脚本与说明](INSTALLED_LIFECYCLE_ACCEPTANCE.md) 已补齐；当前仅执行脚本回归和包摘要预检，六项真实安装场景均未执行，不改写以下历史结论。
+
 发布前最终验收方法见 [RELEASE_ACCEPTANCE.md](RELEASE_ACCEPTANCE.md)。以下接入阶段的记录是
 当时结果；后续实际 CI run、草稿下载校验与交付状态以本次草稿的 `DELIVERY_REPORT.md` 为准。
 
@@ -100,11 +106,25 @@ Setup 编译、实际解包逐文件 hash、图标和 PE 版本检查由构建�
 
 ```powershell
 python -m pip install -r requirements.txt -r requirements-dev.txt
+python -B -m pytest tests -q -W error --junitxml=validation/unit-tests.xml
 python scripts/run_release_tests.py --output validation/release-tests.xml
-python -m pytest tests -q -W error
 ```
 
 普通单元测试自行创建临时合成题库，不读取项目旁或已安装客户端的用户数据。匹配器的历史语料基准单独依赖外部只读数据：设置 BAGU_TEST_BANK_ROOT 为包含 data/questions.json、data/question_concepts.json、data/concept_profile_report.json 的目录可执行全部历史断言；未提供时仅显式跳过这些语料基准，不跳过产品发布门禁。
+
+### 0.4.0 主发布工作流的单元测试门禁
+
+`.github/workflows/windows-portable.yml` 的 pull_request 路径过滤包含 `tests/**` 和原有发布相关路径；workflow_dispatch 仍需显式输入版本标签。安装依赖后先检查 Git 和实际 Tcl/Tk 窗口，再执行上述完整单元测试命令，随后才构建产物并运行原有 release_tests、真实便携 EXE、冻结驱动及安装包验收。
+
+单元测试步骤使用 runner 临时目录中带 run_id/run_attempt 的独立 `BAGU_USER_DATA_DIR`、`BAGU_TEST_INSTANCE=ci-unit-tests` 和 `keyring.backends.null.Keyring`。`tests/conftest.py` 还会在导入引擎前切换至临时合成题库/配置，并为每个用例注入独立 SQLite 与假模型。不会访问已安装客户端的配置、学习库或真实凭据。
+
+工作流明确不提供 `BAGU_TEST_BANK_ROOT`，也不下载真实题库补足它。当前 Windows 单元组中，`test_matcher.py` 的 8 项、`test_matcher_concepts.py` 的 17 项、`test_matcher_heldout.py` 的 6 项历史语料基准因此沿用既有跳过，共 31 项；其余合成数据断言照常执行。它们未通过完整历史语料验收，不应写成全量基准通过。本次没有增加 skip、排除用例或放宽 `-W error`；release_tests 继续使用原有拒绝任何跳过的规则。
+
+Windows runner 固定为 windows-2022、Python 3.10.11 x64，并安装项目的 Tk 主题/Pillow 依赖。预检复用 `tk_runtime.create_root()` 定位所选 Python 自带的 Tcl/Tk 脚本，实际创建窗口、处理事件并销毁，记录 Python 路径、Tcl/Tk 版本及资源目录；缺 Git、DLL、脚本或可用桌面直接失败，不将窗口用例改成跳过。单元组的运行时启动检查和答题窗口检查必须真实执行。
+
+pytest 的非零退出码直接使构建 job 失败，没有 continue-on-error；后续构建、验收、发布文件转存及依赖该 job 的 draft-release 均被阻断。JUnit `validation/unit-tests.xml` 与预检日志 `validation/unit-runtime.txt` 经 `always()` 上传为独立的 `windows-unit-tests-<run_id>-<run_attempt>` 工件，保留 14 天，原有整套诊断工件也继续保留。若依赖安装或预检先失败，pytest 尚未执行，可能没有 JUnit；上传仍会尝试并保留已有诊断，缺失报告不代表测试通过。
+
+2026-10-25 本机 Windows 使用隔离配置执行同一完整命令：174 项通过、31 项上述既有语料跳过；两项 Tk 窗口单测均执行并通过。该结果是本地验证，未触发远端工作流或正式发布。证据见 `validation/unit-gate-20261025/`（本地保留，不随源码分发）。
 
 便携 EXE 用例需要先构建，再设置 BAGU_PORTABLE_BUNDLE 与 BAGU_PORTABLE_ARCHIVE 指向本次产物，避免因缺包跳过。发布脚本拒绝失败或跳过的 release_tests 报告、脏源码构建、提交不匹配的产物和未完成的冻结验收。
 

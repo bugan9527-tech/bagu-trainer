@@ -25,6 +25,7 @@ if not getattr(sys, "frozen", False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.acceptance.contract import complete_milestones
+from scripts.portable_artifacts import resolve_target, validate_target
 
 KEY = "acceptance-local-only-not-a-secret"
 REPOSITORY = "Snailclimb/JavaGuide"
@@ -276,7 +277,7 @@ def phase(options):
                 if not monitor.initialized:
                     return False
                 milestones.append("watcher_baseline")
-                baselines = (set(monitor.initialized), dict(monitor.observed), dict(engine._diff_readers))
+                baselines = (set(monitor.initialized), dict(monitor.observed), dict(engine.session._diff_readers))
                 for key, _ in app.shell.PAGES:
                     app._navigate_page(key)
                     app.root.update_idletasks()
@@ -289,7 +290,7 @@ def phase(options):
                         check(bool(frame.sources), "Frozen bank page has no source manifest")
                     ui_pages[key] = {"class": type(frame).__name__, "embedded": True, "icon": True}
                     capture("page-" + key, app.root)
-                check(baselines == (set(monitor.initialized), dict(monitor.observed), dict(engine._diff_readers)),
+                check(baselines == (set(monitor.initialized), dict(monitor.observed), dict(engine.session._diff_readers)),
                       "Ordinary navigation rebuilt baselines")
                 milestones.append("seven_embedded_pages_icons_and_navigation_keep_baselines")
                 app._navigate_page("model")
@@ -313,8 +314,8 @@ def phase(options):
                         return False
                     if app.generation_retryable and not app.generation_busy and not review_retried[0]:
                         check(app.retry_button.instate(["!disabled"]), "Rejected review cannot retry")
-                        check(not engine._state["pending"], "Rejected candidate entered pending")
-                        check(engine._store._conn.execute("SELECT count(*) FROM quizzes").fetchone()[0] == 0,
+                        check(not engine.session._state["pending"], "Rejected candidate entered pending")
+                        check(engine.session._store._conn.execute("SELECT count(*) FROM quizzes").fetchone()[0] == 0,
                               "Rejected candidate was persisted as a quiz")
                         milestones.append("rejected_review_blocks_popup_then_explicit_retry")
                         review_retried[0] = True
@@ -324,7 +325,7 @@ def phase(options):
                 practice = app._page_frame("practice")
                 check(practice.submit_button.instate(["!disabled"]), "Practice cannot be answered")
                 check(review_retried[0], "Rejected first review was not exercised")
-                check(engine._state["quizzes"][monitor.active]["grounding"]["review"]["context_relevant"],
+                check(engine.session._state["quizzes"][monitor.active]["grounding"]["review"]["context_relevant"],
                       "Displayed quiz has no approved review")
                 capture("quiz", app.root)
                 first_quiz[0] = monitor.active
@@ -418,7 +419,7 @@ def phase(options):
                 if not app.practice.current or not app.practice.current.get("manual_review"):
                     return False
                 check(app.shell.current_page == "practice", "Repractice did not enter embedded practice")
-                retry = engine._store.get_quiz(app.practice.quiz_id)
+                retry = engine.session._store.get_quiz(app.practice.quiz_id)
                 check(retry["snapshot"]["retry_of_quiz_id"] == first_quiz[0], "Repractice source association lost")
                 app.practice.choose("A")
                 check(app.practice.submit(), "Repractice cannot submit")
@@ -427,8 +428,8 @@ def phase(options):
             elif stage[0] == 8:
                 if app.practice.submit_state != "finished":
                     return False
-                check(engine._store.attempt_count(first_quiz[0]) == 1, "Original answer counted twice")
-                check(engine._store.attempt_count(app.practice.quiz_id) == 1, "Repractice counted twice")
+                check(engine.session._store.attempt_count(first_quiz[0]) == 1, "Original answer counted twice")
+                check(engine.session._store.attempt_count(app.practice.quiz_id) == 1, "Repractice counted twice")
                 state = database_state(config.db_path())
                 check(state["attempts"] == 2 and state["answered"] == 2, "History/repractice persistence missing")
                 write_json(work / "first-state.json", state)
@@ -451,8 +452,8 @@ def phase(options):
     finally:
         if "bagu_trainer.engine" in sys.modules:
             engine = sys.modules["bagu_trainer.engine"]
-            if engine._store:
-                engine._store.close()
+            if engine.session._store:
+                engine.session._store.close()
     check(not errors, "; ".join(errors))
     check(milestones, "No acceptance milestones completed")
     check(complete_milestones(options.phase, milestones), "Acceptance skipped a required milestone: " + repr(milestones))
@@ -463,7 +464,23 @@ def phase(options):
 
 def orchestrate(options):
     work = options.work
+    # Gate all production inputs BEFORE GUI children, HTTP mocks or credentials.
+    artifact = None
+    if options.production_exe or options.output_dir or options.archive or getattr(sys, "frozen", False):
+        if options.production_exe and options.production_exe.name != "BaguTrainer.exe":
+            raise ValueError("--production-exe must name BaguTrainer.exe")
+        target = resolve_target(options.output_dir,
+                                bundle=options.production_exe.parent if options.production_exe else None,
+                                archive=options.archive)
+        expected = (json.loads((Path(sys._MEIPASS) / "acceptance-provenance.json").read_text(encoding="utf-8"))
+                    if getattr(sys, "frozen", False) else None)
+        artifact = validate_target(target, expected_source=expected,
+                                   driver=Path(sys.executable) if getattr(sys, "frozen", False) else None)
+        options.production_exe = target.bundle / "BaguTrainer.exe"
     work.mkdir(parents=True, exist_ok=False)
+    if artifact is not None:
+        # Keep target identity even when a later GUI milestone fails.
+        write_json(work / "ARTIFACT.json", artifact)
     watched = work / "监听 项目"
     watched.mkdir()
     (watched / "query.py").write_text('query = "SELECT id FROM orders"\n', encoding="utf-8")
@@ -523,6 +540,8 @@ def orchestrate(options):
                "architecture": platform.machine(), "frozen": bool(getattr(sys, "frozen", False)),
                "path_empty_in_app": True, "mcp_configured": False,
                "clean_machine_claim": False, "mock_network": "localhost HTTP, self-authored ZIP and fixed model responses"}
+    if artifact is not None:
+        results["artifact"] = artifact
     if getattr(sys, "frozen", False):
         results.update(json.loads((Path(sys._MEIPASS) / "acceptance-provenance.json").read_text(encoding="utf-8")))
     try:
@@ -657,6 +676,8 @@ def main():
     parser.add_argument("--base-url")
     parser.add_argument("--memory-credentials", action="store_true")
     parser.add_argument("--production-exe", type=lambda p: Path(p).resolve())
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--archive", type=Path)
     options = parser.parse_args()
     if options.phase and options.phase.startswith("bank-"):
         from scripts.acceptance.bank_lifecycle import run
@@ -670,6 +691,14 @@ def main():
 if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()
+    # Existing work/evidence belongs to a previous run; even ERROR.json must not
+    # overwrite it. Phase children intentionally share their parent's new work.
+    if "--phase" not in sys.argv and "--work" in sys.argv:
+        existing = Path(sys.argv[sys.argv.index("--work") + 1])
+        if existing.exists():
+            if sys.stderr is not None:
+                print("Work directory already exists; choose a new --work: " + str(existing), file=sys.stderr)
+            raise SystemExit(1)
     try:
         main()
     except Exception as error:

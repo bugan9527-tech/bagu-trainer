@@ -1,18 +1,30 @@
-﻿param([string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\output'))
+﻿param(
+    [string]$OutputDirectory = (Join-Path $PSScriptRoot '..\..\output'),
+    [string]$BuildOutputDirectory,
+    [string]$Python = 'python'
+)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
 $output = (Resolve-Path -LiteralPath $OutputDirectory).Path
 $inputsDirectory = Join-Path $output 'clean-windows-inputs'
 $resultsDirectory = Join-Path $output 'clean-windows-results'
-$null = New-Item -ItemType Directory -Path $inputsDirectory -Force
-$null = New-Item -ItemType Directory -Path $resultsDirectory -Force
-$archives = @(Get-ChildItem -LiteralPath (Join-Path $root 'dist') -File | Where-Object { $_.Name -match '^BaguTrainer-\d+\.\d+\.\d+-windows-x64\.zip$' })
-if ($archives.Count -ne 1) { throw 'Expected exactly one versioned production ZIP in dist.' }
-$archive = $archives[0]
-foreach($file in @($archive.FullName,($archive.FullName+'.sha256'),(Join-Path $root 'dist\BaguTrainerAcceptance-windows-x64.zip'),(Join-Path $root 'dist\BaguTrainerAcceptance-windows-x64.zip.sha256'))){
-    Copy-Item -LiteralPath $file -Destination $inputsDirectory -Force
+$targetReport = Join-Path $output 'PORTABLE_TARGET.json'
+$destination = Join-Path $output 'bagu-clean-acceptance.wsb'
+foreach($path in @($inputsDirectory,$resultsDirectory,$targetReport,$destination)){
+    if(Test-Path -LiteralPath $path){throw ('Existing evidence; choose a new -OutputDirectory: '+$path)}
 }
+$arguments = @('-B',(Join-Path $root 'scripts\portable_artifacts.py'),'--with-driver','--report',$targetReport)
+if($BuildOutputDirectory){$arguments += @('--output-dir',$BuildOutputDirectory)}
+$preflight = & $Python @arguments
+if($LASTEXITCODE -ne 0){throw ('Artifact preflight failed; see '+$targetReport)}
+$target = Get-Content -LiteralPath $targetReport -Raw -Encoding UTF8 | ConvertFrom-Json
+$null = New-Item -ItemType Directory -Path $inputsDirectory
+$null = New-Item -ItemType Directory -Path $resultsDirectory
+foreach($file in @($target.portable.path,$target.portable.checksum_path,$target.driver.archive.path,$target.driver.archive.checksum_path)){
+    Copy-Item -LiteralPath $file -Destination $inputsDirectory
+}
+Copy-Item -LiteralPath $targetReport -Destination $inputsDirectory
 $bootstrap = @'
 $ErrorActionPreference = 'Stop'
 $commands = @('python','python3','py','git') | ForEach-Object { $c=Get-Command $_ -ErrorAction SilentlyContinue; @{name=$_;path=if($c){$c.Source}else{$null}} }
@@ -32,6 +44,8 @@ $acceptanceZip='C:\BaguInputs\BaguTrainerAcceptance-windows-x64.zip'
 $acceptanceDigest=(Get-FileHash -LiteralPath $acceptanceZip -Algorithm SHA256).Hash.ToLower()
 if((Get-Content -LiteralPath ($acceptanceZip+'.sha256') -Raw).Trim() -cne ($acceptanceDigest+'  BaguTrainerAcceptance-windows-x64.zip')){throw 'Acceptance ZIP SHA-256 mismatch.'}
 Expand-Archive -LiteralPath C:\BaguInputs\BaguTrainerAcceptance-windows-x64.zip -DestinationPath 'C:\验收 程序'
+Get-ChildItem -LiteralPath C:\BaguInputs -File | Where-Object { $_.Name -like '*.zip' -or $_.Name -like '*.zip.sha256' } |
+  Copy-Item -Destination 'C:\验收 程序'
 $run=Start-Process -FilePath 'C:\验收 程序\BaguTrainerAcceptance\BaguTrainerAcceptance.exe' -ArgumentList '--work "C:\BaguResults\自动 验收" --production-exe "C:\验收 程序\BaguTrainer\BaguTrainer.exe"' -WindowStyle Hidden -Wait -PassThru
 @{exitCode=$run.ExitCode;zipSha256=$digest} | ConvertTo-Json | Set-Content -LiteralPath C:\BaguResults\EXIT.json -Encoding UTF8
 if($run.ExitCode){throw 'Acceptance failed; see ERROR.json.'}
@@ -50,7 +64,6 @@ $xml = @"
   <LogonCommand><Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\BaguInputs\run-acceptance.ps1</Command></LogonCommand>
 </Configuration>
 "@
-$destination = Join-Path $output 'bagu-clean-acceptance.wsb'
 [IO.File]::WriteAllText($destination,$xml,(New-Object Text.UTF8Encoding($true)))
 Write-Output $destination
 if(-not (Test-Path -LiteralPath (Join-Path $env:WINDIR 'System32\WindowsSandbox.exe'))){

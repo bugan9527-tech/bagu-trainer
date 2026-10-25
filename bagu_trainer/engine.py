@@ -4,6 +4,7 @@ This module has no transport registration or independent background loop.
 DesktopMonitor owns change detection and DesktopApp owns interaction.
 """
 import collections
+import copy
 import hashlib
 import json
 import ntpath
@@ -13,6 +14,7 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import secrets, config
@@ -33,23 +35,6 @@ matcher = Matcher(kb)
 generator = QuizGenerator(cfg)
 scorer = Scorer()
 
-# 桌面学习引擎内存态：
-#   quizzes: quiz_id -> 完整 quiz（含 answer 与 _meta，作答前不外发）
-#   pending: 待答题状态记录，状态机 ready/delivered/answered/expired
-#   seen:    已出题指纹 (project_root, kp_id, 归一化上下文 hash)，带容量上限
-# 作用域：ready/delivered 待答队列与未作答知识点冷却严格按 project_root 隔离；
-# attempts/concept_state 等学习历史和到期复习计划按知识点全局共享。复习只从
-# 已作答历史重建，绝不会把其他项目的未完成 pending 直接交付给当前项目。
-_state = {
-    "quizzes": {},
-    "pending": [],
-    "seen": collections.deque(),
-    "seen_set": set(),
-}
-# SQLite 学习闭环存储（首次使用时按 config db_path 建库，
-# 一并水合未完成/未复习的持久化状态，保证程序重启不丢失）
-_store = None
-_CONTENT_REVISION = 0
 # 薄弱知识点阈值与上限（get_learning_stats 用）
 WEAK_MASTERY = 0.6
 WEAK_LIMIT = 10
@@ -81,11 +66,6 @@ def _normalize_project_root(project_root) -> str:
 def _db_path() -> str:
     """SQLite 路径：config db_path（相对用户数据目录）或默认 data/trainer.db。"""
     return str(config.db_path((load_config().get("db_path") or "").strip()))
-# 桌面监测线程与学习操作共用同一把锁，串行化「采集->匹配->生成->清理」全流程，
-# 避免并发重复生成/重复计费
-_STATE_LOCK = threading.RLock()
-# watch 模式监听器按项目根目录跨调用复用（快照不持久会永远检测不到变更）
-_diff_readers = {}
 
 
 def reload_bank():
@@ -93,18 +73,50 @@ def reload_bank():
     global kb, matcher
     updated = KnowledgeBase()
     updated_matcher = Matcher(updated)
-    with _STATE_LOCK:
+    with content_maintenance():
         kb, matcher = updated, updated_matcher
+        session._content_changed()
+
+
+@contextmanager
+def content_maintenance():
+    """File replacement/deletion must serialize with this live learning session."""
+    with session.maintenance():
+        session._ensure_open()
+        yield
+
+
+def initialize():
+    """Start a fresh session after terminal shutdown; DB hydration stays lazy."""
+    global session
+    if session._closed:
+        session = EngineSession()
+
+
+def observe_project(root, *, reader_factory=None):
+    """Collect one scoped/redacted signal, optionally establishing a baseline."""
+    with content_maintenance():
+        if reader_factory is not None:
+            session._diff_readers[_normalize_project_root(root)] = reader_factory(root)
+        return _collect_context("", root)
+
+
+def generate_activity(root, info, *, retry_failed_ids=()):
+    """Generate ready work atomically, keeping dedupe, cooldown and cleanup together."""
+    with content_maintenance():
+        caps = _caps()
+        result = _generate_matches_locked(
+            info["context"], root, cfg["max_quizzes_per_hit"], caps,
+            " / ".join(info.get("sources") or [])[:200],
+            retry_failed_ids=retry_failed_ids)
+        session._cleanup_locked(caps)
+        return result
 
 
 def invalidate_content():
-    """A maintenance boundary invalidates generation results and all delivery caches."""
-    global _CONTENT_REVISION, _store
-    with _STATE_LOCK:
-        _CONTENT_REVISION += 1
-        for value in _state.values():
-            value.clear()
-        _diff_readers.clear()
+    """Invalidate delivery and in-flight content before maintenance replaces files."""
+    with session.maintenance():
+        session.invalidate_content()
         from .concepts import _load_concept_profiles
         from .fallback_bank import _load_fallback_cached
         from .matcher import _tokenize_cached, _domain_profile
@@ -112,9 +124,7 @@ def invalidate_content():
         _load_fallback_cached.cache_clear()
         _tokenize_cached.cache_clear()
         _domain_profile.cache_clear()
-        if _store is not None:
-            _store.close()
-            _store = None
+
 
 def _open_config_window() -> bool:
     """以独立进程弹出 AI 接口配置窗口（tkinter 在独立进程运行）"""
@@ -175,56 +185,6 @@ def _generation_failure(quiz: dict, *, require_review=False):
     return None
 
 
-def _pending_kp_ids_locked(project_root: str) -> set:
-    """当前项目未作答 pending 题涉及的知识点集合（项目内同 kp 冷却用）。
-
-    学习历史另按知识点全局共享；这里只隔离尚未作答的 ready/delivered 冷却，
-    避免项目 A 的未答题阻塞项目 B 的同知识点新题。"""
-    scope = _normalize_project_root(project_root)
-    return {p["kp_id"] for p in _state["pending"]
-            if p["status"] in ("ready", "delivered")
-            and _normalize_project_root(p.get("project_root")) == scope}
-
-
-def _get_store_locked():
-    """懒加载 SQLite 存储（调用方必须已持 _STATE_LOCK）。
-    首次创建后立即从库中水合未完成的题，实现重启后状态延续。"""
-    global _store
-    if _store is None:
-        _store = Store(_db_path())
-        _hydrate_pending_locked(_store)
-    return _store
-
-
-def _hydrate_pending_locked(store):
-    """服务重启水合：库中未过期且未作答的题回到内存队列（幂等，不重复添加）"""
-    now = _now()
-    for row in store.load_pending(now):
-        qid = row["quiz_id"]
-        if qid in _state["quizzes"]:
-            continue
-        quiz = dict(row["snapshot"])
-        if _generation_failure(quiz, require_review=not quiz.get("review")):
-            # Keep the snapshot and all learning history; retire only delivery.
-            store.set_status(qid, "expired")
-            continue
-        quiz.update({"_status": row["status"],
-                     "_created_at": row["created_at"],
-                     "_expires_at": row["expires_at"]})
-        _state["quizzes"][qid] = quiz
-        _state["pending"].append({
-            "quiz_id": qid,
-            "kp_id": row["kp_id"],
-            "project_root": row["project_root"],
-            "status": row["status"],
-            "created_at": row["created_at"],
-            "delivered_at": row["delivered_at"],
-            "answered_at": row["answered_at"],
-            "expires_at": row["expires_at"],
-            **_public_quiz(qid, quiz, row["project_root"]),
-        })
-
-
 def _resolve_project_root(project_root: str):
     """project_root 白名单校验（隐私边界）。
     返回 (Path|None, error|None)：
@@ -278,9 +238,9 @@ def _collect_context(description: str, project_root: str) -> dict:
             pieces.append(text)
             sources.append(f".trae-cn 会话记录({len(entries)} 条)")
     key = str(root)
-    if key not in _diff_readers:
-        _diff_readers[key] = DiffReader(key)
-    changes = _diff_readers[key].changes()
+    if key not in session._diff_readers:
+        session._diff_readers[key] = DiffReader(key)
+    changes = session._diff_readers[key].changes()
     if changes["diff_text"]:
         pieces.append(changes["diff_text"])
     sources.append(f"文件变动[{changes['source']}]({len(changes['files'])} 个文件)")
@@ -318,17 +278,6 @@ def _match_hash(project_root: str, kp_id: str, ctx: str) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def _mark_seen_locked(key: str, seen_cap: int) -> bool:
-    """登记指纹；已存在返回 False（去重防重复生成），容量超限确定性淘汰最旧"""
-    if key in _state["seen_set"]:
-        return False
-    _state["seen_set"].add(key)
-    _state["seen"].append(key)
-    while len(_state["seen"]) > seen_cap:
-        _state["seen_set"].discard(_state["seen"].popleft())
-    return True
-
-
 def _public_pending(entry: dict) -> dict:
     """把 pending 记录还原为发往用户侧的题目（剔除内部状态字段）"""
     internal = {"status", "created_at", "delivered_at", "answered_at",
@@ -337,12 +286,12 @@ def _public_pending(entry: dict) -> dict:
     if entry.get("project_root"):
         out["project_root"] = (_normalize_project_root(entry["project_root"])
                                or entry["project_root"])
-    return out
+    return copy.deepcopy(out)
 
 
 def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict,
                              source_summary: str = "", *, retry_failed_ids=()):
-    """匹配知识点并生成题目（调用方必须已持 _STATE_LOCK）。
+    """匹配知识点并生成题目（调用方必须已持 session._lock）。
     返回 (matches, generated, skipped, unavailable)：matches 为匹配详情列表
     [{question, score, hits, confidence, margin}]；generated 为可作答的公开题目列表，
     skipped 为因相同上下文已出过题被去重跳过、或同一知识点冷却（未作答/未到复习期）
@@ -354,8 +303,8 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
     ranked = matcher.rank(ctx, top_n=top_n)
     matches, generated, skipped, unavailable = [], [], 0, []
     now = _now()
-    store = _get_store_locked()
-    pending_kps = _pending_kp_ids_locked(project_root)
+    store = session._get_store_locked()
+    pending_kps = session._pending_kp_ids_locked(project_root)
     for r in ranked:
         q, score, hits = r["question"], r["score"], r["hits"]
         # Only an explicit desktop retry supplies IDs from the previous failed
@@ -365,7 +314,7 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
         matches.append({"question": q, "score": score, "hits": hits,
                         "confidence": r["confidence"], "margin": r["margin"]})
         key = _match_hash(project_root, q["id"], ctx)
-        if not _mark_seen_locked(key, caps["seen_cap"]) and q["id"] not in retry_failed_ids:
+        if not session._mark_seen_locked(key, caps["seen_cap"]) and q["id"] not in retry_failed_ids:
             skipped += 1
             continue
         # 同 kp 冷却：有未作答题，或未到复习期，都不重复出题（避免短时间重复）
@@ -392,7 +341,7 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
         quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
                      "_status": "ready"})
         quiz_id = uuid.uuid4().hex[:8]
-        _state["quizzes"][quiz_id] = quiz
+        session._state["quizzes"][quiz_id] = quiz
         store.create_quiz(
             quiz_id, q["id"], _quiz_snapshot(quiz), "ready",
             str(project_root), f"{source_summary} | kp={q['id']}"[:200],
@@ -400,7 +349,7 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
         public = {"hits": list(hits), "score": score,
                   "confidence": r["confidence"], "margin": r["margin"],
                   **_public_quiz(quiz_id, quiz, project_root)}
-        _state["pending"].append({
+        session._state["pending"].append({
             "quiz_id": quiz_id,
             "kp_id": q["id"],
             "project_root": str(project_root),
@@ -415,77 +364,6 @@ def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict
     return matches, generated, skipped, unavailable
 
 
-def _deliver_pending_locked(entry: dict, now=None):
-    """原子交付单条 ready pending：内存状态、quiz 快照状态、SQLite 同步更新。
-    调用方必须已持 _STATE_LOCK；整批交付由 process_activity 在同一锁内完成。"""
-    delivered_at = _now() if now is None else now
-    entry["status"] = "delivered"
-    entry["delivered_at"] = delivered_at
-    quiz = _state["quizzes"].get(entry["quiz_id"])
-    if quiz is not None:
-        quiz["_status"] = "delivered"
-    _get_store_locked().set_status(
-        entry["quiz_id"], "delivered", delivered_at=delivered_at)
-    return entry
-
-
-def _deliver_generated_locked(generated: list):
-    """把本次 report 生成的 ready 题在同一状态锁内直接交付。"""
-    generated_ids = {g["quiz_id"] for g in generated}
-    now = _now()
-    for p in _state["pending"]:
-        if p["quiz_id"] in generated_ids and p["status"] == "ready":
-            _deliver_pending_locked(p, now=now)
-
-
-def _cleanup_locked(caps: dict):
-    """过期/超量题的确定性清理（调用方必须已持 _STATE_LOCK）。
-    过期状态写通数据库（expired 持久化）；容量淘汰仅清内存，数据库保留历史。"""
-    now = _now()
-    store = _get_store_locked()
-    # 1) 到期未作答：pending -> expired（写通 DB），quiz 一并移除
-    for p in _state["pending"]:
-        quiz = _state["quizzes"].get(p["quiz_id"], {})
-        if p["status"] in ("ready", "delivered") and (
-                p["expires_at"] <= now or
-                _generation_failure(quiz, require_review=not quiz.get("review"))):
-            p["status"] = "expired"
-            store.set_status(p["quiz_id"], "expired")
-    for p in [x for x in _state["pending"] if x["status"] == "expired"]:
-        _state["quizzes"].pop(p["quiz_id"], None)
-    _state["pending"] = [x for x in _state["pending"] if x["status"] != "expired"]
-    # 2) quizzes 中无 pending 记录的历史过期题一并扫除。
-    #   DB 侧仅淘汰未作答的（过期=放弃作答）；已作答行永久保留 answered，
-    #   作为复习快照来源与学习历史（复习可能安排在 TTL 之后到期）。
-    for qid, q in list(_state["quizzes"].items()):
-        if q.get("_expires_at", float("inf")) <= now:
-            _state["quizzes"].pop(qid, None)
-            if q.get("_status") != "answered":
-                store.set_status(qid, "expired")
-    # 3) 已作答记录从 pending 移除（quiz 留待容量淘汰）
-    _state["pending"] = [x for x in _state["pending"] if x["status"] != "answered"]
-    # 4) pending 超量：按 created_at 最旧确定性淘汰（连带 quiz）
-    automatic = [p for p in _state["pending"] if not _state["quizzes"].get(p["quiz_id"], {}).get("manual_review")]
-    if len(automatic) > caps["max_pending"]:
-        _state["pending"].sort(key=lambda p: (p["created_at"], p["quiz_id"]))
-        drop = sorted(automatic, key=lambda p: (p["created_at"], p["quiz_id"]))[:len(automatic) - caps["max_pending"]]
-        for p in drop:
-            _state["quizzes"].pop(p["quiz_id"], None)
-        drop_ids = {p["quiz_id"] for p in drop}
-        _state["pending"] = [p for p in _state["pending"] if p["quiz_id"] not in drop_ids]
-    # 5) quizzes 超量：按 _created_at 最旧确定性淘汰（连带 pending 引用）
-    automatic_quizzes = [(qid, q) for qid, q in _state["quizzes"].items() if not q.get("manual_review")]
-    if len(automatic_quizzes) > caps["max_quizzes"]:
-        ordered = sorted(automatic_quizzes,
-                         key=lambda kv: (kv[1].get("_created_at", 0.0), kv[0]))
-        drop_ids = {qid for qid, _ in
-                    ordered[:len(automatic_quizzes) - caps["max_quizzes"]]}
-        for qid in drop_ids:
-            _state["quizzes"].pop(qid, None)
-        _state["pending"] = [x for x in _state["pending"]
-                             if x["quiz_id"] not in drop_ids]
-
-
 def _refresh(project_root: str, description: str = "",
              deliver_generated: bool = False) -> dict:
     """活动处理共用的受锁刷新流程：
@@ -495,15 +373,15 @@ def _refresh(project_root: str, description: str = "",
     供 process_activity 使用：生成与 ready->delivered 状态更新在同一锁内完成。
     """
     caps = _caps()
-    with _STATE_LOCK:
+    with content_maintenance():
         info = _collect_context(description, project_root)
         if info.get("error"):
-            _cleanup_locked(caps)
+            session._cleanup_locked(caps)
             return {"ok": False, "error": info["error"], "info": info,
                     "generated": [], "matches": [], "skipped": 0,
                     "unavailable": []}
         if not info["context"].strip():
-            _cleanup_locked(caps)
+            session._cleanup_locked(caps)
             return {"info": info, "generated": [], "matches": [],
                     "skipped": 0, "unavailable": []}
         source_summary = " / ".join(info.get("sources") or [])[:200]
@@ -511,84 +389,10 @@ def _refresh(project_root: str, description: str = "",
             info["context"], str(info["project_root"]),
             cfg["max_quizzes_per_hit"], caps, source_summary)
         if deliver_generated and generated:
-            _deliver_generated_locked(generated)
-        _cleanup_locked(caps)
+            session._deliver_generated_locked(generated)
+        session._cleanup_locked(caps)
     return {"info": info, "generated": generated, "matches": matches,
             "skipped": skipped, "unavailable": unavailable}
-
-
-def _first_ready_locked(project_root: str):
-    """取指定项目 oldest-first 的 ready 题（调用方必须已持 _STATE_LOCK）。
-
-    先 realpath + normcase 归一化 project_root，只返回作用域完全一致的题；
-    其他项目预生成的 ready 题不得跨项目交付。"""
-    scope = _normalize_project_root(project_root)
-    for p in sorted(_state["pending"], key=lambda x: (x["created_at"], x["quiz_id"])):
-        if (p["status"] == "ready"
-                and _normalize_project_root(p.get("project_root")) == scope):
-            return p
-    return None
-
-
-def _deliver_due_review_locked(root: str, prefer, only_prefer: bool, caps: dict):
-    """到期复习交付（调用方必须已持 _STATE_LOCK）：按 concept_state.next_review_at
-    到期顺序，重建该知识点最近一次作答题目的快照（确定性重练，不调用 LLM、
-    不重复计费）。返回公开题目 dict 或 None。
-
-    规则：当前项目未作答 pending 中的 kp 跳过（避免同一题重复推送）；
-    其他项目的未作答 pending 不参与本项目的冷却。学习历史/复习计划按知识点
-    全局共享，但这里只可从已作答的 AI 快照重建题目，不会交付旧离线题或搬运其他项目 pending。
-    only_prefer=True 时只在 prefer 集合内出题（「上下文相关的到期复习」优先）；
-    否则 prefer 内 kp 排前、其余兜底（保证错题总会回来）。
-    """
-    root = _normalize_project_root(root)
-    store = _get_store_locked()
-    now = _now()
-    due = store.due_kps(now)
-    if not due:
-        return None
-    pending_kps = _pending_kp_ids_locked(root)
-    prefer_set = set(prefer or [])
-    cands = [d for d in due if d["kp_id"] not in pending_kps]
-    if only_prefer:
-        cands = [d for d in cands if d["kp_id"] in prefer_set]
-        if not cands:
-            return None
-    else:
-        cands.sort(key=lambda d: (0 if d["kp_id"] in prefer_set else 1,
-                                  d["next_review_at"], d["kp_id"]))
-    for row in cands:
-        hist = store.latest_answered_snapshot(row["kp_id"])
-        if not hist:
-            continue  # 快照缺失（不应发生）时跳过该 kp，尝试下一个
-        quiz = dict(hist["snapshot"])
-        if _generation_failure(quiz):
-            continue  # Retain attempts/schedules, but never replay offline snapshots.
-        for field in ("manual_review", "retry_of_attempt_id", "retry_of_quiz_id"):
-            quiz.pop(field, None)
-        quiz["review"] = True
-        quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
-                     "_status": "delivered"})
-        quiz_id = uuid.uuid4().hex[:8]
-        _state["quizzes"][quiz_id] = quiz
-        public = _public_quiz(quiz_id, quiz, root)
-        _state["pending"].append({
-            "quiz_id": quiz_id,
-            "kp_id": row["kp_id"],
-            "project_root": root,
-            "status": "delivered",
-            "created_at": now,
-            "delivered_at": now,
-            "answered_at": None,
-            "expires_at": now + caps["ttl"],
-            **public,
-        })
-        store.create_quiz(
-            quiz_id, row["kp_id"], _quiz_snapshot(quiz), "delivered", root,
-            f"到期复习 | kp={row['kp_id']} | 上次作答 {hist['answered_at']}"[:200],
-            now, now + caps["ttl"], delivered_at=now)
-        return public
-    return None
 
 
 def _poll_once():
@@ -663,13 +467,13 @@ def next_quiz(project_root: str = "") -> dict:
         return {"ok": False, "has_pending": False, "error": err,
                 "note": "project_root 请传入 project_roots 白名单内的目录，或留空使用 config.json 的默认项目目录"}
     scope_root = str(root_path)
-    with _STATE_LOCK:
+    with content_maintenance():
         caps = _caps()
-        _cleanup_locked(caps)
+        session._cleanup_locked(caps)
         # 0) 已有 ready 题直接交付（后台预生成复用）
-        ready = _first_ready_locked(scope_root)
+        ready = session._first_ready_locked(scope_root)
         if ready:
-            _deliver_pending_locked(ready)
+            session._deliver_pending_locked(ready)
             return {"ok": True, "has_pending": True, "quiz": _public_pending(ready),
                     "project_root": scope_root, "scope_note": _PROJECT_SCOPE_NOTE,
                     "next": "把题目与选项呈现给用户作答，然后用 submit_answer(quiz_id, 用户答案) 判分并转述解析"}
@@ -680,7 +484,7 @@ def next_quiz(project_root: str = "") -> dict:
         if ctx:
             matched_ids = [r["id"] for r in matcher.rank(ctx, top_n=5)]
             # 1) 与当前上下文相关的到期复习题优先（错题/到期知识点重练）
-            review = _deliver_due_review_locked(
+            review = session._deliver_due_review_locked(
                 str(root_path), prefer=matched_ids, only_prefer=True, caps=caps)
             if review:
                 return {"ok": True, "has_pending": True, "quiz": review,
@@ -691,17 +495,17 @@ def next_quiz(project_root: str = "") -> dict:
                 info["context"], str(info["project_root"]),
                 cfg["max_quizzes_per_hit"], caps,
                 " / ".join(info.get("sources") or [])[:200])
-            _cleanup_locked(caps)
-            ready = _first_ready_locked(scope_root)
+            session._cleanup_locked(caps)
+            ready = session._first_ready_locked(scope_root)
             if ready:
-                _deliver_pending_locked(ready)
+                session._deliver_pending_locked(ready)
                 return {"ok": True, "has_pending": True, "quiz": _public_pending(ready),
                         "project_root": scope_root, "scope_note": _PROJECT_SCOPE_NOTE,
                         "next": "把题目与选项呈现给用户作答，然后用 submit_answer(quiz_id, 用户答案) 判分并转述解析"}
         else:
             matches, generated, skipped, unavailable = [], [], 0, []
         # 3) 上下文无关的到期复习兜底：保证错题总会在更短周期内再次出现
-        review = _deliver_due_review_locked(
+        review = session._deliver_due_review_locked(
             str(root_path), prefer=matched_ids, only_prefer=False, caps=caps)
         if review:
             return {"ok": True, "has_pending": True, "quiz": review,
@@ -729,7 +533,7 @@ def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
     传入的 context 在进入 LLM 前统一脱敏（密钥/令牌自动替换为 [REDACTED]）并限制长度。
     生成失败（未配置 LLM、LLM 输出校验失败、来源正文缺失）时
     返回 ok=False 与明确原因，绝不返回无选项/无答案的题目。"""
-    revision = _CONTENT_REVISION
+    revision = session._generation_token()
     q = kb.get(knowledge_point_id) or get_verified_fallback(knowledge_point_id)
     if not q:
         return {"ok": False, "note": f"知识点 {knowledge_point_id} 不存在，可先 list_knowledge_points"}
@@ -748,20 +552,20 @@ def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
                 "reason": failure,
                 "note": "不提供无法作答的题目。可在主窗口配置出题模型后重试"}
     quiz_id = uuid.uuid4().hex[:8]
-    with _STATE_LOCK:
-        if revision != _CONTENT_REVISION:
+    with session._lock:
+        if not session._accepts_result(revision):
             return {"ok": False, "note": "题库内容已变化，已丢弃过期出题结果。"}
         caps = _caps()
         now = _now()
         quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
                      "_status": "delivered"})
-        _state["quizzes"][quiz_id] = quiz
-        _get_store_locked().create_quiz(
+        session._state["quizzes"][quiz_id] = quiz
+        session._get_store_locked().create_quiz(
             quiz_id, quiz.get("kp_id") or knowledge_point_id,
             _quiz_snapshot(quiz), "delivered", str(PROJECT_ROOT),
             f"手动 create_quiz | kp={knowledge_point_id}",
             now, now + caps["ttl"], delivered_at=now)
-        _cleanup_locked(caps)
+        session._cleanup_locked(caps)
     return {"ok": True, **_public_quiz(quiz_id, quiz, str(PROJECT_ROOT)),
             "next": "用 submit_answer(quiz_id, 用户答案) 判分并获取解析"}
 
@@ -771,12 +575,12 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
     学习闭环：单事务落库 attempt 与 concept_state（掌握度/下次复习时间由
     SM-2 变体确定性计算），quiz 标记 answered。
     幂等性：同一 quiz 只允许提交一次，重复提交明确拒绝（不重复计数）。"""
-    with _STATE_LOCK:
+    with content_maintenance():
         now = _now()
-        quiz = _state["quizzes"].get(quiz_id)
+        quiz = session._state["quizzes"].get(quiz_id)
         if not quiz:
-            store = _get_store_locked()  # 懒建库时会先水合 DB 中未完成的题
-            quiz = _state["quizzes"].get(quiz_id)
+            store = session._get_store_locked()  # 懒建库时会先水合 DB 中未完成的题
+            quiz = session._state["quizzes"].get(quiz_id)
             if not quiz:
                 row = store.get_quiz(quiz_id)
                 if row and row["status"] == "answered":
@@ -787,16 +591,16 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
                     "note": f"quiz_id {quiz_id} 已作答，重复提交已拒绝（不重复计数）"}
         failure = _generation_failure(quiz, require_review=not quiz.get("review"))
         if failure:
-            _cleanup_locked(_caps())
+            session._cleanup_locked(_caps())
             return {"ok": False, "note": failure}
         if (quiz.get("_expires_at") or 0) <= now:
-            _get_store_locked().set_status(quiz_id, "expired")
-            _state["quizzes"].pop(quiz_id, None)
-            _state["pending"] = [p for p in _state["pending"]
+            session._get_store_locked().set_status(quiz_id, "expired")
+            session._state["quizzes"].pop(quiz_id, None)
+            session._state["pending"] = [p for p in session._state["pending"]
                                  if p["quiz_id"] != quiz_id]
             return {"ok": False, "note": f"quiz_id {quiz_id} 不存在或已过期"}
         grade = scorer.grade(quiz, answer)
-        store = _get_store_locked()
+        store = session._get_store_locked()
         prev = store.concept_state(quiz.get("kp_id"))
         state = next_state(grade["correct"], prev, now)
         # 单事务：attempt + concept_state + quiz 状态
@@ -806,7 +610,7 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
         if recorded is False:
             quiz["_status"] = "answered"
             return {"ok": False, "note": "该题已作答，重复提交已拒绝（不重复计数）"}
-        for p in _state["pending"]:
+        for p in session._state["pending"]:
             if p["quiz_id"] == quiz_id:
                 p["status"] = "answered"
                 p["answered_at"] = now
@@ -823,7 +627,7 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
 
 
 def _history_path():
-    return _store.path if _store is not None else _db_path()
+    return session.database_path
 
 
 def history_time(timestamp):
@@ -835,7 +639,7 @@ def history_time(timestamp):
 
 
 def get_answer_history(**filters):
-    """Read-only, deliberately independent of _STATE_LOCK and current bank."""
+    """Read-only, deliberately independent of session._lock and current bank."""
     try:
         result = Store.history_page(_history_path(), **filters)
         for item in result["items"]:
@@ -883,13 +687,13 @@ def repractice_attempt(attempt_id):
     One unfinished retry per original attempt also deduplicates separate UI
     requests and survives restarts. Persist before publishing in-memory state.
     """
-    with _STATE_LOCK:
+    with content_maintenance():
         if getattr(kb, "explicit_empty", False):
             return {"ok": False, "note": "当前无题库，请重新下载并构建来源后练习；历史快照仍可查看。"}
         detail = get_answer_detail(attempt_id)
         if not detail.get("ok") or not detail.get("can_retry"):
             return {"ok": False, "note": detail.get("retry_reason") or detail.get("note")}
-        store = _get_store_locked()
+        store = session._get_store_locked()
         now, caps = _now(), _caps()
         row = store.unfinished_repractice(int(attempt_id), now)
         if row is None:
@@ -903,9 +707,9 @@ def repractice_attempt(attempt_id):
             row = store.get_quiz(qid)
         qid, quiz = row["quiz_id"], dict(row["snapshot"])
         quiz.update(_status=row["status"], _created_at=row["created_at"], _expires_at=row["expires_at"])
-        _state["quizzes"][qid] = quiz
-        if not any(p["quiz_id"] == qid for p in _state["pending"]):
-            _state["pending"].append({**row, **_public_quiz(qid, quiz, row["project_root"])})
+        session._state["quizzes"][qid] = quiz
+        if not any(p["quiz_id"] == qid for p in session._state["pending"]):
+            session._state["pending"].append({**row, **_public_quiz(qid, quiz, row["project_root"])})
         return {"ok": True, "quiz": {**_public_quiz(qid, quiz, row["project_root"]), "manual_review": True}}
 
 
@@ -913,8 +717,8 @@ def get_learning_stats() -> dict:
     """【学习统计·只读】返回学习闭环聚合数据：已作答题数、总作答次数、
     正确率、待复习数、薄弱知识点（掌握度低于 0.6 且至少作答一次）。
     不返回任何会话原文/代码内容，只有聚合数字与知识点名称。"""
-    with _STATE_LOCK:
-        store = _get_store_locked()
+    with content_maintenance():
+        store = session._get_store_locked()
         s = store.stats(_now())
         weak = []
         for w in store.weak_kps(WEAK_LIMIT, WEAK_MASTERY):
@@ -940,3 +744,390 @@ def get_learning_stats() -> dict:
             "note": ("只读统计：不含会话原文与代码内容。"
                      "待复习数为 next_review_at 已到期的知识点数。"),
         }
+
+
+class EngineSession:
+    """Own delivery state and its SQLite lifetime, independent of pages/workers.
+
+    Generation/grading still live in the engine module during this first batch.
+    They share this session's reentrant lock; callers use pending operations and
+    maintenance(), never manipulate a connection or a delivery record.
+    """
+    def __init__(self, *, database=None, clock=None):
+        self._database = database
+        self._clock = clock
+        self._lock = threading.RLock()
+        self._state = {"quizzes": {}, "pending": [],
+                       "seen": collections.deque(), "seen_set": set()}
+        self._store = None
+        self._diff_readers = {}
+        self._revision = 0
+        self._closed = False
+
+    def _now(self):
+        return self._clock() if self._clock is not None else _now()
+
+    def _ensure_open(self):
+        if self._closed:
+            raise RuntimeError("学习会话已关闭")
+
+    def maintenance(self):
+        """Serialize bank/file maintenance with learning writes and generation."""
+        return self._lock
+
+    @property
+    def database_path(self):
+        return self._store.path if self._store is not None else (self._database or _db_path())
+
+    def _generation_token(self):
+        with self._lock:
+            self._ensure_open()
+            return self, self._revision
+
+    def _accepts_result(self, token):
+        with self._lock:
+            return not self._closed and token == (self, self._revision)
+
+    def _content_changed(self):
+        """A bank switch keeps pending/history but retires old generation work."""
+        with self._lock:
+            self._ensure_open()
+            self._revision += 1
+
+    def _clear(self):
+        self._revision += 1
+        for value in self._state.values():
+            value.clear()
+        self._diff_readers.clear()
+        if self._store is not None:
+            self._store.close()
+            self._store = None
+
+    def invalidate_content(self):
+        """Release the DB before maintenance; next use rehydrates surviving rows."""
+        with self._lock:
+            self._ensure_open()
+            self._clear()
+
+    def close(self):
+        """Idempotent terminal close; retain persisted pending/history on disk."""
+        with self._lock:
+            if not self._closed:
+                self._clear()
+                self._closed = True
+
+    def forget_projects(self, roots):
+        """Drop only removed watch baselines; preserve their learning history."""
+        with self._lock:
+            self._ensure_open()
+            for root in roots:
+                self._diff_readers.pop(_normalize_project_root(root), None)
+
+    def _pending_kp_ids_locked(self, project_root: str) -> set:
+        """当前项目未作答 pending 题涉及的知识点集合（项目内同 kp 冷却用）。
+
+        学习历史另按知识点全局共享；这里只隔离尚未作答的 ready/delivered 冷却，
+        避免项目 A 的未答题阻塞项目 B 的同知识点新题。"""
+        scope = _normalize_project_root(project_root)
+        return {p["kp_id"] for p in self._state["pending"]
+                if p["status"] in ("ready", "delivered")
+                and _normalize_project_root(p.get("project_root")) == scope}
+
+    def _get_store_locked(self):
+        """懒加载 SQLite 存储（调用方必须已持 self._lock）。
+        首次创建后立即从库中水合未完成的题，实现重启后状态延续。"""
+        self._ensure_open()
+        if self._store is None:
+            self._store = Store(self.database_path)
+            try:
+                self._hydrate_pending_locked(self._store)
+            except Exception:
+                # Do not leave a half-hydrated queue/connection after a failed open.
+                self._clear()
+                raise
+        return self._store
+
+    def _hydrate_pending_locked(self, store):
+        """服务重启水合：库中未过期且未作答的题回到内存队列（幂等，不重复添加）"""
+        now = self._now()
+        for row in store.load_pending(now):
+            qid = row["quiz_id"]
+            if qid in self._state["quizzes"]:
+                continue
+            quiz = dict(row["snapshot"])
+            if _generation_failure(quiz, require_review=not quiz.get("review")):
+                # Keep the snapshot and all learning history; retire only delivery.
+                store.set_status(qid, "expired")
+                continue
+            quiz.update({"_status": row["status"],
+                         "_created_at": row["created_at"],
+                         "_expires_at": row["expires_at"]})
+            self._state["quizzes"][qid] = quiz
+            self._state["pending"].append({
+                "quiz_id": qid,
+                "kp_id": row["kp_id"],
+                "project_root": row["project_root"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "delivered_at": row["delivered_at"],
+                "answered_at": row["answered_at"],
+                "expires_at": row["expires_at"],
+                **_public_quiz(qid, quiz, row["project_root"]),
+            })
+
+    def _mark_seen_locked(self, key: str, seen_cap: int) -> bool:
+        """登记指纹；已存在返回 False（去重防重复生成），容量超限确定性淘汰最旧"""
+        if key in self._state["seen_set"]:
+            return False
+        self._state["seen_set"].add(key)
+        self._state["seen"].append(key)
+        while len(self._state["seen"]) > seen_cap:
+            self._state["seen_set"].discard(self._state["seen"].popleft())
+        return True
+
+    def _deliver_pending_locked(self, entry: dict, now=None):
+        """原子交付单条 ready pending：内存状态、quiz 快照状态、SQLite 同步更新。
+        调用方必须已持 self._lock；整批交付由 process_activity 在同一锁内完成。"""
+        delivered_at = self._now() if now is None else now
+        entry["status"] = "delivered"
+        entry["delivered_at"] = delivered_at
+        quiz = self._state["quizzes"].get(entry["quiz_id"])
+        if quiz is not None:
+            quiz["_status"] = "delivered"
+        self._get_store_locked().set_status(
+            entry["quiz_id"], "delivered", delivered_at=delivered_at)
+        return entry
+
+    def _deliver_generated_locked(self, generated: list):
+        """把本次 report 生成的 ready 题在同一状态锁内直接交付。"""
+        generated_ids = {g["quiz_id"] for g in generated}
+        now = self._now()
+        for p in self._state["pending"]:
+            if p["quiz_id"] in generated_ids and p["status"] == "ready":
+                self._deliver_pending_locked(p, now=now)
+
+    def _cleanup_locked(self, caps: dict):
+        """过期/超量题的确定性清理（调用方必须已持 self._lock）。
+        过期状态写通数据库（expired 持久化）；容量淘汰仅清内存，数据库保留历史。"""
+        now = self._now()
+        store = self._get_store_locked()
+        # 1) 到期未作答：pending -> expired（写通 DB），quiz 一并移除
+        for p in self._state["pending"]:
+            quiz = self._state["quizzes"].get(p["quiz_id"], {})
+            if p["status"] in ("ready", "delivered") and (
+                    p["expires_at"] <= now or
+                    _generation_failure(quiz, require_review=not quiz.get("review"))):
+                p["status"] = "expired"
+                store.set_status(p["quiz_id"], "expired")
+        for p in [x for x in self._state["pending"] if x["status"] == "expired"]:
+            self._state["quizzes"].pop(p["quiz_id"], None)
+        self._state["pending"] = [x for x in self._state["pending"] if x["status"] != "expired"]
+        # 2) quizzes 中无 pending 记录的历史过期题一并扫除。
+        #   DB 侧仅淘汰未作答的（过期=放弃作答）；已作答行永久保留 answered，
+        #   作为复习快照来源与学习历史（复习可能安排在 TTL 之后到期）。
+        for qid, q in list(self._state["quizzes"].items()):
+            if q.get("_expires_at", float("inf")) <= now:
+                self._state["quizzes"].pop(qid, None)
+                if q.get("_status") != "answered":
+                    store.set_status(qid, "expired")
+        # 3) 已作答记录从 pending 移除（quiz 留待容量淘汰）
+        self._state["pending"] = [x for x in self._state["pending"] if x["status"] != "answered"]
+        # 4) pending 超量：按 created_at 最旧确定性淘汰（连带 quiz）
+        automatic = [p for p in self._state["pending"] if not self._state["quizzes"].get(p["quiz_id"], {}).get("manual_review")]
+        if len(automatic) > caps["max_pending"]:
+            self._state["pending"].sort(key=lambda p: (p["created_at"], p["quiz_id"]))
+            drop = sorted(automatic, key=lambda p: (p["created_at"], p["quiz_id"]))[:len(automatic) - caps["max_pending"]]
+            for p in drop:
+                self._state["quizzes"].pop(p["quiz_id"], None)
+            drop_ids = {p["quiz_id"] for p in drop}
+            self._state["pending"] = [p for p in self._state["pending"] if p["quiz_id"] not in drop_ids]
+        # 5) quizzes 超量：按 _created_at 最旧确定性淘汰（连带 pending 引用）
+        automatic_quizzes = [(qid, q) for qid, q in self._state["quizzes"].items() if not q.get("manual_review")]
+        if len(automatic_quizzes) > caps["max_quizzes"]:
+            ordered = sorted(automatic_quizzes,
+                             key=lambda kv: (kv[1].get("_created_at", 0.0), kv[0]))
+            drop_ids = {qid for qid, _ in
+                        ordered[:len(automatic_quizzes) - caps["max_quizzes"]]}
+            for qid in drop_ids:
+                self._state["quizzes"].pop(qid, None)
+            self._state["pending"] = [x for x in self._state["pending"]
+                                 if x["quiz_id"] not in drop_ids]
+
+    def _first_ready_locked(self, project_root: str):
+        """取指定项目 oldest-first 的 ready 题（调用方必须已持 self._lock）。
+
+        先 realpath + normcase 归一化 project_root，只返回作用域完全一致的题；
+        其他项目预生成的 ready 题不得跨项目交付。"""
+        scope = _normalize_project_root(project_root)
+        for p in sorted(self._state["pending"], key=lambda x: (x["created_at"], x["quiz_id"])):
+            if (p["status"] == "ready"
+                    and _normalize_project_root(p.get("project_root")) == scope):
+                return p
+        return None
+
+    def _deliver_due_review_locked(self, root: str, prefer, only_prefer: bool, caps: dict):
+        """到期复习交付（调用方必须已持 self._lock）：按 concept_state.next_review_at
+        到期顺序，重建该知识点最近一次作答题目的快照（确定性重练，不调用 LLM、
+        不重复计费）。返回公开题目 dict 或 None。
+
+        规则：当前项目未作答 pending 中的 kp 跳过（避免同一题重复推送）；
+        其他项目的未作答 pending 不参与本项目的冷却。学习历史/复习计划按知识点
+        全局共享，但这里只可从已作答的 AI 快照重建题目，不会交付旧离线题或搬运其他项目 pending。
+        only_prefer=True 时只在 prefer 集合内出题（「上下文相关的到期复习」优先）；
+        否则 prefer 内 kp 排前、其余兜底（保证错题总会回来）。
+        """
+        root = _normalize_project_root(root)
+        store = self._get_store_locked()
+        now = self._now()
+        due = store.due_kps(now)
+        if not due:
+            return None
+        pending_kps = self._pending_kp_ids_locked(root)
+        prefer_set = set(prefer or [])
+        cands = [d for d in due if d["kp_id"] not in pending_kps]
+        if only_prefer:
+            cands = [d for d in cands if d["kp_id"] in prefer_set]
+            if not cands:
+                return None
+        else:
+            cands.sort(key=lambda d: (0 if d["kp_id"] in prefer_set else 1,
+                                      d["next_review_at"], d["kp_id"]))
+        for row in cands:
+            hist = store.latest_answered_snapshot(row["kp_id"])
+            if not hist:
+                continue  # 快照缺失（不应发生）时跳过该 kp，尝试下一个
+            quiz = dict(hist["snapshot"])
+            if _generation_failure(quiz):
+                continue  # Retain attempts/schedules, but never replay offline snapshots.
+            for field in ("manual_review", "retry_of_attempt_id", "retry_of_quiz_id"):
+                quiz.pop(field, None)
+            quiz["review"] = True
+            quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
+                         "_status": "delivered"})
+            quiz_id = uuid.uuid4().hex[:8]
+            self._state["quizzes"][quiz_id] = quiz
+            public = _public_quiz(quiz_id, quiz, root)
+            self._state["pending"].append({
+                "quiz_id": quiz_id,
+                "kp_id": row["kp_id"],
+                "project_root": root,
+                "status": "delivered",
+                "created_at": now,
+                "delivered_at": now,
+                "answered_at": None,
+                "expires_at": now + caps["ttl"],
+                **public,
+            })
+            store.create_quiz(
+                quiz_id, row["kp_id"], _quiz_snapshot(quiz), "delivered", root,
+                f"到期复习 | kp={row['kp_id']} | 上次作答 {hist['answered_at']}"[:200],
+                now, now + caps["ttl"], delivered_at=now)
+            return public
+        return None
+
+    def take_quiz(self):
+        """Deliver the oldest ready quiz in the current configured scopes."""
+        if getattr(kb, "explicit_empty", False):
+            return None
+        with self._lock:
+            self._ensure_open()
+            self._get_store_locked()
+            self._cleanup_locked(_caps())
+            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            scopes = {_normalize_project_root(r) for r in roots}
+            for pending in sorted(self._state["pending"], key=lambda p: p["created_at"]):
+                if pending["status"] != "ready" or pending["project_root"] not in scopes:
+                    continue
+                self._deliver_pending_locked(pending)
+                return _public_pending(pending)
+        return None
+
+    def list_pending(self):
+        """Read-only pending list (待答列表): ready + delivered, unanswered, in
+        project scope (or manual), oldest first.  Viewing the list must NOT mark
+        anything delivered — it only reads the current state after cleanup.
+        Monitoring/automatic-delivery pauses do not hide existing practice.
+        Expiry and dedupe/cooldown rules are enforced by _cleanup_locked."""
+        if getattr(kb, "explicit_empty", False):
+            return []
+        with self._lock:
+            self._ensure_open()
+            self._get_store_locked()
+            self._cleanup_locked(_caps())
+            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            scopes = {_normalize_project_root(r) for r in roots}
+            out = []
+            for pending in sorted(self._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
+                if pending["status"] not in ("ready", "delivered"):
+                    continue
+                manual = bool(self._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review"))
+                if pending["project_root"] not in scopes and not manual:
+                    continue
+                public = _public_pending(pending)
+                public["status"] = pending["status"]
+                public["manual_review"] = manual
+                out.append(public)
+            return out
+
+    def enter_quiz(self, quiz_id):
+        """按题进入：显式选中一条待答题交付作答。仅当用户主动选择时才把
+        ready 题交付；返回公开题目，题不存在/过期/越权时返回 None。
+        主动进入不受监听暂停或自动推送暂停限制；自动交付由 take_quiz 控制。"""
+        if getattr(kb, "explicit_empty", False):
+            return None
+        with self._lock:
+            self._ensure_open()
+            self._get_store_locked()
+            self._cleanup_locked(_caps())
+            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            scopes = {_normalize_project_root(r) for r in roots}
+            for pending in sorted(self._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
+                if pending["quiz_id"] != quiz_id or pending["status"] not in ("ready", "delivered"):
+                    continue
+                manual = bool(self._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review"))
+                if pending["project_root"] not in scopes and not manual:
+                    continue
+                if pending["status"] == "ready":
+                    self._deliver_pending_locked(pending)
+                public = _public_pending(pending)
+                if manual:
+                    public["manual_review"] = True
+                return public
+        return None
+
+    def resume_quiz(self):
+        """Explicit practice: resume pending work, then replay a due AI snapshot.
+
+        Unlike automatic delivery, this remains available while monitoring or
+        popups are paused. Never scan project context or generate a new quiz.
+        """
+        if getattr(kb, "explicit_empty", False):
+            return None
+        with self._lock:
+            self._ensure_open()
+            self._get_store_locked()
+            caps = _caps()
+            self._cleanup_locked(caps)
+            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            roots = list(dict.fromkeys(_normalize_project_root(r) for r in roots))
+            scopes = set(roots)
+            pending_items = sorted(self._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"]))
+            for status in ("delivered", "ready"):
+                for pending in pending_items:
+                    manual = self._state["quizzes"].get(pending["quiz_id"], {}).get("manual_review")
+                    if pending["status"] != status or (pending["project_root"] not in scopes and not manual):
+                        continue
+                    if status == "ready":
+                        self._deliver_pending_locked(pending)
+                    return {**_public_pending(pending), **({"manual_review": True} if manual else {})}
+            for root in roots:
+                _, error = _resolve_project_root(root)
+                if error:
+                    continue
+                review = self._deliver_due_review_locked(root, prefer=None, only_prefer=False, caps=caps)
+                if review:
+                    return review
+        return None
+
+
+session = EngineSession()

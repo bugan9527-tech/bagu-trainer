@@ -3,6 +3,7 @@ import argparse
 import os
 import queue
 import threading
+import time
 
 from .ui_theme import apply_theme, SPACE, PRIMARY, SECTION, MUTED
 from .ui_state import cancel_timer, set_text, window_var
@@ -171,6 +172,12 @@ class DesktopApp:
         self.task_progress.grid(row=2, column=0, columnspan=2, sticky="ew", pady=px((SPACE.sm, 0)))
         self.task_progress.grid_remove()
         self.restored_notice = None
+        self.removed_projects = []
+        self.project_cleanup_text = window_var(self.root)
+        self.project_cleanup_notice = wrapped_label(self.dashboard_view.body, self.theme,
+                                                   textvariable=self.project_cleanup_text, style=MUTED)
+        self.project_cleanup_notice.grid(row=3, column=0, sticky="ew", pady=px((0, SPACE.lg)))
+        self.project_cleanup_notice.grid_remove()
         self.readiness_text = window_var(self.root, "正在检查本地准备状态…" if coordinator else "")
         self.readiness_area = ttk.Frame(self.dashboard_view.body)
         self.readiness_area.grid(row=1, column=0, sticky="ew", pady=px((0, SPACE.lg)))
@@ -185,7 +192,7 @@ class DesktopApp:
             self.readiness_area.grid_remove()
         content = ttk.Frame(self.dashboard_view.body)
         content.columnconfigure(0, weight=1)
-        content.grid(row=2, column=0, sticky="ew")
+        content.grid(row=4, column=0, sticky="ew")
         wrapped_label(content, self.theme, text="当前项目", style=SECTION).grid(row=0, column=0, sticky="ew")
         wrapped_label(content, self.theme, textvariable=self.current_project, style=MUTED).grid(
             row=1, column=0, sticky="ew", pady=px((SPACE.sm, SPACE.sm)))
@@ -240,7 +247,7 @@ class DesktopApp:
             self.readiness_area.grid_remove()
         from .ui_layout import FlowActions, wrapped_label
         notice = self.ttk.Frame(self.dashboard_view.body)
-        notice.grid(row=1, column=0, sticky="ew", pady=self.theme.px((0, SPACE.lg)))
+        notice.grid(row=2, column=0, sticky="ew", pady=self.theme.px((0, SPACE.lg)))
         notice.columnconfigure(0, weight=1)
         self.restored_notice = notice
         self.restored_message = window_var(notice, "已恢复当前 Windows 用户保存在本机的配置。")
@@ -467,7 +474,7 @@ class DesktopApp:
             self.monitor.initialized.discard(removed)
             self.monitor.observed.pop(removed, None)
             self.monitor.waiting.pop(removed, None)
-            getattr(engine, "_diff_readers", {}).pop(removed, None)
+            engine.session.forget_projects([removed])
         self.monitor.failed_generations = {r: f for r, f in self.monitor.failed_generations.items() if r in new_set}
         # New projects get a baseline on the next poll (root not in initialized).
 
@@ -539,6 +546,7 @@ class DesktopApp:
         set_text(self.global_status, self.listen_state.get() + suffix)
 
     def _worker(self):
+        next_project_cleanup = time.monotonic() + 30
         try:
             while True:
                 try:
@@ -666,6 +674,15 @@ class DesktopApp:
                             self.events.put(("action_done", name))
                     if self.stop.is_set():
                         break
+                    coordinator = getattr(self, "coordinator", None)
+                    if coordinator is not None and time.monotonic() >= next_project_cleanup:
+                        next_project_cleanup = time.monotonic() + 30
+                        removed, remaining = coordinator.prune_projects()
+                        if removed:
+                            if self.monitor.engine is not None:
+                                DesktopApp._apply_projects_serial(self, remaining)
+                            self.jobs.put(("prepare", None))
+                            continue
                     if self.monitor.engine is None or not getattr(self.monitor, "capabilities_ready", True):
                         self.stop.wait(.2)
                         continue
@@ -701,7 +718,7 @@ class DesktopApp:
         # monitor decisions, pending queues, credential receipts or learning data.
         try:
             engine = self.monitor.engine
-            roots = engine.load_config().get("project_roots") or [str(engine.PROJECT_ROOT)]
+            roots = engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
             stats = engine.get_learning_stats()
             self.events.put(("dashboard", {"state": state, "projects": roots, "stats": stats}))
         except Exception:
@@ -760,6 +777,20 @@ class DesktopApp:
                     self._sync_actions()
                     if self.ready and self.restored_notice is None:
                         self.show_restored_configuration()
+                    if self.ready:
+                        self.readiness_area.grid_remove()
+                    else:
+                        self.readiness_area.grid()
+                elif name == "projects_pruned":
+                    removed, remaining = value
+                    self.removed_projects = list(dict.fromkeys([*self.removed_projects, *removed]))
+                    self.project_cleanup_text.set(
+                        f"已自动移除 {len(self.removed_projects)} 个失效监听路径，学习记录已保留：\n"
+                        + "\n".join(self.removed_projects))
+                    self.project_cleanup_notice.grid()
+                    panel = self._cached_pages.get("projects")
+                    if panel is not None:
+                        panel.forget_removed_projects(removed)
                 elif name == "cleanup_progress":
                     panel = self._cached_pages.get("bank")
                     if panel is not None:

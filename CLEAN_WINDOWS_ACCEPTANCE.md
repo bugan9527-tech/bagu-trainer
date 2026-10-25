@@ -12,6 +12,12 @@
 
 在干净 Windows 的两个目录分别解压生产包和验收包，然后运行：
 
+先在构建机使用同一 `--output-dir` 生成两个包，再执行
+`python scripts/portable_artifacts.py --output-dir <构建输出> --with-driver --report <新报告路径>`。
+将两个原始 ZIP 及各自 `.sha256` 保留在解压目录的父目录（与两个 onedir 并列）；
+冻结入口在启动任何 GUI/凭据夹具前检查版本、完整源码指纹、清单及附件对应关系。
+目录分开放置时通过 `--archive` 指定生产 ZIP，驱动 ZIP 仍放在驱动 onedir 旁。
+
 ```powershell
 $job = Start-Process -FilePath 'C:\验收程序\BaguTrainerAcceptance\BaguTrainerAcceptance.exe' `
   -ArgumentList '--work "C:\验收结果\自动 验收" --production-exe "C:\生产程序\BaguTrainer\BaguTrainer.exe"' `
@@ -45,11 +51,14 @@ GitHub runner 使用 `--memory-credentials`，报告会明确标为内存凭据�
 在已支持并启用 Windows Sandbox 的宿主上执行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\create-sandbox.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\create-sandbox.ps1 `
+  -BuildOutputDirectory $buildOutput -OutputDirectory "$evidence/sandbox"
 ```
 
 生成的 `.wsb` 仅映射两个 ZIP、校验文件和验收引导脚本，不映射整个仓库或个人数据。
-打开该文件后自动在新的 Windows Sandbox 内执行冻结验收，结果写回 `output/clean-windows-results/`。
+宿主先执行统一只读预检；`-BuildOutputDirectory` 对应构建的 `--output-dir`，未指定时读取 `BAGU_PORTABLE_*`，不扫描历史 ZIP。
+打开该文件后自动在新的 Windows Sandbox 内执行冻结验收，结果写回所选输出下的 `clean-windows-results/`。
+同一输出目录不重复使用，避免混入上一次的输入或结果。
 脚本不会安装 Python/Git、配置 MCP、启用 Sandbox 功能或重启宿主。宿主缺少 Sandbox 时，
 请使用独立 Windows x64 虚拟机，按上方命令运行，并保存系统版本和开发工具未安装的证据。
 
@@ -62,10 +71,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\creat
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\acceptance\launch-clean.ps1 `
-  -Archive 'C:\Downloads\BaguTrainer-0.1.0-windows-x64.zip' -OutputDirectory 'C:\人工验收'
+  -Archive 'C:\Downloads\BaguTrainer-0.4.0-windows-x64.zip' `
+  -TargetReport 'C:\Downloads\PORTABLE_TARGET.json' -OutputDirectory 'C:\人工验收'
 ```
 
-此脚本核对 SHA-256、记录 OS 和工具命令探测结果，启动仅监听 127.0.0.1 的模型模拟器和生产 EXE。
+`PORTABLE_TARGET.json` 为构建机统一预检成功的报告，随对应 ZIP 及校验附件转移。
+此脚本核对报告绑定的版本、源码/清单摘要、ZIP SHA-256 与解压后的文件清单，记录实际包路径、版本及摘要，
+再启动仅监听 127.0.0.1 的模型模拟器和生产 EXE；已有解压目录拒绝复用。
 默认发现 Python/Git 命令会拒绝；`-AllowDeveloperMachine` 仅用于补充验证，报告仍标为非干净机器。
 模拟接口参数和测试项目路径在 `SESSION.json`，固定 Key 是公开测试数据，不能用于真实服务。
 

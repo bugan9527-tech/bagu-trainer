@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from bagu_trainer.version import __version__
 from scripts.build_portable import audit, source_provenance
+from scripts.portable_artifacts import require_new, resolve_target
 
 APP_ID = "{C95D2707-83B5-4D34-A88D-7F30C5AC6E19}"
 PRODUCT = "AI 八股训练器"
@@ -228,6 +229,8 @@ def inspect_installer(installer, unpacker, entries, inventory, destination):
 
 
 def build(bundle, output, iscc, unpacker, lifecycle_report=None):
+    final = output.resolve() / f"BaguTrainer-{__version__}-windows-x64-Setup.exe"
+    require_new(final, Path(str(final) + ".sha256"), output / "INSTALLER_MANIFEST.json")
     version = check_compiler(iscc)
     check_unpacker(unpacker)
     lifecycle = lifecycle_summary(lifecycle_report) if lifecycle_report else "not run; use isolated lifecycle acceptance"
@@ -283,8 +286,8 @@ def build(bundle, output, iscc, unpacker, lifecycle_report=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--bundle", type=Path, default=ROOT / "dist" / "BaguTrainer")
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
+    parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--iscc", type=Path, help="Inno Setup 6.7.3 ISCC.exe")
     parser.add_argument("--innounp", type=Path, help="innounp.exe，必须支持 Inno Setup 6.7")
     parser.add_argument("--lifecycle-report", type=Path, help="同一安装脚本的隔离升级/卸载验收报告")
@@ -297,7 +300,8 @@ def main(argv=None):
         candidates.append(Path(os.environ.get("LOCALAPPDATA", "C:/")) / "Programs" / "Inno Setup 6" / "ISCC.exe")
         iscc = find_tool(args.iscc, "ISCC.exe", candidates)
         unpacker = find_tool(args.innounp, "innounp.exe", [])
-        build(args.bundle, args.output_dir, iscc, unpacker, args.lifecycle_report)
+        target = resolve_target(args.output_dir, bundle=args.bundle)
+        build(target.bundle, target.output_dir, iscc, unpacker, args.lifecycle_report)
         return 0
     except (RuntimeError, ValueError, OSError, KeyError, subprocess.CalledProcessError) as error:
         print(f"安装器构建失败：{error}", file=sys.stderr)

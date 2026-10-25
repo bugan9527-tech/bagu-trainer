@@ -26,5 +26,5 @@ def test_late_generation_is_discarded_at_content_revision_boundary(env, monkeypa
         worker.join(3)
     assert not worker.is_alive()
     assert not result[0]["ok"] and "过期" in result[0]["note"]
-    assert not engine._state["quizzes"] and not engine._state["pending"]
-    assert engine._store is None
+    assert not engine.session._state["quizzes"] and not engine.session._state["pending"]
+    assert engine.session._store is None

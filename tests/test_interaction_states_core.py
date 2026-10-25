@@ -39,7 +39,7 @@ def test_generator_exception_becomes_safe_retryable_unavailable(env, monkeypatch
     def broken(*_):
         raise OSError("must-not-display-secret")
     monkeypatch.setattr(env["gen"], "generate", broken)
-    with engine._STATE_LOCK:
+    with engine.session._lock:
         _, generated, _, unavailable = engine._generate_matches_locked(
             "redis changed", str(engine.PROJECT_ROOT), 1, engine._caps())
     assert not generated and "OSError" in unavailable[0]["reason"]
@@ -73,7 +73,7 @@ def test_mixed_success_retry_never_replays_successful_kp(env, monkeypatch):
             return {"available": False, "unavailable_reason": "暂不可用"}
         return original(q, text)
     monkeypatch.setattr(env["gen"], "generate", generate)
-    with engine._STATE_LOCK:
+    with engine.session._lock:
         _, generated, _, failed = engine._generate_matches_locked("redis", str(engine.PROJECT_ROOT), 2, engine._caps())
         assert len(generated) == 1 and failed[0]["kp_id"] == "failed"
         _, retried, _, failures = engine._generate_matches_locked("redis", str(engine.PROJECT_ROOT), 2, engine._caps(), retry_failed_ids={"failed"})

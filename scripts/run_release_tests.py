@@ -5,12 +5,17 @@ GUI interpreter in one module from altering another module's focus or styles.
 Every module runs its unchanged assertions and every failure/error is retained.
 """
 import argparse
+import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from scripts.portable_artifacts import require_new, resolve_target, validate_target
 
 
 def merge_reports(reports, output, process_errors=()):
@@ -33,16 +38,33 @@ def merge_reports(reports, output, process_errors=()):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output-dir", type=Path, help="Production build output, shared with build_portable.py")
     parser.add_argument("--module", action="append", help="Run specified test_*.py modules, each in its own process")
     options = parser.parse_args()
     output = options.output.resolve()
+    artifact_report = output.with_suffix(".artifact.json")
+    reports_dir = output.parent / (output.stem + "-modules")
+    require_new(output, artifact_report, reports_dir)
     modules = sorted((ROOT / "release_tests").glob("test_*.py"))
     if options.module:
         requested = set(options.module)
         modules = [module for module in modules if module.stem in requested or module.name in requested]
         if {m.stem for m in modules} != {Path(name).stem for name in requested}:
             parser.error("Unknown release test module")
-    reports_dir = output.parent / (output.stem + "-modules")
+    target = resolve_target(options.output_dir)
+    record = target.describe()
+    try:
+        record = validate_target(target)
+    except (OSError, ValueError, RuntimeError, KeyError, zipfile.BadZipFile) as error:
+        record.update(passed=False, error=str(error))
+        merge_reports([], output, [("artifact_preflight", str(error))])
+        artifact_report.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("Artifact preflight failed: " + str(error), flush=True)
+        return 1
+    artifact_report.parent.mkdir(parents=True, exist_ok=True)
+    artifact_report.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Child pytest imports must resolve the exact target that passed preflight.
+    environment = dict(os.environ, BAGU_PORTABLE_BUNDLE=str(target.bundle), BAGU_PORTABLE_ARCHIVE=str(target.archive))
     reports_dir.mkdir(parents=True, exist_ok=True)
     reports, errors = [], []
     failed_process = False
@@ -53,7 +75,7 @@ def main():
             # Native window state survives Tk destruction on Windows. Each
             # shell scenario (including each scale) needs a fresh GUI process.
             collected = subprocess.run([sys.executable, "-B", "-m", "pytest", relative,
-                "--collect-only", "-q", "-p", "no:cacheprovider"], cwd=ROOT, capture_output=True, text=True)
+                "--collect-only", "-q", "-p", "no:cacheprovider"], cwd=ROOT, env=environment, capture_output=True, text=True)
             cases = [line.strip() for line in collected.stdout.splitlines() if line.startswith(relative + "::")]
             if collected.returncode or not cases:
                 errors.append((module.stem, "Shell test collection failed: " + collected.stdout + collected.stderr))
@@ -66,7 +88,7 @@ def main():
         print("Checking " + target, flush=True)
         try:
             process = subprocess.run([sys.executable, "-u", "-B", "-m", "pytest", target, "-vv", "-W", "error",
-                "-o", "faulthandler_timeout=90", "-p", "no:cacheprovider", "--junitxml=" + str(report)], cwd=ROOT, timeout=240)
+                "-o", "faulthandler_timeout=90", "-p", "no:cacheprovider", "--junitxml=" + str(report)], cwd=ROOT, env=environment, timeout=240)
         except subprocess.TimeoutExpired:
             errors.append((name, "Test process timed out after 240 seconds: " + target))
             failed_process = True

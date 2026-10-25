@@ -56,7 +56,7 @@ def main():
                 return root
             tk.Tk = scaled_root
         store = Store(data / "synthetic-history.db")
-        engine._store = store
+        engine.session._store = store
         timestamp = datetime(2026, 10, 22, 9, tzinfo=timezone(timedelta(hours=8))).timestamp()
         engine._now = lambda: timestamp + 3600
         snapshot = {"kp_id": question["id"], "kp_name": question["knowledge_point"], "generated_by": "llm",
@@ -145,7 +145,7 @@ def main():
             app.shell.set_collapsed(False)
         finally:
             app.root.destroy()
-            engine._store = None
+            engine.session._store = None
             store.close()
         (output / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"output": str(output), "captures": len(report["captures"]),

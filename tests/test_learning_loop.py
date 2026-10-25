@@ -56,7 +56,7 @@ def test_wrong_answer_due_sooner_then_review_delivered(env, monkeypatch):
     wrong = engine.submit_answer(qid, "B")  # FakeGenerator 正确答案是 A
     assert wrong["ok"] is True and wrong["correct"] is False
     assert wrong["schedule"]["next_review_at"] == T0 + MIN_INTERVAL_DAYS * DAY
-    st = engine._store.concept_state("test-kp-1")
+    st = engine.session._store.concept_state("test-kp-1")
     assert st["next_review_at"] == T0 + MIN_INTERVAL_DAYS * DAY
     # 6 小时到期后：自动交付同知识点复习题（确定性快照重建，不调 LLM）
     _go(monkeypatch, T0 + MIN_INTERVAL_DAYS * DAY + 1)
@@ -94,8 +94,8 @@ def test_duplicate_submit_rejected_counted_once(env, monkeypatch):
     assert engine.submit_answer(qid, "A")["ok"] is True
     r2 = engine.submit_answer(qid, "B")
     assert r2["ok"] is False and "已作答" in r2["note"]
-    assert engine._store.concept_state("test-kp-1")["attempts"] == 1
-    assert engine._store.attempt_count(qid) == 1
+    assert engine.session._store.concept_state("test-kp-1")["attempts"] == 1
+    assert engine.session._store.attempt_count(qid) == 1
 
 
 # ============ 重启一致性：未完成题水合、历史保留 ============
@@ -104,19 +104,19 @@ def test_restart_unfinished_quiz_still_submittable(env, monkeypatch):
     _set_diff(env["diff"], "redis 缓存穿透")
     qid = engine.next_quiz()["quiz"]["quiz_id"]  # 未作答
     # 模拟重启：关连接、清内存态（store 路径不变，指向同一临时库）
-    engine._store.close()
-    engine._store = None
-    engine._state["quizzes"].clear()
-    engine._state["pending"].clear()
+    engine.session._store.close()
+    engine.session._store = None
+    engine.session._state["quizzes"].clear()
+    engine.session._state["pending"].clear()
     _go(monkeypatch, T0 + 600)  # 未过期
     ans = engine.submit_answer(qid, "A")
     assert ans["ok"] is True and ans["correct"] is True
-    assert engine._store.attempt_count(qid) == 1
+    assert engine.session._store.attempt_count(qid) == 1
     # 再次重启：作答历史与统计完整保留
-    engine._store.close()
-    engine._store = None
-    engine._state["quizzes"].clear()
-    engine._state["pending"].clear()
+    engine.session._store.close()
+    engine.session._store = None
+    engine.session._state["quizzes"].clear()
+    engine.session._state["pending"].clear()
     stats = engine.get_learning_stats()
     assert stats["total_attempts"] == 1
     assert stats["accuracy"] == 1.0
@@ -150,7 +150,7 @@ def test_learning_stats_aggregates_only(env, monkeypatch):
     qid = engine.next_quiz()["quiz"]["quiz_id"]
     engine.submit_answer(qid, "B")  # 答错 -> mastery 0（薄弱）
     # 第二个薄弱知识点走 store 直插（固定时间，保证确定性）
-    s = engine._store
+    s = engine.session._store
     s.create_quiz("q2", "test-kp-2", {
         "kp_id": "test-kp-2", "kp_name": "分布式锁", "difficulty": "medium",
         "question": "Q2?", "options": {"A": "a", "B": "b", "C": "c", "D": "d"},

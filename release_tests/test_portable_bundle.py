@@ -17,13 +17,20 @@ import pytest
 from bagu_trainer import desktop_instance
 from bagu_trainer.version import __version__
 from release_tests.test_migration import assert_history, legacy_project
+from scripts.portable_artifacts import resolve_target, validate_target
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BUNDLE = Path(os.environ.get("BAGU_PORTABLE_BUNDLE", ROOT / "dist" / "BaguTrainer"))
-ARCHIVE = Path(os.environ.get("BAGU_PORTABLE_ARCHIVE", ROOT / "dist" / f"BaguTrainer-{__version__}-windows-x64.zip"))
-pytestmark = pytest.mark.skipif(sys.platform != "win32" or not (BUNDLE / "BaguTrainer.exe").is_file(),
-                                reason="build the Windows x64 onedir bundle first")
+TARGET = resolve_target()
+BUNDLE, ARCHIVE = TARGET.bundle, TARGET.archive
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows x64 bundle tests")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def verified_portable_target():
+    # Direct pytest runs get the same gate as run_release_tests.py; absent/stale
+    # Windows artifacts are failures instead of misleading skips.
+    validate_target(TARGET)
 
 
 def environment(tmp_path):

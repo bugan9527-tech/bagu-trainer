@@ -311,7 +311,8 @@ class SourceDeletion:
         if state.get("schema") != 1 or state.get("root") != str(self.root):
             raise ValueError("删除恢复记录无效")
         self.cleanup._roots()
-        lock = getattr(engine, "_STATE_LOCK", None)
+        maintenance = getattr(engine, "content_maintenance", None)
+        lock = maintenance() if maintenance is not None else nullcontext()
         with lock if lock is not None else nullcontext():
             with _build_lock(self.data / ".bank-builds"):
                 if engine is not None:
@@ -327,7 +328,8 @@ class SourceDeletion:
 
     def execute(self, plan, *, engine=None, protected=(), include_unknown=False, progress=None):
         emit = progress or (lambda message: None)
-        lock = getattr(engine, "_STATE_LOCK", None)
+        maintenance = getattr(engine, "content_maintenance", None)
+        lock = maintenance() if maintenance is not None else nullcontext()
         with lock if lock is not None else nullcontext():
             with _build_lock(self.data / ".bank-builds") as lease:
                 emit("1/5 重新核对文件与学习记录")

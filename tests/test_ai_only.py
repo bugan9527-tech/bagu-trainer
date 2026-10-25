@@ -27,26 +27,26 @@ def test_non_ai_generator_result_never_reaches_pending(env, monkeypatch, origin)
     result = engine.process_activity()
     assert result["quizzes"] == []
     assert "仅允许展示 AI" in result["unavailable"][0]["reason"]
-    assert engine._state["pending"] == []
-    assert engine._store._conn.execute("SELECT count(*) FROM quizzes").fetchone()[0] == 0
+    assert engine.session._state["pending"] == []
+    assert engine.session._store._conn.execute("SELECT count(*) FROM quizzes").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("status", ["ready", "delivered"])
 @pytest.mark.parametrize("origin", ["fallback", None, "llm"])
 def test_old_non_ai_pending_is_retired_on_restart(env, monkeypatch, status, origin):
     monkeypatch.setattr(engine, "_now", lambda: 1000)
-    with engine._STATE_LOCK:
-        store = engine._get_store_locked()
+    with engine.session._lock:
+        store = engine.session._get_store_locked()
         store.create_quiz("old", "test-kp-1", snapshot(origin), status,
                           str(engine.PROJECT_ROOT), "old data", 900, 2000)
         store.close()
-        engine._store = None
+        engine.session._store = None
     monitor = DesktopMonitor(engine)
     assert monitor.take_quiz() is None
     assert monitor.resume_quiz() is None
     assert engine.next_quiz()["has_pending"] is False
     assert engine.submit_answer("old", "A")["ok"] is False
-    row = engine._store.get_quiz("old")
+    row = engine.session._store.get_quiz("old")
     assert row["status"] == "expired"
     assert row["snapshot"] == snapshot(origin)  # Preserve content; do not delete history.
 
@@ -54,8 +54,8 @@ def test_old_non_ai_pending_is_retired_on_restart(env, monkeypatch, status, orig
 @pytest.mark.parametrize("origin", ["fallback", None, "llm"])
 def test_reviews_only_replay_ai_snapshots_and_keep_history(env, monkeypatch, origin):
     monkeypatch.setattr(engine, "_now", lambda: 1000)
-    with engine._STATE_LOCK:
-        store = engine._get_store_locked()
+    with engine.session._lock:
+        store = engine.session._get_store_locked()
         store.create_quiz("history", "test-kp-1", snapshot(origin), "answered",
                           str(engine.PROJECT_ROOT), "history", 800, 2000, answered_at=900)
         state = next_state(False, None, 900)
@@ -84,11 +84,11 @@ def test_new_ai_result_without_review_is_not_delivered(env, monkeypatch):
     monkeypatch.setattr(engine, "generator", SimpleNamespace(generate=lambda *_: snapshot("llm")))
     result = engine.create_quiz("test-kp-1", context="手动描述缓存过期策略")
     assert result["ok"] is False and "审核记录" in result["reason"]
-    assert engine._state["quizzes"] == {}
+    assert engine.session._state["quizzes"] == {}
 
 
 def test_review_evidence_is_persisted_but_hidden_before_answer(env, monkeypatch):
     monkeypatch.setattr(engine, "kb", SimpleNamespace(get=lambda *_: env["matcher"].KP))
     result = engine.create_quiz("test-kp-1", context="手动描述缓存过期策略")
     assert result["ok"] and "grounding" not in result and "answer" not in result
-    assert engine._store.get_quiz(result["quiz_id"])["snapshot"]["grounding"]["version"] == 1
+    assert engine.session._store.get_quiz(result["quiz_id"])["snapshot"]["grounding"]["version"] == 1

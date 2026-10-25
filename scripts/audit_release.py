@@ -32,7 +32,7 @@ SECRET_PATTERNS = (
 # Hashes use the LF bytes enforced by .gitattributes (identical Git blobs).
 SYNTHETIC_TEST_FILES = {
     "source/release_tests/test_first_use.py": "97e3da75ee6758ea2093a5e94e87dbdb43359d3c21b18a53f356ce9cb6145d4e",
-    "source/tests/test_privacy.py": "7846ccf1c07d85e94d50c3874ed2243de20b5bdd2addae5d1e8803237971bedc",
+    "source/tests/test_privacy.py": "6a8055e0aa42d9943fc74380eff71b8bad72fe057f7ac6e269f3ecb471f29b83",
     "source/tests/test_secret_migration.py": "408dd3fb3473ac04fed0b14b090b6b5ea17ef41ba5bc230f047b625e470c9e03",
 }
 

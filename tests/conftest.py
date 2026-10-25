@@ -130,12 +130,8 @@ class FakeGenerator:
 def env(monkeypatch, tmp_path):
     """每个用例重置服务内存态，并注入全 fake 依赖 + 独立临时 SQLite；
     同时禁用环境变量与真实 keyring，保证密钥解析 100% 确定"""
-    engine._state["quizzes"].clear()
-    engine._state["pending"].clear()
-    engine._state["seen"].clear()
-    engine._state["seen_set"].clear()
-    engine._diff_readers.clear()
-    engine._store = None  # 每个用例独立的临时学习数据库
+    session = engine.EngineSession()
+    monkeypatch.setattr(engine, "session", session)
 
     # 测试隔离：不读取用户本机环境变量里的 Key、不触碰真实凭据库
     monkeypatch.delenv(secrets_mod.ENV_KEY, raising=False)
@@ -172,3 +168,4 @@ def env(monkeypatch, tmp_path):
     ctx = {"cfg": cfg, "caps": caps, "diff": fake_diff,
            "gen": fake_gen, "matcher": fake_matcher}
     yield ctx
+    session.close()

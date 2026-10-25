@@ -273,7 +273,8 @@ class BankCleanupService:
             return SourceDeletion(self).execute(plan, engine=engine, protected=protected,
                 include_unknown=include_unknown, progress=progress)
         self._roots()
-        state_lock = getattr(engine, "_STATE_LOCK", None)
+        maintenance = getattr(engine, "content_maintenance", None)
+        state_lock = maintenance() if maintenance is not None else nullcontext()
         with state_lock if state_lock is not None else nullcontext():
             with _build_lock(self.data / ".bank-builds") as lease:
                 protected = list(protected)
