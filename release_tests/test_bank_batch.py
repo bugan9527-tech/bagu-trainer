@@ -182,7 +182,9 @@ def test_total_deadline_stops_batch_and_retains_finished_cache(batch):
     assert "整个任务总时限" in str(caught.value) and "来源就绪 1/3" in str(caught.value)
     assert [s.state for s in caught.value.sources] == ["completed", "failed", "cancelled"]
     assert [repo for repo, _ in batch.calls] == REPOS[:2]
-    assert batch.calls[1][1] < .15  # Remaining total budget bounds the socket wait.
+    # Windows may complete source one within a clock tick; subtraction can
+    # exceed the configured budget by a few picoseconds due to float rounding.
+    assert 0 < batch.calls[1][1] <= .15 + 1e-9
     assert_previous_usable(batch)
     batch.delay.clear()
     batch.service.build(REPOS)
