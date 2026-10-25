@@ -1,6 +1,35 @@
-> 0.4.0 当前行为：启动直接进入唯一正式工作台；准备在原侧栏页完成。主动完整卸载清除受管数据和本机凭据，升级/修复保留数据。以下早期验收记录中的旧向导或卸载保留语义不适用于新版本，当前流程见 [FIRST_USE.md](FIRST_USE.md)、[STARTUP.md](STARTUP.md) 和 [FEATURE_DELIVERY.md](FEATURE_DELIVERY.md)。
-
 # AI 八股训练器
+
+**把日常代码改动，变成贴近项目的面试练习。**
+
+AI interview practice from your code changes.
+
+面向正在写项目、准备技术面试的开发者：监听项目变化，匹配题库知识点，生成贴近代码场景的 AI 情景题；作答后查看解析，按计划复习。
+
+**[下载 Windows 安装版 · v0.4.1](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.1/BaguTrainer-0.4.1-windows-x64-Setup.exe)** · [便携 ZIP](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.1/BaguTrainer-0.4.1-windows-x64.zip) · [最新发布与校验文件](https://github.com/bugan9527-tech/bagu-trainer/releases/latest) · [三步上手](#三步上手)
+
+适用于 Windows x64，无需安装 Python。首次使用需要下载题库来源并配置模型 API，模型请求可能产生服务商费用。
+
+![练习中心：代码场景题、作答结果、解析与复习安排](docs/images/practice-center.png)
+
+*实际桌面界面；截图使用自编演示题与模拟作答结果，不含个人项目、真实学习记录或模型调用。*
+
+`代码改动 → 知识点匹配 → AI 情景出题 → 作答解析 → 间隔复习`
+
+## 三步上手
+
+1. **下载并启动**：下载安装版后启动“AI 八股训练器”。便携用户完整解压 ZIP，再运行 `BaguTrainer.exe`。
+2. **准备题库与模型**：在“题库管理”选择来源并构建；在“模型配置”填写 API 信息，测试连接后保存。
+3. **添加项目并开始练习**：在“监听项目”添加代码目录并“保存并应用”。程序建立基线后，后续代码改动在匹配到知识点且生成成功时进入“练习中心”。
+
+[详细上手说明](FIRST_USE.md) · [题库来源与许可](interview-banks/README.md) · [AI 出题规则](AI_QUIZ_POLICY.md) · [常见问题](#常见问题)
+
+已有用户升级：正常退出后直接运行新版安装包，保留个人配置和学习记录；不要先完整卸载。详见[升级与卸载说明](WINDOWS_INSTALLER.md)。
+
+## 运行前提与详细说明
+
+<details>
+<summary>查看运行前提、数据位置与版本兼容说明</summary>
 
 把日常代码修改变成与当前任务相关的面试练习：监听选定项目的代码变化，匹配题库知识点，
 结合来源正文和工作上下文生成四选一情景题，作答后查看解析并记录掌握度与复习计划。
@@ -24,10 +53,14 @@
 **首次使用需要先构建题库并配置模型。** 发布包不附带第三方完整题库或人工验证
 离线回退题；本地构建和来源说明见 [题库发布与构建](QUESTION_BANK.md)。
 
-首次使用按“准备题库 → 配置模型 → 添加监听项目 → 开始使用”引导。
+启动直接进入工作台，在“题库管理”“模型配置”“监听项目”侧栏页完成使用准备。
 恢复完整有效配置时，工作台明确提示已恢复当前 Windows 用户的本机配置，并提供查看数据目录和修改配置入口。
 模型页只显示 Key 来源类型，输入框不回填真实 Key；恢复与浏览设置不自动测试、迁移或清除数据。
 详见 [首次使用与恢复说明](FIRST_USE.md)。
+
+> 0.4.0 当前行为：启动直接进入唯一正式工作台；准备在原侧栏页完成。主动完整卸载清除受管数据和本机凭据，升级/修复保留数据。以下早期验收记录中的旧向导或卸载保留语义不适用于新版本，当前流程见 [FIRST_USE.md](FIRST_USE.md)、[STARTUP.md](STARTUP.md) 和 [FEATURE_DELIVERY.md](FEATURE_DELIVERY.md)。
+
+</details>
 
 ## 普通用户下载与安装
 
@@ -35,7 +68,7 @@
 `BaguTrainer-<版本>-windows-x64-Setup.exe` 和同名 `.sha256`，核对摘要后双击安装，
 再从开始菜单启动。也可选择 `BaguTrainer-<版本>-windows-x64.zip` 及其校验文件。
 不要把 GitHub 自动附带的 Source code ZIP 当作桌面应用。
-草稿仅仓库有权限的用户可见；正式发布前请从草稿 Assets 下载，公开固定链接此时尚不可用。
+普通用户从正式 Release 的 Assets 下载安装包；维护者工作流产生的草稿与正式发布分开。
 首次启动直接显示工作台，在题库管理、模型配置、监听项目侧栏页完成准备。无需配置 MCP。
 配置、题库和学习记录位于 `%LOCALAPPDATA%\BaguTrainer\`，升级时保留该目录。
 
@@ -110,8 +143,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -B scripts/start_desktop.py
 ```
 
-首次使用会打开中文分步向导。在第 1 步从 [来源清单](interview-banks/README.md) 选择来源并阅读声明，
-点击“下载并构建 / 重试”。
+启动后在主窗口的“题库管理”页，从 [来源清单](interview-banks/README.md) 选择来源并阅读声明，
+点击“构建 / 重新构建”。模型配置及监听项目也在同一主窗口的侧栏页完成。
 程序通过 HTTPS 下载清单固定 commit 的 ZIP，安全解压后依次完成提取、导入、标签和概念构建。
 窗口显示阶段进度，可取消、调整总超时或失败后重试；不抓取 GitHub Issues。
 
@@ -259,3 +292,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-startu
 
 统一主题、中文字体、间距和按钮规范见 [UI_DESIGN.md](UI_DESIGN.md)，新增运行组件声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。源码运行前执行 `python -m pip install -r requirements.txt`；便携包已包含主题依赖。
 窗口缩放、长文本、键盘和实际显示覆盖范围见 [UI_DISPLAY.md](UI_DISPLAY.md)。可用 `python scripts/check_ui_display.py` 生成隔离窗口截图供人工检查；Tk 模拟缩放不代表原生 Windows 对应比例的验收。
+
