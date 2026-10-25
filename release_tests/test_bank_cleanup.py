@@ -382,3 +382,38 @@ def test_history_cleanup_entry_has_its_own_confirmation_and_keeps_current(batch)
         assert batch.install.learning.read_bytes() == batch.original[batch.install.learning]
     finally:
         root.destroy()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk deletion visibility")
+def test_delete_confirmation_actions_visible_without_native_focus(batch):
+    from bagu_trainer.bank_panel import BankPanel
+    from bagu_trainer.task_controller import TaskController
+    from bagu_trainer.tk_runtime import create_root
+    from bagu_trainer.ui_theme import apply_theme
+    from release_tests.test_bank_build import wait_for_ui
+
+    root = create_root()
+    root.geometry("1000x650")
+    panel = BankPanel(root, apply_theme(root), tasks=TaskController(), service=batch.service)
+    panel.pack(fill="both", expand=True)
+    try:
+        root.update()
+        panel.source_list.selection_set(REPOS[0])
+        root.update()
+        # Native focus is not guaranteed when the window is inactive. Opening
+        # the confirmation must reveal it without relying on a FocusIn event.
+        panel.confirmation = None
+        panel.delete_button.invoke()
+        wait_for_ui(SimpleNamespace(root=root), lambda: panel.confirmation is not None)
+        root.update()
+        canvas = panel.view.canvas
+        top = canvas.winfo_rooty()
+        bottom = top + canvas.winfo_height()
+        for button in (panel.confirm_cancel, panel.confirm_delete):
+            assert top <= button.winfo_rooty()
+            assert button.winfo_rooty() + button.winfo_height() <= bottom
+        panel.confirm_cancel.invoke()
+        assert not panel.deleting and not panel.tasks.bank.cleaning
+        assert cache(batch, 0).exists()
+    finally:
+        root.destroy()
