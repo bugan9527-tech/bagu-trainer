@@ -170,7 +170,8 @@ def phase(options):
         old_dashboard(app, monitor, *args, **kwargs)
         stage = [0]
         first_quiz = [None]
-        review_retried = [False]
+        quality_skipped = [False]
+        quality_skipped_at = [None]
         settings = [None]
         previous_receipt = [None]
         entered_pending = [False]
@@ -312,19 +313,29 @@ def phase(options):
                         app._navigate_page("practice")
                         app._enter_pending(app._pending_items[0]["quiz_id"])
                         return False
-                    if app.generation_retryable and not app.generation_busy and not review_retried[0]:
-                        check(app.retry_button.instate(["!disabled"]), "Rejected review cannot retry")
+                    if (not app.generation_busy and app.generation_reason == "等待新的代码改动。"
+                            and not quality_skipped[0]):
+                        check(not app.generation_retryable and not monitor.failed_generations,
+                              "Quality rejection created a retryable failure")
+                        check(app.retry_button.instate(["disabled"]), "Quality rejection enabled retry")
+                        check(app.listen_state.get() == "正在监听代码改动", "Quality rejection changed listening state")
+                        check(app.task_hint.get() == "等待新的代码改动。", "Quality rejection exposed failure details")
                         check(not engine.session._state["pending"], "Rejected candidate entered pending")
                         check(engine.session._store._conn.execute("SELECT count(*) FROM quizzes").fetchone()[0] == 0,
                               "Rejected candidate was persisted as a quiz")
-                        milestones.append("rejected_review_blocks_popup_then_explicit_retry")
-                        review_retried[0] = True
-                        app.retry_button.invoke()
+                        if quality_skipped_at[0] is None:
+                            quality_skipped_at[0] = time.monotonic()
+                        # Observe two ordinary polling intervals without a retry.
+                        if time.monotonic() - quality_skipped_at[0] < 6.5:
+                            return False
+                        milestones.append("rejected_review_silently_skipped_then_new_change")
+                        quality_skipped[0] = True
+                        (watched / "query.py").write_text(CHANGE.replace("100", "101"), encoding="utf-8")
                     return False
                 app._navigate_page("practice")
                 practice = app._page_frame("practice")
                 check(practice.submit_button.instate(["!disabled"]), "Practice cannot be answered")
-                check(review_retried[0], "Rejected first review was not exercised")
+                check(quality_skipped[0], "Rejected first review was not silently skipped")
                 check(engine.session._state["quizzes"][monitor.active]["grounding"]["review"]["context_relevant"],
                       "Displayed quiz has no approved review")
                 capture("quiz", app.root)
@@ -528,7 +539,7 @@ def orchestrate(options):
             models.append({"model": request["model"], "kind": kind})
             counts[{"probe": "probes", "quiz": "quizzes", "review": "reviews"}[kind]] += 1
             if is_review:
-                # The first audit rejects the candidate. Only an explicit desktop retry can recover.
+                # The first audit rejects the candidate. A new edit produces the next candidate.
                 content = json.dumps({**REVIEW, "context_relevant": counts["reviews"] > 1}, ensure_ascii=False)
             else:
                 content = "OK" if is_probe else json.dumps(QUESTION, ensure_ascii=False)

@@ -47,7 +47,7 @@ def test_first_use_to_scoring_and_restart_with_local_mock(tmp_path):
     assert "new_quiz_updates_pending_without_stealing_page" in report["first"]["milestones"]
     assert "history_snapshot_repractice_and_idempotent_second_answer" in report["first"]["milestones"]
     assert "bank_case_distinct_paths_preserved" in report["first"]["milestones"]
-    assert "rejected_review_blocks_popup_then_explicit_retry" in report["first"]["milestones"]
+    assert "rejected_review_silently_skipped_then_new_change" in report["first"]["milestones"]
     assert "settings_edit_retest_save_and_updated_receipt" in report["first"]["milestones"]
     assert report["restart"]["milestones"] == ["restart_direct_main_and_history_restore", "updated_model_receipt_restored_without_network"]
     assert report["model_requests"][-1] == {"model": "updated-local-model", "kind": "probe"}
