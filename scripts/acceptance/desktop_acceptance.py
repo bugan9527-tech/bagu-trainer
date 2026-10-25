@@ -532,6 +532,7 @@ def orchestrate(options):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     base = f"http://127.0.0.1:{server.server_port}"
     environment = dict(os.environ, BAGU_USER_DATA_DIR=str(work / "用户 数据"), PATH="",
+                       BAGU_TEST_INSTANCE="desktop-acceptance-" + hashlib.sha256(str(work).encode("utf-8")).hexdigest()[:16],
                        PYTHONUTF8="1", PYTHONIOENCODING="utf-8", NO_PROXY="127.0.0.1,localhost")
     for variable in ("BAGU_LLM_API_KEY", "PYTHON_KEYRING_BACKEND", "PYTHONHOME", "PYTHONPATH"):
         environment.pop(variable, None)
