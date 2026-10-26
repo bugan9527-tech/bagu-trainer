@@ -18,14 +18,13 @@ def test_short_workspace_can_toggle_queue_without_hiding_reading_actions(install
         app.root.geometry("560x560")
         app.root.update()
         page = app._page_frame("practice")
-        assert page.compact_list and page.view.winfo_ismapped()
-        assert page.view.canvas.winfo_height() >= app.theme.px(96)
-        page.compact_toggle.invoke()
+        assert page.pending_list.winfo_ismapped() and not hasattr(page, "submit_button")
+        app._continue_practice()
+        win = app.practice_window
+        win.geometry("520x440")
         app.root.update()
-        assert page.list_column.winfo_ismapped() and not page.view.winfo_ismapped()
-        page.compact_toggle.invoke()
-        app.root.update()
-        assert page.view.winfo_ismapped() and page.submit_button.winfo_ismapped()
+        assert win.view.canvas.winfo_height() >= app.theme.px(96)
+        assert win.footer.winfo_ismapped() and win.submit_button.winfo_ismapped()
     finally:
         dispose(app)
 
@@ -138,7 +137,8 @@ def test_real_descendant_key_events_are_scoped_to_visible_practice(installation,
     try:
         app._show_quiz(quiz("keys"))
         app._navigate_page("practice")
-        page = app._page_frame("practice")
+        page = app._answer_window()
+        page.show()
         app.root.update()
         page.view.canvas.focus_force()
         app.root.update()

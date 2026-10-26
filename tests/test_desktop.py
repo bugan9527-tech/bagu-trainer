@@ -296,7 +296,7 @@ def test_desktop_ui_can_show_answer_and_feedback(env, monkeypatch):
         app._show_quiz({"quiz_id": "preview", "question": "Which option is correct?",
                         "options": {letter: letter * 20 for letter in "ABCD"},
                         "knowledge_point": "Example", "project_root": "test"})
-        practice = app._page_frame("practice")
+        practice = app._answer_window()
         app._navigate_page("practice")
         app.root.update_idletasks()
         assert app.practice.submit() is False  # no answer chosen

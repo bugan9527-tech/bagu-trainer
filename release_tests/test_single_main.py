@@ -43,7 +43,9 @@ def test_first_partial_failed_engine_complete_and_all_pages_share_one_root(tmp_p
             app._navigate_page(page)
             app.root.update()
             assert app.shell.current_page == page
-        assert not [w for w in app.root.winfo_children() if isinstance(w, app.tk.Toplevel)]
+        windows = [w for w in app.root.winfo_children() if isinstance(w, app.tk.Toplevel)]
+        assert windows == [app.practice_window]
+        assert app.practice_window.state() == "withdrawn"
         data = config.USER_DATA_ROOT / "data"
         atomic_json(data / "questions.json", [{"id": "fixture-id", "knowledge_point": "数据库索引", "question": "数据库索引如何缩小扫描？",
             "tags": ["数据库"], "keywords": ["索引"], "difficulty": "easy"}])
@@ -66,7 +68,8 @@ def test_first_partial_failed_engine_complete_and_all_pages_share_one_root(tmp_p
         assert coordinator.window_command("_navigate", {"page": "model"})["ok"]
         wait(lambda: app.shell.current_page == "model")
         assert not coordinator.window_command("_navigate", {"page": "execute-anything"})["ok"]
-        assert not [w for w in app.root.winfo_children() if isinstance(w, app.tk.Toplevel)]
+        assert [w for w in app.root.winfo_children() if isinstance(w, app.tk.Toplevel)] == windows
+        assert app.practice_window.state() == "withdrawn"
     finally:
         app._close()
         deadline = time.monotonic() + 8

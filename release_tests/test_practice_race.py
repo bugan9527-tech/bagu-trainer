@@ -17,6 +17,8 @@ def practice_app(installation, monkeypatch):
     app, _ = dashboard(installation, monkeypatch)
     app._show_quiz(quiz("first"))
     app._pending_items = [quiz("first"), quiz("second")]
+    app.monitor.list_pending = lambda: app._pending_items
+    app.monitor.enter_quiz = lambda qid: next((q for q in app._pending_items if q["quiz_id"] == qid), None)
     app._navigate_page("practice")
     app.practice.choose("A")
     app.root.deiconify()
@@ -33,9 +35,14 @@ def practice_app(installation, monkeypatch):
 def invoke_list_binding(page, sequence):
     # Invoke the registered Tk binding even when the button is disabled. Tk
     # cannot synthesize Double modifiers with event_generate.
-    script = page.pending_list.bind(sequence)
-    command = script.split('[', 1)[1].split()[0]
-    page.tk.call(command, *(["??"] * 19))
+    from types import SimpleNamespace
+    if sequence == "<Double-1>":
+        selected = page.pending_list.selection()
+        box = page.pending_list.bbox(selected[0]) if selected else ()
+        if box:
+            page._double_click(SimpleNamespace(x=box[0] + 30, y=box[1] + box[3] // 2))
+    else:
+        page._enter_selected()
 
 
 def test_enter_queued_blocks_all_submission_and_switch_paths(practice_app):
@@ -43,13 +50,13 @@ def test_enter_queued_blocks_all_submission_and_switch_paths(practice_app):
     page.enter_button.invoke()
     assert app.practice.entering_quiz_id == "second"
     assert app.practice.submit_state == "ready"
-    assert page.submit_button.instate(["disabled"])
-    page.submit_button.invoke()
-    page.view.canvas.focus_force()
+    assert app._answer_window().submit_button.instate(["disabled"])
+    app._answer_window().submit_button.invoke()
+    app._answer_window().view.canvas.focus_force()
     app.root.update()
-    page.view.canvas.event_generate("<Control-Return>")
+    app._answer_window().view.canvas.event_generate("<Control-Return>")
     app.root.update()
-    page._submit()
+    app._answer_window()._submit()
     assert app.practice.submit() is False
     assert app._submit_quiz("first", "A") is False
     invoke_list_binding(page, "<Double-1>")
@@ -58,12 +65,15 @@ def test_enter_queued_blocks_all_submission_and_switch_paths(practice_app):
     app.practice.enter(quiz("bypass"))
     app.practice.dismiss()
     assert app.practice.quiz_id == "first" and app.answer.get() == "A"
-    assert app.jobs.get_nowait() == ("enter_quiz", "second")
+    name, request = app.jobs.get_nowait()
+    assert name == "practice_open" and request["target"] == "second"
     assert app.jobs.empty()
-    app.events.put(("enter_quiz", quiz("second")))
+    app.events.put(("practice_opened", dict(request=app._practice_request, quiz=quiz("second"), failed=False, note="")))
     app._drain()
     assert not app.practice.busy and app.practice.quiz_id == "second"
+    app._start_worker()
     app.practice.dismiss()
+    wait_ui(app, lambda: not app.practice.busy)
     assert app.practice.quiz_id == "first" and app.answer.get() == "A"
     assert app.practice.submit() is True
 
@@ -129,7 +139,7 @@ def test_worker_enter_failure_restores_original_and_allows_retry(practice_app, h
         app.monitor.enter_quiz = lambda _: quiz("second")
         assert app._enter_pending("second")
         wait_ui(app, lambda: app.practice.quiz_id == "second")
-        assert app.practice.entering_quiz_id is None and not page.submit_button.instate(["disabled"])
+        assert app.practice.entering_quiz_id is None and not app._answer_window().submit_button.instate(["disabled"])
     finally:
         release.set()
 
@@ -160,7 +170,7 @@ def test_delivery_during_empty_switch_keeps_reservation(practice_app):
     app.practice.choose("A")
     assert app.practice.entering_quiz_id == "second"
     assert not app.practice.submit()
-    app.events.put(("enter_quiz", quiz("second")))
+    app.events.put(("practice_opened", dict(request=app._practice_request, quiz=quiz("second"), failed=False, note="")))
     app._drain()
     assert not app.practice.busy and app.practice.quiz_id == "second"
     assert [q["quiz_id"] for q in app.practice.deferred] == ["automatic", "manual"]
@@ -187,7 +197,7 @@ def test_real_worker_sqlite_submit_survives_navigation(practice_app, history):
         wait_ui(app, lambda: app.practice.submit_state == "finished")
         app.shell.buttons["practice"].invoke()
         assert "回答正确" in app.feedback.get()
-        assert page.submit_button.instate(["disabled"])
+        assert app._answer_window().submit_button.instate(["disabled"])
         assert not app.practice.submit()
         assert not engine.submit_answer("first", "A")["ok"]
         assert store._conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 1

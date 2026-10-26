@@ -140,9 +140,12 @@ class DiffReader:
 
     def _snapshot_files(self) -> dict:
         snap = {}
+        def unreadable(error):
+            # os.walk otherwise silently treats an inaccessible project as empty.
+            raise error
         # Prune dependency/build trees before walking them; filtering rglob's
         # results still traverses every node_modules/.git file on every poll.
-        for directory, subdirs, files in os.walk(self.root, followlinks=False):
+        for directory, subdirs, files in os.walk(self.root, followlinks=False, onerror=unreadable):
             subdirs[:] = [name for name in subdirs
                           if name not in SKIP_DIRS and not name.startswith(SKIP_PREFIX)]
             for name in files:

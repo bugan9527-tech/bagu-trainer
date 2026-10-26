@@ -68,6 +68,12 @@ def _db_path() -> str:
     return str(config.db_path((load_config().get("db_path") or "").strip()))
 
 
+def _project_roots():
+    """Use the acknowledged desktop scope; a config write alone cannot apply it."""
+    roots = session._watch_roots
+    return list(roots) if roots is not None else load_config().get("project_roots", [str(PROJECT_ROOT)])
+
+
 def reload_bank():
     """Use the newly activated bank without replacing pending/history state."""
     global kb, matcher
@@ -95,22 +101,21 @@ def initialize():
 
 def observe_project(root, *, reader_factory=None):
     """Collect one scoped/redacted signal, optionally establishing a baseline."""
-    with content_maintenance():
+    owner = session
+    with owner._lock:
+        owner._ensure_open()
+    with owner._readers_lock:
         if reader_factory is not None:
-            session._diff_readers[_normalize_project_root(root)] = reader_factory(root)
-        return _collect_context("", root)
+            owner._diff_readers[_normalize_project_root(root)] = reader_factory(root)
+    return _collect_context("", root)
 
 
-def generate_activity(root, info, *, retry_failed_ids=()):
-    """Generate ready work atomically, keeping dedupe, cooldown and cleanup together."""
-    with content_maintenance():
-        caps = _caps()
-        result = _generate_matches_locked(
-            info["context"], root, cfg["max_quizzes_per_hit"], caps,
-            " / ".join(info.get("sources") or [])[:200],
-            retry_failed_ids=retry_failed_ids)
-        session._cleanup_locked(caps)
-        return result
+def generate_activity(root, info, *, retry_failed_ids=(), revision=None, stop=None):
+    """Reserve under the session lock; never hold it across a model request."""
+    return _generate_matches(
+        info["context"], root, cfg["max_quizzes_per_hit"], _caps(),
+        " / ".join(info.get("sources") or [])[:200], retry_failed_ids=retry_failed_ids,
+        revision=revision, stop=stop)
 
 
 def invalidate_content():
@@ -191,8 +196,7 @@ def _resolve_project_root(project_root: str):
       - realpath 归一化后再比较，杜绝路径穿越（..、大小写、符号链接）
       - 必须是 config project_roots 白名单中的目录或其子目录，否则拒绝
     """
-    c = load_config()
-    whitelist = c.get("project_roots") or [str(PROJECT_ROOT)]
+    whitelist = _project_roots()
     norm_roots = []
     for r in whitelist:
         normalized = _normalize_project_root(r)
@@ -238,9 +242,12 @@ def _collect_context(description: str, project_root: str) -> dict:
             pieces.append(text)
             sources.append(f".trae-cn 会话记录({len(entries)} 条)")
     key = str(root)
-    if key not in session._diff_readers:
-        session._diff_readers[key] = DiffReader(key)
-    changes = session._diff_readers[key].changes()
+    owner = session
+    with owner._readers_lock:
+        if key not in owner._diff_readers:
+            owner._diff_readers[key] = DiffReader(key)
+        reader = owner._diff_readers[key]
+    changes = reader.changes()
     if changes["diff_text"]:
         pieces.append(changes["diff_text"])
     sources.append(f"文件变动[{changes['source']}]({len(changes['files'])} 个文件)")
@@ -289,80 +296,112 @@ def _public_pending(entry: dict) -> dict:
     return copy.deepcopy(out)
 
 
-def _generate_matches_locked(ctx: str, project_root: str, top_n: int, caps: dict,
-                             source_summary: str = "", *, retry_failed_ids=()):
-    """匹配知识点并生成题目（调用方必须已持 session._lock）。
-    返回 (matches, generated, skipped, unavailable)：matches 为匹配详情列表
-    [{question, score, hits, confidence, margin}]；generated 为可作答的公开题目列表，
-    skipped 为因相同上下文已出过题被去重跳过、或同一知识点冷却（未作答/未到复习期）
-    而跳过的数量（不重复计费），unavailable 为生成失败（无 LLM/校验失败/来源缺失）
-    或非 AI 产物被拦截的明确原因列表。
-    生成失败或非 AI 生成的题绝不进入 pending/对外输出。
-    生成成功的题同时落库（status=ready），保证重启后可继续作答。"""
+def _generate_matches(ctx: str, project_root: str, top_n: int, caps: dict,
+                      source_summary: str = "", *, retry_failed_ids=(), revision=None, stop=None,
+                      deliver_generated=False):
+    """Reserve scoped work once; model I/O is outside all session/store locks."""
     project_root = _normalize_project_root(project_root)
-    ranked = matcher.rank(ctx, top_n=top_n)
+    owner = session
+    with owner._lock:
+        if revision is not None and not owner._accepts_result(revision):
+            return [], [], 0, []
+        owner._ensure_open()
+        bank = kb
+        revision = revision or owner._generation_token()
+        ranked = copy.deepcopy(matcher.rank(ctx, top_n=top_n))
+        model = generator
     matches, generated, skipped, unavailable = [], [], 0, []
-    now = _now()
-    store = session._get_store_locked()
-    pending_kps = session._pending_kp_ids_locked(project_root)
     for r in ranked:
+        if stop is not None and stop.is_set():
+            break
         q, score, hits = r["question"], r["score"], r["hits"]
-        # Only an explicit desktop retry supplies IDs from the previous failed
-        # result. Successful items retain their fingerprint and pending cooldown.
         if retry_failed_ids and q["id"] not in retry_failed_ids:
             continue
         matches.append({"question": q, "score": score, "hits": hits,
                         "confidence": r["confidence"], "margin": r["margin"]})
         key = _match_hash(project_root, q["id"], ctx)
-        if not session._mark_seen_locked(key, caps["seen_cap"]) and q["id"] not in retry_failed_ids:
-            skipped += 1
-            continue
-        # 同 kp 冷却：有未作答题，或未到复习期，都不重复出题（避免短时间重复）
-        if q["id"] in pending_kps:
-            skipped += 1
-            continue
-        st = store.concept_state(q["id"])
-        if st and st.get("next_review_at") and st["next_review_at"] > now:
-            skipped += 1
-            continue
+        slot = (project_root, q["id"])
+        task = object()
+        with owner._lock:
+            if session is not owner or kb is not bank or not owner._accepts_result(revision):
+                break
+            owner._cleanup_locked(caps)
+            store = owner._get_store_locked()
+            scopes = {_normalize_project_root(root) for root in
+                      _project_roots()}
+            if project_root not in scopes or getattr(kb, "explicit_empty", False):
+                skipped += 1
+                continue
+            fresh = owner._mark_seen_locked(key, caps["seen_cap"])
+            st = store.concept_state(q["id"])
+            if (slot in owner._generations or
+                    (not fresh and q["id"] not in retry_failed_ids) or
+                    q["id"] in owner._pending_kp_ids_locked(project_root) or
+                    (st and (st.get("next_review_at") or 0) > _now())):
+                skipped += 1
+                continue
+            owner._generations[slot] = task
         try:
-            quiz = generator.generate(q, ctx)
-            quiz["sources"] = q.get("sources", [])
-        except Exception as error:
-            quiz = {"available": False, "failure_kind": "service",
-                    "unavailable_reason": f"出题失败（{type(error).__name__}），请检查模型配置后重试。"}
-        failure = _generation_failure(quiz, require_review=True)
-        if failure:
-            unavailable.append({
-                "kp_id": q["id"],
-                "knowledge_point": q["knowledge_point"],
-                "reason": failure,
-                "failure_kind": "quality" if quiz.get("failure_kind") == "quality" else "service",
-            })
-            continue
-        quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
-                     "_status": "ready"})
-        quiz_id = uuid.uuid4().hex[:8]
-        session._state["quizzes"][quiz_id] = quiz
-        store.create_quiz(
-            quiz_id, q["id"], _quiz_snapshot(quiz), "ready",
-            str(project_root), f"{source_summary} | kp={q['id']}"[:200],
-            now, now + caps["ttl"])
-        public = {"hits": list(hits), "score": score,
-                  "confidence": r["confidence"], "margin": r["margin"],
-                  **_public_quiz(quiz_id, quiz, project_root)}
-        session._state["pending"].append({
-            "quiz_id": quiz_id,
-            "kp_id": q["id"],
-            "project_root": str(project_root),
-            "status": "ready",
-            "created_at": now,
-            "delivered_at": None,
-            "answered_at": None,
-            "expires_at": now + caps["ttl"],
-            **public,
-        })
-        generated.append(public)
+            try:
+                quiz = model.generate(q, ctx)
+                quiz["sources"] = q.get("sources", [])
+            except Exception as error:
+                quiz = {"available": False, "failure_kind": "service",
+                        "unavailable_reason": f"出题失败（{type(error).__name__}），请检查模型配置后重试。"}
+            with owner._lock:
+                if (session is not owner or kb is not bank or not owner._accepts_result(revision)
+                        or owner._generations.get(slot) is not task):
+                    skipped += 1
+                    continue
+                scopes = {_normalize_project_root(root) for root in
+                          _project_roots()}
+                if project_root not in scopes or getattr(kb, "explicit_empty", False):
+                    skipped += 1
+                    continue
+                owner._cleanup_locked(caps)
+                store = owner._get_store_locked()
+                st = store.concept_state(q["id"])
+                if (q["id"] in owner._pending_kp_ids_locked(project_root) or
+                        (st and (st.get("next_review_at") or 0) > _now())):
+                    skipped += 1
+                    continue
+                failure = _generation_failure(quiz, require_review=True)
+                if failure:
+                    unavailable.append({"kp_id": q["id"], "knowledge_point": q["knowledge_point"],
+                                        "reason": failure,
+                                        "failure_kind": "quality" if quiz.get("failure_kind") == "quality" else "service"})
+                    continue
+                now = _now()
+                status = "delivered" if deliver_generated else "ready"
+                delivered_at = now if deliver_generated else None
+                quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
+                             "_status": status})
+                quiz_id = uuid.uuid4().hex[:8]
+                store.create_quiz(
+                    quiz_id, q["id"], _quiz_snapshot(quiz), status,
+                    str(project_root), f"{source_summary} | kp={q['id']}"[:200],
+                    now, now + caps["ttl"], delivered_at=delivered_at)
+                owner._state["quizzes"][quiz_id] = quiz
+                public = {"hits": list(hits), "score": score,
+                          "confidence": r["confidence"], "margin": r["margin"],
+                          **_public_quiz(quiz_id, quiz, project_root)}
+                owner._state["pending"].append({
+                    "quiz_id": quiz_id,
+                    "kp_id": q["id"],
+                    "project_root": str(project_root),
+                    "status": status,
+                    "created_at": now,
+                    "delivered_at": delivered_at,
+                    "answered_at": None,
+                    "expires_at": now + caps["ttl"],
+                    **public,
+                })
+                generated.append(public)
+                owner._cleanup_locked(caps)
+        finally:
+            with owner._lock:
+                if owner._generations.get(slot) is task:
+                    owner._generations.pop(slot, None)
     return matches, generated, skipped, unavailable
 
 
@@ -372,10 +411,11 @@ def _refresh(project_root: str, description: str = "",
     采集上下文 -> 匹配 -> 去重生成 -> 清理。
     返回 info/generated/matches/skipped/unavailable；白名单校验失败时
     返回 ok=False + error（不进行任何采集与生成）。deliver_generated=True
-    供 process_activity 使用：生成与 ready->delivered 状态更新在同一锁内完成。
+    供 process_activity 使用：生成结果直接以 delivered 入库，不暴露中间 ready 状态。
     """
     caps = _caps()
     with content_maintenance():
+        revision = session._generation_token()
         info = _collect_context(description, project_root)
         if info.get("error"):
             session._cleanup_locked(caps)
@@ -386,12 +426,11 @@ def _refresh(project_root: str, description: str = "",
             session._cleanup_locked(caps)
             return {"info": info, "generated": [], "matches": [],
                     "skipped": 0, "unavailable": []}
-        source_summary = " / ".join(info.get("sources") or [])[:200]
-        matches, generated, skipped, unavailable = _generate_matches_locked(
-            info["context"], str(info["project_root"]),
-            cfg["max_quizzes_per_hit"], caps, source_summary)
-        if deliver_generated and generated:
-            session._deliver_generated_locked(generated)
+    matches, generated, skipped, unavailable = _generate_matches(
+        info["context"], str(info["project_root"]), cfg["max_quizzes_per_hit"], caps,
+        " / ".join(info.get("sources") or [])[:200], revision=revision,
+        deliver_generated=deliver_generated)
+    with content_maintenance():
         session._cleanup_locked(caps)
     return {"info": info, "generated": generated, "matches": matches,
             "skipped": skipped, "unavailable": unavailable}
@@ -492,20 +531,23 @@ def next_quiz(project_root: str = "") -> dict:
                 return {"ok": True, "has_pending": True, "quiz": review,
                         "project_root": scope_root, "scope_note": _PROJECT_SCOPE_NOTE,
                         "next": "把题目与选项呈现给用户作答，然后用 submit_answer(quiz_id, 用户答案) 判分并转述解析"}
-            # 2) 当前上下文匹配到的新知识点（同步生成，受锁保护不并发重复生成）
-            matches, generated, skipped, unavailable = _generate_matches_locked(
-                info["context"], str(info["project_root"]),
-                cfg["max_quizzes_per_hit"], caps,
-                " / ".join(info.get("sources") or [])[:200])
-            session._cleanup_locked(caps)
-            ready = session._first_ready_locked(scope_root)
-            if ready:
-                session._deliver_pending_locked(ready)
-                return {"ok": True, "has_pending": True, "quiz": _public_pending(ready),
-                        "project_root": scope_root, "scope_note": _PROJECT_SCOPE_NOTE,
-                        "next": "把题目与选项呈现给用户作答，然后用 submit_answer(quiz_id, 用户答案) 判分并转述解析"}
-        else:
-            matches, generated, skipped, unavailable = [], [], 0, []
+        revision = session._generation_token()
+    if ctx:
+        # 2) 当前上下文匹配到的新知识点（同步生成，受锁保护不并发重复生成）
+        matches, generated, skipped, unavailable = _generate_matches(
+            info["context"], str(info["project_root"]),
+            cfg["max_quizzes_per_hit"], caps,
+            " / ".join(info.get("sources") or [])[:200], revision=revision)
+    else:
+        matches, generated, skipped, unavailable = [], [], 0, []
+    with content_maintenance():
+        session._cleanup_locked(caps)
+        ready = session._first_ready_locked(scope_root)
+        if ready:
+            session._deliver_pending_locked(ready)
+            return {"ok": True, "has_pending": True, "quiz": _public_pending(ready),
+                    "project_root": scope_root, "scope_note": _PROJECT_SCOPE_NOTE,
+                    "next": "把题目与选项呈现给用户作答，然后用 submit_answer(quiz_id, 用户答案) 判分并转述解析"}
         # 3) 上下文无关的到期复习兜底：保证错题总会在更短周期内再次出现
         review = session._deliver_due_review_locked(
             str(root_path), prefer=matched_ids, only_prefer=False, caps=caps)
@@ -762,7 +804,10 @@ class EngineSession:
         self._state = {"quizzes": {}, "pending": [],
                        "seen": collections.deque(), "seen_set": set()}
         self._store = None
+        self._readers_lock = threading.RLock()
         self._diff_readers = {}
+        self._generations = {}
+        self._watch_roots = None
         self._revision = 0
         self._closed = False
 
@@ -795,12 +840,15 @@ class EngineSession:
         with self._lock:
             self._ensure_open()
             self._revision += 1
+            self._generations.clear()
 
     def _clear(self):
         self._revision += 1
+        self._generations.clear()
         for value in self._state.values():
             value.clear()
-        self._diff_readers.clear()
+        with self._readers_lock:
+            self._diff_readers.clear()
         if self._store is not None:
             self._store.close()
             self._store = None
@@ -823,7 +871,20 @@ class EngineSession:
         with self._lock:
             self._ensure_open()
             for root in roots:
-                self._diff_readers.pop(_normalize_project_root(root), None)
+                scope = _normalize_project_root(root)
+                with self._readers_lock:
+                    self._diff_readers.pop(scope, None)
+                for slot in list(self._generations):
+                    if slot[0] == scope:
+                        self._generations.pop(slot, None)
+
+    def set_watch_roots(self, roots):
+        """Commit the active allowlist together with retirement of removed work."""
+        with self._lock:
+            self._ensure_open()
+            previous = self._watch_roots or ()
+            self.forget_projects(set(previous) - set(roots))
+            self._watch_roots = tuple(roots)
 
     def _pending_kp_ids_locked(self, project_root: str) -> set:
         """当前项目未作答 pending 题涉及的知识点集合（项目内同 kp 冷却用）。
@@ -1035,7 +1096,7 @@ class EngineSession:
             self._ensure_open()
             self._get_store_locked()
             self._cleanup_locked(_caps())
-            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            roots = _project_roots()
             scopes = {_normalize_project_root(r) for r in roots}
             for pending in sorted(self._state["pending"], key=lambda p: p["created_at"]):
                 if pending["status"] != "ready" or pending["project_root"] not in scopes:
@@ -1056,7 +1117,7 @@ class EngineSession:
             self._ensure_open()
             self._get_store_locked()
             self._cleanup_locked(_caps())
-            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            roots = _project_roots()
             scopes = {_normalize_project_root(r) for r in roots}
             out = []
             for pending in sorted(self._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
@@ -1081,7 +1142,7 @@ class EngineSession:
             self._ensure_open()
             self._get_store_locked()
             self._cleanup_locked(_caps())
-            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            roots = _project_roots()
             scopes = {_normalize_project_root(r) for r in roots}
             for pending in sorted(self._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"])):
                 if pending["quiz_id"] != quiz_id or pending["status"] not in ("ready", "delivered"):
@@ -1110,7 +1171,7 @@ class EngineSession:
             self._get_store_locked()
             caps = _caps()
             self._cleanup_locked(caps)
-            roots = load_config().get("project_roots") or [str(PROJECT_ROOT)]
+            roots = _project_roots()
             roots = list(dict.fromkeys(_normalize_project_root(r) for r in roots))
             scopes = set(roots)
             pending_items = sorted(self._state["pending"], key=lambda p: (p["created_at"], p["quiz_id"]))

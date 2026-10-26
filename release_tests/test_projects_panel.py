@@ -23,8 +23,8 @@ def test_empty_save_keeps_specific_error_after_control_refresh(installation):
         panel = ProjectsPanel(root, apply_theme(root), on_saved=applied.append)
         panel.pack(fill="both", expand=True)
         root.update()
-        panel.listbox.selection_set(0)
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.selection_set(panel.tree.get_children()[0])
+        panel.tree.event_generate("<<TreeviewSelect>>")
         panel.remove_button.invoke()
         panel.save_button.invoke()
         root.update()
@@ -35,7 +35,7 @@ def test_empty_save_keeps_specific_error_after_control_refresh(installation):
         assert "已保存的配置未更改" in panel.hint.get()
         assert not panel.save_button.instate(["disabled"])
         error = panel.hint.get()
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.event_generate("<<TreeviewSelect>>")
         panel._sync_controls()
         panel._render()
         root.geometry("600x500")
@@ -76,8 +76,8 @@ def test_write_failure_survives_refresh_and_can_retry(installation, monkeypatch,
         panel = ProjectsPanel(root, apply_theme(root), on_saved=applied.append)
         panel.pack(fill="both", expand=True)
         root.update()
-        panel.listbox.selection_set(0)
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.selection_set(panel.tree.get_children()[0])
+        panel.tree.event_generate("<<TreeviewSelect>>")
         panel.remove_button.invoke()
         def fail_replace(*_):
             raise failure
@@ -86,11 +86,11 @@ def test_write_failure_survives_refresh_and_can_retry(installation, monkeypatch,
             failing.setattr(config.os, "replace", fail_replace)
             panel.save_button.invoke()
         error = panel.hint.get()
-        assert str(failure) in error and type(failure).__name__ in error
+        assert type(failure).__name__ in error and str(failure) not in error
         assert config.CONFIG_PATH.read_bytes() == before and applied == []
         assert not list(config.CONFIG_PATH.parent.glob(".config.json.*.tmp"))
-        panel.listbox.selection_set(0)
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.selection_set(panel.tree.get_children()[0])
+        panel.tree.event_generate("<<TreeviewSelect>>")
         root.update()
         panel._sync_controls()
         assert panel.hint.get() == error
@@ -135,8 +135,8 @@ def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch
         app._navigate_page("projects")
         panel = app._page_frame("projects")
         app.root.update()
-        panel.listbox.selection_set(0)
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.selection_set(panel.tree.get_children()[0])
+        panel.tree.event_generate("<<TreeviewSelect>>")
         panel.remove_button.invoke()
         panel.save_button.invoke()
         assert "请选择至少一个" in panel.hint.get()
@@ -154,9 +154,9 @@ def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch
         panel.add_button.invoke()
         panel.save_button.invoke()
         name, paths = app.jobs.get_nowait()
-        assert name == "apply_projects" and paths == [str(second)]
+        assert name == "apply_projects" and paths["roots"] == [str(second)]
         assert app.jobs.empty()
-        app._apply_projects_serial(paths)
+        app._apply_projects_serial(paths["roots"])
         visited.clear()
         monitor.poll()
         assert visited == [str(second)] and monitor.initialized == {str(second)}
@@ -189,17 +189,17 @@ def test_selection_enables_remove_and_removal_requires_save(monkeypatch, tmp_pat
         assert panel.remove_button.instate(["disabled"])
         assert panel.save_button.instate(["disabled"])
 
-        panel.listbox.selection_set(1)
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.selection_set(panel.tree.get_children()[1])
+        panel.tree.event_generate("<<TreeviewSelect>>")
         assert projects[1] in panel.detail.get()
         assert not panel.remove_button.instate(["disabled"])
 
-        panel.listbox.selection_clear(0, "end")
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.selection_remove(*panel.tree.selection())
+        panel.tree.event_generate("<<TreeviewSelect>>")
         assert panel.remove_button.instate(["disabled"])
 
-        panel.listbox.selection_set(1)
-        panel.listbox.event_generate("<<ListboxSelect>>")
+        panel.tree.selection_set(panel.tree.get_children()[1])
+        panel.tree.event_generate("<<TreeviewSelect>>")
         panel.remove_button.invoke()
         assert panel.current_projects() == projects[:1]
         assert panel.remove_button.instate(["disabled"])

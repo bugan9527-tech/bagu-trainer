@@ -177,8 +177,7 @@ def copy_practice(snapshot):
     from bagu_trainer.ui_theme import apply_theme
     from bagu_trainer.ui_state import window_var
     from bagu_trainer.practice_controller import PracticeController
-    from bagu_trainer.practice_page import PracticePage
-    from bagu_trainer.ui_copy import question_text, solution_text
+    from bagu_trainer.practice_window import PracticeWindow
     root = create_root()
     try:
         previous = root.clipboard_get()
@@ -186,24 +185,35 @@ def copy_practice(snapshot):
         previous = None
     controller = PracticeController(window_var(root), window_var(root), window_var(root))
     try:
-        page = PracticePage(root, apply_theme(root), controller)
-        page.pack(fill="both", expand=True)
+        page = PracticeWindow(root, apply_theme(root), controller)
+        controller.on_changed = page.refresh
         controller.enter({"quiz_id": "copy-fixture", **snapshot})
+        page.show()
         root.update()
-        page.copy_question_button.invoke()
-        expected = question_text(snapshot["question"], snapshot["options"])
-        check(root.clipboard_get() == expected, "Question/options clipboard mismatch")
-        check(page.copy_solution_button.instate(["disabled"]), "Answer available before submit")
-        page._copy_solution()
-        check(root.clipboard_get() == expected, "Hidden answer leaked")
-        controller.choose("A")
-        controller.submit()
+
+        def copy(widget):
+            widget.select_all()
+            widget.event_generate("<<Copy>>")
+            return root.clipboard_get()
+
+        check(copy(page.question_label) == snapshot["question"], "Question clipboard mismatch")
+        for widget, letter in zip(page.option_texts, "ABCD"):
+            check(copy(widget) == snapshot["options"][letter], "Option clipboard mismatch: " + letter)
+        check(page.feedback_label.cget("state") == "disabled", "Feedback is editable")
+        before_submit = copy(page.feedback_label)
+        check(snapshot["analysis"] not in before_submit and "正确答案：" not in before_submit,
+              "Hidden answer leaked before submit")
+        page.option_buttons[0].invoke()
+        page.submit_button.invoke()
+        check(controller.submit_state == "submitting", "Answer window did not submit")
         controller.apply_grade({"ok": True, "correct": True, "correct_answer": "A", "analysis": snapshot["analysis"]}, "A")
-        page.copy_solution_button.invoke()
-        check(root.clipboard_get() == solution_text("A", snapshot["analysis"]), "Multiline solution clipboard mismatch")
+        solution = copy(page.feedback_label)
+        check("正确答案：A" in solution and snapshot["analysis"] in solution,
+              "Multiline solution clipboard mismatch")
     finally:
         root.clipboard_clear()
         if previous is not None:
             root.clipboard_append(previous)
+        controller.on_changed = None
         controller.close()
         root.destroy()

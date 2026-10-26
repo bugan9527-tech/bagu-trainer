@@ -32,6 +32,17 @@ if not _benchmark:
 
 import pytest  # noqa: E402
 
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_teardown(item, nextitem):
+    yield
+    # GUI callback cycles must release their Tk interpreter on pytest's main
+    # thread before the following engine test starts concurrent workers.
+    import sys
+    if "tkinter" in sys.modules:
+        import gc
+        gc.collect()
+
 import bagu_trainer.engine as engine  # noqa: E402
 from bagu_trainer.quiz_validation import grounding_receipt  # noqa: E402
 

@@ -1,7 +1,7 @@
 """Practice controller: the single delivery entry point for the practice center.
 
 Owns question number, selected option, submit state, grade and analysis, plus the
-deferred display queue.  It is UI-independent: the page renders its state and
+deferred display queue.  It is UI-independent: the views render its state and
 forwards user intent; the application wires submit/dismiss callbacks to the
 worker.  It converges the previous ``history_deferred`` / ``deferred_quiz`` /
 ``monitor.active`` UI-side bookkeeping into one ordered queue plus one "current"
@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 class PracticeController:
     def __init__(self, answer, feedback, answer_hint, *,
-                 on_submit=None, on_dismiss=None, on_changed=None, can_submit=None):
+                 on_submit=None, on_dismiss=None, on_changed=None, can_submit=None, on_next=None):
         self.answer = answer            # tk.StringVar (current selection)
         self.feedback = feedback        # tk.StringVar (result/analysis)
         self.answer_hint = answer_hint  # tk.StringVar (footer guidance)
@@ -42,6 +42,8 @@ class PracticeController:
         self.on_submit = on_submit or (lambda quiz_id, answer: None)
         self.can_submit = can_submit or (lambda quiz_id: True)
         self.on_dismiss = on_dismiss or (lambda quiz_id: None)
+        self.on_next = on_next
+        self.pending_ids = []
         self.on_changed = on_changed or (lambda: None)
         self._reset_state()
 
@@ -53,6 +55,23 @@ class PracticeController:
     @property
     def busy(self):
         return self.submit_state == "submitting" or self.entering_quiz_id is not None
+
+    @property
+    def has_next(self):
+        if self.on_next is not None:
+            return any(qid != self.quiz_id for qid in self.pending_ids)
+        return bool(self.deferred)
+
+    def finish_next(self, quiz):
+        if self.closed or self.entering_quiz_id != "__next__":
+            return
+        self.entering_quiz_id = None
+        if quiz:
+            self.enter(quiz)
+        else:
+            # The worker has checked the live queue, including expiry and scope.
+            self.deferred.clear()
+            self._dismiss_current()
 
     def begin_enter(self, quiz_id):
         """Reserve the question switch before handing the request to a worker."""
@@ -70,6 +89,22 @@ class PracticeController:
             self.enter(quiz)
         else:
             self._changed()
+
+    def complete_open(self, target, quiz=None):
+        """Complete an application request whose identity was checked by the UI."""
+        if self.closed or self.entering_quiz_id != target:
+            return False
+        self.entering_quiz_id = None
+        if quiz:
+            self.enter(quiz)
+        else:
+            self._changed()
+        return True
+
+    def save_draft(self):
+        """Hiding a view never clears the current answer or an in-flight save."""
+        if not self.closed:
+            self._save_draft()
 
     def _reset_state(self):
         self.feedback.set("选择一个选项后提交，即可查看解析。")
@@ -169,7 +204,7 @@ class PracticeController:
             return False
         previous = (self.submit_state, self.answer_hint.get(), self.feedback.get())
         self.submit_state = "submitting"
-        self.answer_hint.set("当前不可取消：判分与记录写入完成后可关闭。")
+        self.answer_hint.set("正在判分并保存记录；可以隐藏窗口，保存会继续。")
         self.feedback.set("进行中：正在判分并保存学习记录，请勿重复提交。")
         self._changed()
         try:
@@ -233,7 +268,15 @@ class PracticeController:
                 self.answer_hint.set("当前不可取消：正在保存记录，完成后可继续。")
             self._changed()
             return
+        if self.on_next is not None:
+            self.on_next(self.quiz_id)
+            return
+        self._dismiss_current()
+
+    def _dismiss_current(self):
         dismissed_id = self.current["quiz_id"]
+        if self.submit_state != "finished":
+            self._save_draft()
         self.on_dismiss(dismissed_id)
         if self.deferred:
             next_quiz = self.deferred.pop(0)

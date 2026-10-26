@@ -87,6 +87,27 @@ def main(argv=None):
     return 0
 
 
+class WorkQueue(queue.Queue):
+    """Wake a waiting consumer on every enqueue (including shutdown)."""
+    def __init__(self):
+        super().__init__()
+        self.wake = threading.Event()
+
+    def put(self, item, block=True, timeout=None):
+        super().put(item, block, timeout)
+        self.wake.set()
+
+
+class WorkerStop(threading.Event):
+    def __init__(self, wake):
+        super().__init__()
+        self.wake = wake
+
+    def set(self):
+        super().set()
+        self.wake.set()
+
+
 class DesktopApp:
     def __init__(self, monitor, background=False, events=None, coordinator=None):
         from .tk_runtime import prepare_tk, create_root
@@ -102,8 +123,12 @@ class DesktopApp:
         self.history_service = getattr(monitor, "engine", None) or LearningHistory()
         self.events = events if events is not None else queue.Queue()
         self.monitor.ui_post = self.events.put
-        self.jobs = queue.Queue()
-        self.stop = threading.Event()
+        snapshot = getattr(self.monitor, "project_snapshot", None)
+        self._project_snapshot = snapshot() if snapshot else {"projects": {}, "ready": False}
+        self._project_request_id = 0
+        self.jobs = WorkQueue()
+        self.stop = WorkerStop(self.jobs.wake)
+        self.monitor.stop = self.stop
         self.closed = self.closing = False
         self.worker_thread = None
         self.worker_done = threading.Event()
@@ -138,16 +163,19 @@ class DesktopApp:
         self.projects_text = window_var(self.root, "正在读取监听项目…")
         self.current_project = window_var(self.root, "等待项目就绪")
         self.learning_values = {name: window_var(self.root, "—") for name in ("answered", "accuracy", "reviews", "pending")}
-        # Practice delivery is owned by the PracticeController (the single entry
-        # point); the old popup/history_deferred/deferred_quiz bookkeeping is
-        # gone.  The three Tk variables survive page switches.
+        # Both practice views share one controller and root-owned variables;
+        # hiding the answer window or switching pages never resets an answer.
         self.answer = window_var(self.root)
         self.feedback = window_var(self.root, "选择一个选项后提交，即可查看解析。")
         self.answer_hint = window_var(self.root, "尚未提交：请选择一个选项。当前没有可取消的提交。")
+        self.practice_window = None
+        self._practice_serial = 0
+        self._practice_request = None
         from .practice_controller import PracticeController
         self.practice = PracticeController(self.answer, self.feedback, self.answer_hint,
                                            on_submit=self._submit_quiz, on_dismiss=self._dismiss_quiz,
-                                           can_submit=self._can_submit_quiz)
+                                           can_submit=self._can_submit_quiz, on_next=self._next_quiz)
+        self.practice.on_changed = self._practice_changed
         from .ui_shell import AppShell
         self.shell = AppShell(self.root, self.theme, self._navigate_page, self.global_status)
         self.content_host = self.shell.content_host
@@ -233,7 +261,10 @@ class DesktopApp:
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.bind("<Destroy>", self._destroyed, add="+")
         self._sync_actions()
-        self.poll = self.root.after(200, self._drain)
+        # Build the hidden reader during startup, keeping first explicit entry
+        # as responsive as subsequent switches. This never maps or focuses it.
+        self._answer_window()
+        self.poll = self.root.after(25, self._drain)
         self.focus_timer = self.root.after_idle(self.shell.heading.focus_set)
         if background:
             cancel_timer(self.root, self.focus_timer)
@@ -313,6 +344,7 @@ class DesktopApp:
             from .projects_panel import ProjectsPanel
             panel = ProjectsPanel(self.content_host, self.theme,
                                   on_saved=self._projects_saved)
+            panel.set_runtime_snapshot(self._project_snapshot)
             return panel
         if page == "bank":
             from .bank_panel import BankPanel
@@ -343,10 +375,11 @@ class DesktopApp:
         # Reuse the existing serial worker to apply the watch-list change:
         # preserve unchanged-project baselines, add baselines only for new
         # projects and drop monitoring state for removed ones.
-        self.jobs.put(("apply_projects", projects)) if self.ready else None
-        if self.coordinator is not None:
-            self.jobs.put(("prepare", None))
+        self._project_request_id += 1
+        request = {"request": self._project_request_id, "roots": list(projects)}
+        self.jobs.put(("apply_projects" if self.ready else "prepare", request))
         self._sync_actions()
+        return self._project_request_id
 
     def _bank_built(self, result):
         # A completed build does not touch the running bank; the engine reloads
@@ -402,22 +435,69 @@ class DesktopApp:
 
     def _refresh_practice(self):
         """Push the latest pending list + due-review count into the practice page."""
+        self.practice.pending_ids = [item["quiz_id"] for item in self._pending_items]
         frame = self._page_frame("practice")
         if hasattr(frame, "set_pending"):
             frame.set_pending(self._pending_items, self._due_reviews)
         self.learning_values["pending"].set(str(len(self._pending_items)))
         self._update_practice_notice()
+        self._practice_changed()
+
+    def _practice_changed(self):
+        """Fan out one controller notification to both views on the Tk thread."""
+        frame = self._cached_pages.get("practice")
+        if frame is not None:
+            frame.refresh()
+        if self.practice_window is not None:
+            self.practice_window.refresh()
+
+    def _answer_window(self):
+        if self.practice_window is None:
+            from .practice_window import PracticeWindow
+            self.practice_window = PracticeWindow(self.root, self.theme, self.practice,
+                                                  on_destroy=self._answer_window_destroyed)
+        return self.practice_window
+
+    def _answer_window_destroyed(self, window):
+        if self.practice_window is window:
+            self.practice_window = None
+
+    def _request_practice(self, kind, target=None, page_id=None):
+        if self.closed or self.closing or self.tasks.bank.cleaning or self._bank_empty():
+            return False
+        if kind == "enter_quiz" and target == self.practice.quiz_id:
+            self._answer_window().show()
+            return self.practice.entering_quiz_id is None
+        if self.practice.busy:
+            # Repeated opening restores the same window without another job.
+            if kind == "resume" or (self._practice_request and self._practice_request["target"] == target):
+                self._answer_window().show()
+            return False
+        reservation = target if kind == "enter_quiz" else "__" + kind + "__"
+        if not self.practice.begin_enter(reservation):
+            return False
+        self._practice_serial += 1
+        request = dict(token=self._practice_serial, kind=kind, target=target,
+                       reservation=reservation, page_id=page_id)
+        self._practice_request = request
+        self.pending_actions.add(kind)
+        self._answer_window().show("正在加载题目，请稍候…")
+        self.jobs.put(("practice_open", request))
+        self._sync_actions()
+        return True
 
     def _enter_pending(self, quiz_id):
         """按题进入: request the worker to deliver a specific ready/delivered quiz."""
-        if self.closed or self.closing or self.tasks.bank.cleaning or self._bank_empty() or "enter_quiz" in self.pending_actions:
+        return self._request_practice("enter_quiz", quiz_id)
+
+    def _next_quiz(self, quiz_id):
+        if self.practice.busy or self.closed or self.closing:
             return False
-        if not self.practice.begin_enter(quiz_id):
-            return False
-        self.pending_actions.add("enter_quiz")
-        self.jobs.put(("enter_quiz", quiz_id))
-        self._sync_actions()
-        return True
+        if not self.practice.has_next:
+            if self.practice_window is not None:
+                self.practice_window.hide()
+            return True
+        return self._request_practice("next_quiz", quiz_id)
 
     def _continue_practice(self):
         if self._bank_empty():
@@ -425,8 +505,16 @@ class DesktopApp:
             self._navigate_page("bank")
             return
         self._navigate_page("practice")
-        if self.practice.current is None and not self.practice.busy:
-            self._request_action("resume")
+        if self.practice.current is not None:
+            self._answer_window().show()
+        else:
+            self._request_practice("resume")
+
+    def _start_repractice(self, page_id, attempt_id):
+        accepted = self._request_practice("repractice", attempt_id, page_id)
+        if accepted:
+            self._navigate_page("practice")
+        return accepted
 
     def _continue_practice_key(self, event):
         # Ctrl+R jumps to practice, but never while typing in a form field.
@@ -465,18 +553,26 @@ class DesktopApp:
         """Apply a watch-list change on the worker: preserve unchanged-project
         baselines, add baselines only for new projects, and drop monitoring
         state for removed projects (their history stays)."""
-        engine = self.monitor.engine
-        normalize = getattr(engine, "_normalize_project_root", None) or (lambda p: str(p))
-        new_roots = list(dict.fromkeys(normalize(p) for p in paths))
-        new_set = set(new_roots)
-        # Drop state for removed projects; keep baselines for unchanged ones.
-        for removed in list(self.monitor.initialized - new_set):
-            self.monitor.initialized.discard(removed)
-            self.monitor.observed.pop(removed, None)
-            self.monitor.waiting.pop(removed, None)
-            engine.session.forget_projects([removed])
-        self.monitor.failed_generations = {r: f for r, f in self.monitor.failed_generations.items() if r in new_set}
-        # New projects get a baseline on the next poll (root not in initialized).
+        apply = getattr(self.monitor, "apply_projects", None)
+        if apply is not None:
+            apply(paths)
+            return
+        from contextlib import nullcontext
+        with getattr(self.monitor, "_state_lock", nullcontext()):
+            if hasattr(self.monitor, "_epoch"):
+                self.monitor._epoch += 1
+            engine = self.monitor.engine
+            normalize = getattr(engine, "_normalize_project_root", None) or (lambda p: str(p))
+            new_roots = list(dict.fromkeys(normalize(p) for p in paths))
+            new_set = set(new_roots)
+            # Drop state for removed projects; keep baselines for unchanged ones.
+            for removed in list(self.monitor.initialized - new_set):
+                self.monitor.initialized.discard(removed)
+                self.monitor.observed.pop(removed, None)
+                self.monitor.waiting.pop(removed, None)
+                engine.session.forget_projects([removed])
+            self.monitor.failed_generations = {r: f for r, f in self.monitor.failed_generations.items() if r in new_set}
+            # New projects get a baseline on the next poll (root not in initialized).
 
     def _worker_context(self):
         # The long-running thread must not retain an App/Tk/Variable even if
@@ -486,14 +582,14 @@ class DesktopApp:
                                stop=self.stop, worker_done=self.worker_done, coordinator=self.coordinator)
 
     def _request_action(self, name, value=None):
+        if name == "resume":
+            return self._request_practice("resume")
         if self.closed or self.closing or self.history_page is not None or name in self.pending_actions:
             return False
         if name == "configure":
             self._navigate_page("model")
             return True
         if name == "retry_generation" and (self.generation_busy or not self.generation_retryable or self.monitor.paused):
-            return False
-        if name == "resume" and self.generation_busy:
             return False
         self.pending_actions.add(name)
         self.jobs.put((name, value))
@@ -514,7 +610,7 @@ class DesktopApp:
             button.state(["disabled"] if disabled else ["!disabled"])
         self.pause_button.state(["disabled"] if locked or not self.ready or "pause" in self.pending_actions else ["!disabled"])
         bank_empty = self._bank_empty()
-        self.resume_button.state(["disabled"] if locked or self.generation_busy or bank_empty else ["!disabled"])
+        self.resume_button.state(["disabled"] if locked or bank_empty else ["!disabled"])
         retry_ok = self.generation_retryable and not self.generation_busy and not self.monitor.paused and not bank_empty
         self.retry_button.state(["!disabled"] if retry_ok and not locked and "retry_generation" not in self.pending_actions else ["disabled"])
         self.retry_button.configure(text="正在重试…" if "retry_generation" in self.pending_actions else "重试出题")
@@ -546,10 +642,19 @@ class DesktopApp:
         set_text(self.global_status, self.listen_state.get() + suffix)
 
     def _worker(self):
+        from concurrent.futures import ThreadPoolExecutor
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bagu-generation")
+        background = None
+        background_kind = None
+        retry_requested = False
+        next_scan = 0
+        wake = getattr(self.jobs, "wake", threading.Event())
         next_project_cleanup = time.monotonic() + 30
         try:
             while True:
                 try:
+                    # Clear before draining: a concurrent put always leaves a wakeup.
+                    wake.clear()
                     while True:
                         try:
                             name, value = self.jobs.get_nowait()
@@ -557,7 +662,7 @@ class DesktopApp:
                             break
                         # Already queued writes must finish during normal exit;
                         # never start another generation or scan while closing.
-                        if self.stop.is_set() and name not in {"submit", "repractice", "bank_cleanup", "history_barrier"}:
+                        if self.stop.is_set() and name not in {"submit", "bank_cleanup", "history_barrier"}:
                             continue
                         try:
                             if name == "history_barrier":
@@ -578,6 +683,14 @@ class DesktopApp:
                                     engine = self.coordinator.prepare()
                                     self.monitor.engine = engine
                                     self.monitor.capabilities_ready = engine is not None and self.coordinator.report.ready
+                                    if hasattr(self.monitor, "set_ready"):
+                                        self.monitor.set_ready(self.monitor.capabilities_ready)
+                                        if self.monitor.capabilities_ready and (value or self.monitor.applied_roots is None):
+                                            DesktopApp._apply_projects_serial(self, engine.load_config().get("project_roots", []))
+                                        if value:
+                                            self.events.put(("projects_applied", {**value,
+                                                "snapshot": self.monitor.project_snapshot(),
+                                                "error": "" if self.monitor.capabilities_ready else "后台尚未就绪，监听范围未应用。"}))
                                     self.events.put(("prepared", (self.coordinator.report, engine)))
                                     if not self.monitor.capabilities_ready:
                                         from .history_service import LearningHistory
@@ -593,29 +706,40 @@ class DesktopApp:
                                     grade = {"ok": False, "retryable": True,
                                              "note": f"判分或保存未完成（{type(error).__name__}），请点击重试提交。"}
                                 self.events.put(("grade", {"quiz_id": quiz_id, "answer": answer, "grade": grade}))
-                            elif name == "repractice":
-                                page_id, attempt_id = value
+                            elif name == "practice_open":
+                                # Data only: delivery/validity checks stay off the Tk thread.
+                                request = value
+                                kind, target = request["kind"], request["target"]
+                                quiz, note, failed = None, "", False
                                 try:
-                                    result = self.monitor.engine.repractice_attempt(attempt_id)
-                                except Exception as error:
-                                    result = {"ok": False, "note": f"重练准备失败（{type(error).__name__}），请重试。"}
-                                self.events.put(("repractice", (page_id, result)))
-                            elif name == "resume":
-                                quiz = self.monitor.resume_quiz()
-                                self.events.put(("quiz", quiz)) if quiz else self.events.put(("status", "空状态：当前没有可用的待答题或到期复习题。可等待新题或新的代码改动。"))
-                            elif name == "enter_quiz":
-                                try:
-                                    quiz = self.monitor.enter_quiz(value)
-                                except Exception as error:
-                                    quiz = None
-                                    self.events.put(("status", f"切题失败（{type(error).__name__}），请重试。"))
-                                else:
-                                    if not quiz:
-                                        self.events.put(("status", "该题已不存在或已过期，请从列表刷新后重试。"))
-                                self.events.put(("enter_quiz", quiz))
+                                    if kind == "repractice":
+                                        result = self.monitor.engine.repractice_attempt(target)
+                                        quiz = result.get("quiz") if result.get("ok") else None
+                                        if not quiz:
+                                            failed, note = True, result.get("note") or "重练准备失败，请重试。"
+                                    elif kind == "resume":
+                                        quiz = self.monitor.resume_quiz()
+                                    elif kind == "enter_quiz":
+                                        quiz = self.monitor.enter_quiz(target)
+                                        if not quiz or quiz.get("quiz_id") != target:
+                                            quiz, failed, note = None, True, "该题已不存在或已过期，请刷新列表后重试。"
+                                    else:
+                                        items = self.monitor.list_pending()
+                                        index = next((i for i, item in enumerate(items) if item["quiz_id"] == target), -1)
+                                        for item in items[index + 1:] + items[:index + 1]:
+                                            if item["quiz_id"] != target:
+                                                quiz = self.monitor.enter_quiz(item["quiz_id"])
+                                                if quiz:
+                                                    break
+                                except Exception:
+                                    failed, note = True, "题目加载失败，请重试；原题和作答草稿已保留。"
+                                if not quiz and not note:
+                                    note = "当前没有其他有效待答题，可以结束练习。"
+                                self.events.put(("practice_opened", dict(request=request, quiz=quiz, failed=failed, note=note)))
                             elif name == "retry_generation":
-                                self.monitor.retry_generation()
+                                retry_requested = True
                             elif name == "reload_bank":
+                                self.monitor.reset()
                                 try:
                                     if self.monitor.engine is not None:
                                         self.monitor.engine.reload_bank()
@@ -626,6 +750,7 @@ class DesktopApp:
                                 else:
                                     self.events.put(("bank_applied", None))
                             elif name == "bank_cleanup":
+                                self.monitor.reset()
                                 cleanup, plan, include_unknown = value
                                 try:
                                     if plan is None:
@@ -637,16 +762,27 @@ class DesktopApp:
                                             progress=lambda text: self.events.put(("cleanup_progress", text)))
                                     if result.failures:
                                         self.monitor.capabilities_ready = False
+                                    self.monitor.reset()
                                     self.monitor.active = None
-                                    self.monitor.waiting.clear()
-                                    self.monitor.initialized.clear()
-                                    self.monitor.failed_generations.clear()
                                     self.events.put(("bank_cleaned", (result, None)))
                                 except Exception as error:
                                     self.events.put(("bank_cleaned", (None, str(error))))
                             elif name == "apply_projects":
-                                DesktopApp._apply_projects_serial(self, value)
-                                self.events.put(("status", f"成功：监听项目已更新为 {len(value)} 个，未变化项目基线保留。"))
+                                roots = value["roots"] if isinstance(value, dict) else value
+                                try:
+                                    DesktopApp._apply_projects_serial(self, roots)
+                                except Exception as error:
+                                    if isinstance(value, dict):
+                                        self.events.put(("projects_applied", {**value,
+                                            "snapshot": self.monitor.project_snapshot(),
+                                            "error": f"后台应用失败（{type(error).__name__}），原监听范围保留。"}))
+                                    else:
+                                        raise
+                                else:
+                                    if isinstance(value, dict):
+                                        self.events.put(("projects_applied", {**value,
+                                            "snapshot": self.monitor.project_snapshot(), "error": ""}))
+                                    self.events.put(("status", f"成功：监听项目已更新为 {len(roots)} 个，未变化项目基线保留。"))
                             elif name == "startup":
                                 from . import login_startup
                                 login_startup.install() if value else login_startup.uninstall()
@@ -660,18 +796,21 @@ class DesktopApp:
                                 add_project(value)
                                 self.events.put(("status", "成功：监听项目已添加，正在建立基线。"))
                             elif name == "pause":
-                                self.monitor.paused = value
-                                self.monitor.waiting.clear()
-                                self.monitor.initialized.clear()
+                                self.monitor.set_paused(value)
                             elif name == "dismiss":
                                 if not value or self.monitor.active == value:
                                     self.monitor.active = None
                         except Exception as error:
+                            if name == "prepare" and isinstance(value, dict) and hasattr(self.monitor, "project_snapshot"):
+                                self.events.put(("projects_applied", {**value,
+                                    "snapshot": self.monitor.project_snapshot(),
+                                    "error": f"后台准备失败（{type(error).__name__}），监听范围未应用。"}))
                             self.events.put(("status", f"操作失败（{type(error).__name__}），请检查配置或目录后再次点击原操作重试。"))
                             self.events.put(("generation", {"busy": False, "retryable": bool(getattr(self.monitor, "failed_generations", {})),
                                                             "reason": "出题未完成，请检查配置后重试。"}))
                         finally:
-                            self.events.put(("action_done", name))
+                            if name != "retry_generation":
+                                self.events.put(("action_done", name))
                     if self.stop.is_set():
                         break
                     coordinator = getattr(self, "coordinator", None)
@@ -683,34 +822,57 @@ class DesktopApp:
                                 DesktopApp._apply_projects_serial(self, remaining)
                             self.jobs.put(("prepare", None))
                             continue
+                    if background is not None and background.done():
+                        completed, background = background, None
+                        if background_kind == "retry_generation":
+                            self.events.put(("action_done", "retry_generation"))
+                        result = completed.result()
+                    else:
+                        result = None
+                    now = time.monotonic()
+                    if background is None and retry_requested:
+                        retry_requested = False
+                        background_kind = "retry_generation"
+                        background = executor.submit(self.monitor.retry_generation)
+                        background.add_done_callback(lambda _: wake.set())
+                    elif background is None and now >= next_scan:
+                        next_scan = now + 3
+                        if self.monitor.engine is not None and getattr(self.monitor, "capabilities_ready", True):
+                            background_kind = "poll"
+                            background = executor.submit(self.monitor.poll)
+                            background.add_done_callback(lambda _: wake.set())
+                    # Practice operations refresh immediately, independent of scan deadlines.
                     if self.monitor.engine is None or not getattr(self.monitor, "capabilities_ready", True):
-                        self.stop.wait(.2)
+                        wake.wait(max(0, min(next_scan, next_project_cleanup) - time.monotonic()))
                         continue
-                    result = self.monitor.poll()
                     labels = {
                         "paused": "监听已暂停。",
-                        "watching": f"正在监听 {result['projects']} 个项目；文件稳定 15 秒后检查知识点。",
+                        "watching": f"正在监听 {result['projects'] if result else 0} 个项目；文件稳定 15 秒后检查知识点。",
                         "quiz_ready": "成功：题目准备就绪。",
                         "generation_unavailable": "出题失败，请查看原因并重试；监听仍在运行。",
                         "project_unavailable": "监听目录不可用，请恢复目录或添加有效项目后重试。",
                         "bank_empty": "当前无题库：请重新下载并构建来源后练习。",
                         "not_ready": "请在侧栏完成使用准备。",
                     }
-                    self.events.put(("status", labels[result["state"]]))
-                    DesktopApp._post_dashboard(self, result["state"])
+                    if result is not None:
+                        self.events.put(("status", labels[result["state"]]))
+                        DesktopApp._post_dashboard(self, result["state"])
                     # Post the read-only pending list so the badge/page stay fresh
                     # even while browsing; viewing the list never delivers.
                     self.events.put(("pending", self.monitor.list_pending()))
-                    gate = getattr(self.monitor, "delivery_paused", None)
-                    quiz = None if gate is not None and gate.is_set() else self.monitor.take_quiz()
-                    if quiz:
-                        self.events.put(("quiz", quiz))
+                    # Background arrivals are list-only. Delivery is explicit,
+                    # through practice_open, and never opens or focuses a window.
                 except Exception as error:
                     self.events.put(("status", f"本次检测失败（{type(error).__name__}），稍后自动重试；请检查监听目录或配置。"))
                     self.events.put(("generation", {"busy": False, "retryable": bool(getattr(self.monitor, "failed_generations", {})),
                                                     "reason": "本次检测未完成。"}))
-                self.stop.wait(3)
+                deadline = min(next_scan, next_project_cleanup)
+                # A running model completion wakes us; do not poll an expired scan deadline.
+                if background is not None:
+                    deadline = next_project_cleanup
+                wake.wait(max(0, deadline - time.monotonic()))
         finally:
+            executor.shutdown(wait=True, cancel_futures=True)
             self.worker_done.set()
 
     def _post_dashboard(self, state):
@@ -718,7 +880,9 @@ class DesktopApp:
         # monitor decisions, pending queues, credential receipts or learning data.
         try:
             engine = self.monitor.engine
-            roots = engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
+            roots = getattr(self.monitor, "applied_roots", None)
+            if roots is None:
+                roots = engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
             stats = engine.get_learning_stats()
             self.events.put(("dashboard", {"state": state, "projects": roots, "stats": stats}))
         except Exception:
@@ -791,6 +955,21 @@ class DesktopApp:
                     panel = self._cached_pages.get("projects")
                     if panel is not None:
                         panel.forget_removed_projects(removed)
+                elif name == "project_states":
+                    old_order = (self._project_snapshot.get("version", -1), self._project_snapshot.get("sequence", -1))
+                    if (value.get("version", 0), value.get("sequence", 0)) >= old_order:
+                        self._project_snapshot = value
+                        panel = self._cached_pages.get("projects")
+                        if panel is not None:
+                            panel.set_runtime_snapshot(value)
+                elif name == "projects_applied":
+                    snapshot = value["snapshot"]
+                    old_order = (self._project_snapshot.get("version", -1), self._project_snapshot.get("sequence", -1))
+                    if (snapshot.get("version", 0), snapshot.get("sequence", 0)) >= old_order:
+                        self._project_snapshot = snapshot
+                    panel = self._cached_pages.get("projects")
+                    if panel is not None:
+                        panel.application_finished(value["request"], value["roots"], snapshot, value["error"])
                 elif name == "cleanup_progress":
                     panel = self._cached_pages.get("bank")
                     if panel is not None:
@@ -818,19 +997,17 @@ class DesktopApp:
                 elif name == "dashboard":
                     self._render_dashboard(value)
                 elif name == "quiz":
-                    self._show_quiz(value)
+                    # Legacy/background producers must not replace the answer view.
+                    if value and all(q["quiz_id"] != value["quiz_id"] for q in self._pending_items):
+                        self._pending_items.append(value)
+                        self._refresh_practice()
+                elif name == "practice_opened":
+                    self._finish_practice_open(value)
                 elif name == "pending":
                     # Read-only pending list from the worker; update badge + page
                     # without delivering anything or stealing the current page.
                     self._pending_items = value
                     self._refresh_practice()
-                elif name == "enter_quiz":
-                    # The worker delivered a specific quiz (按题进入); park it as
-                    # the current question through the controller.
-                    self.pending_actions.discard("enter_quiz")
-                    self.practice.finish_enter(value)
-                    self._refresh_practice()
-                    self._sync_actions()
                 elif name == "bank_cleaned":
                     result, error = value
                     panel = self._cached_pages.get("bank")
@@ -874,18 +1051,6 @@ class DesktopApp:
                 elif name == "history":
                     if self._cached_history is not None:
                         self._cached_history.receive(*value)
-                elif name == "repractice":
-                    page_id, result = value
-                    self.pending_actions.discard("repractice")
-                    if self.history_page is not None and self.history_page.page_id == page_id:
-                        self.history_page.retry_finished(result)
-                    if result.get("ok"):
-                        # Historical repractice enters the practice center and
-                        # preserves its source; it never overwrites an automatic
-                        # question (the controller queues it instead).
-                        self._show_quiz(result["quiz"], manual=True)
-                        self._navigate_page("practice")
-                    self._sync_actions()
                 elif name == "grade":
                     if value.get("grade", value).get("ok") and self._cached_history is not None:
                         self._cached_history.dirty = True
@@ -916,7 +1081,7 @@ class DesktopApp:
                                  "pending_jobs": self.jobs.qsize(), "closing": self.closing,
                                  "status": self.status.get(),
                                  "bank_inventory_ready": bool(getattr(self._cached_pages.get("bank"), "inventory", None))}
-        self.poll = self.root.after(200, self._drain)
+        self.poll = self.root.after(25, self._drain)
 
     def _show_quiz(self, quiz, manual=False):
         """Route a delivered quiz through the single practice entry point."""
@@ -924,6 +1089,35 @@ class DesktopApp:
             return
         self.practice.deliver(quiz, manual=manual)
         self._refresh_practice()
+
+    def _finish_practice_open(self, result):
+        request = result["request"]
+        if self._practice_request != request:
+            return
+        self._practice_request = None
+        self.pending_actions.discard(request["kind"])
+        quiz = result["quiz"]
+        if quiz and request["kind"] == "enter_quiz" and quiz.get("quiz_id") != request["target"]:
+            quiz = None
+            result = {**result, "failed": True, "note": "题目加载结果已失效，请重新进入。"}
+        # Content teardown clears the reservation, so a late delivery is ignored.
+        applied = self.practice.complete_open(request["reservation"], quiz)
+        if applied:
+            window = self.practice_window
+            if window is not None:
+                window.notice.set(result["note"] if not quiz else "")
+                if not quiz and not result["failed"] and request["kind"] == "next_quiz":
+                    window.hide()
+            if result["note"]:
+                self.status.set(result["note"])
+        elif self.practice_window is not None:
+            self.practice_window.notice.set("题库或题目状态已变化，请从列表重新进入。")
+        if request["kind"] == "repractice":
+            if self._cached_history is not None and self._cached_history.page_id == request["page_id"]:
+                self._cached_history.retry_finished({"ok": applied and bool(quiz),
+                                                      "note": result["note"] or "题目已失效，请重新进入。"})
+        self._refresh_practice()
+        self._sync_actions()
 
     def _can_submit_quiz(self, quiz_id):
         return (not self.closed and not self.closing
@@ -976,12 +1170,16 @@ class DesktopApp:
     def _destroyed(self, event):
         if event.widget is self.root:
             self.closed = True
+            self.practice_window = None
+            self._practice_request = None
+            self.practice.on_changed = None
             if self._cached_history is not None and not self._cached_history.closed:
                 self._cached_history.closed = True
                 self._cached_history.executor.shutdown(wait=False, cancel_futures=True)
             # A running bank build is cancellable; cooperate on teardown.
             self.tasks.cancel_build()
             self.stop.set()
+            self.jobs.put(("wake", None))
             self.monitor.ui_post = None
             cancel_timer(self.root, self.poll)
             cancel_timer(self.root, self.focus_timer)
@@ -993,7 +1191,10 @@ class DesktopApp:
         if True:
             self.window_placement.save()
             self.closing = True
+            if self.practice_window is not None:
+                self.practice_window.hide()
             self.stop.set()
+            self.jobs.put(("wake", None))
             # A cancellable bank build cooperates on exit; a non-cancellable
             # model save completes through its panel's own close-wait logic.
             self.tasks.cancel_build()

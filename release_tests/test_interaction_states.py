@@ -146,7 +146,7 @@ def quiz(identifier):
 
 
 def practice_page(app):
-    return app._page_frame("practice")
+    return app._answer_window()
 
 
 def test_submission_failure_retry_late_grade_and_duplicate_guard():
@@ -206,7 +206,7 @@ def test_generation_busy_disables_retry_and_close_waits_for_worker(monkeypatch):
         app._drain()
         assert "不支持取消" in app.task_hint.get()
         assert app.retry_button.instate(["disabled"])
-        assert not app._request_action("resume")
+        assert app._request_action("resume")  # Existing practice stays available during generation.
         app.events.put(("generation", {"busy": False, "retryable": True, "reason": "HTTP 429，请稍后重试。"}))
         app._drain()
         assert "失败" in app.listen_state.get() and "429" in app.task_hint.get()

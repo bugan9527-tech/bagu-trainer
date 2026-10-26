@@ -142,28 +142,30 @@ def test_mixed_text_resize_focus_and_scroll(display_roots, scale):
         quiz = {"quiz_id": "display", "knowledge_point": "中文 English Cache consistency",
                 "project_root": path, "question": mixed * 5, "options": {l: model + mixed for l in "ABCD"}}
         app._show_quiz(quiz)
-        practice = app._page_frame("practice")
+        practice = app._answer_window()
         app._navigate_page("practice")
+        practice.show()
+        practice.geometry("%dx%d" % practice.minsize())
         app.root.update()
         narrow = practice.question_label.winfo_reqheight()
-        app.root.state("zoomed")
+        practice.state("zoomed")
         app.root.update()
         assert practice.question_label.winfo_reqheight() < narrow
-        app.root.state("normal")
-        app.root.geometry("%dx%d" % app.root.minsize())
+        practice.state("normal")
+        practice.geometry("%dx%d" % practice.minsize())
         app.practice.apply_grade({"ok": True, "correct": True, "correct_answer": "B", "analysis": mixed * 8 + "ANALYSIS-END",
                                   "schedule": {"interval_days": 2}})
-        focus_key(app.root, practice.view.canvas, "<End>")
+        focus_key(practice, practice.view.canvas, "<End>")
         assert practice.view.canvas.yview()[1] == 1, (app.root.focus_get(), practice.view.follow_end, practice.view.region)
         # Late wrapping/content growth must not undo an explicit End key.
         app.feedback.set(app.feedback.get() + "\n" + mixed)
         app.root.update()
         assert practice.view.canvas.yview()[1] == 1
-        focus_key(app.root, practice.view.canvas, "<Home>")
+        focus_key(practice, practice.view.canvas, "<Home>")
         assert practice.view.canvas.yview()[0] == 0
         assert "ANALYSIS-END" in app.feedback.get()
-        assert_inside(practice.submit_button, app.root)
-        assert_inside(practice.dismiss_button, app.root)
+        assert_inside(practice.submit_button, practice)
+        assert_inside(practice.dismiss_button, practice)
     finally:
         cancel_timers(app.root)
         app.stop.set()
@@ -173,34 +175,34 @@ def test_mixed_text_resize_focus_and_scroll(display_roots, scale):
 def test_quiz_shortcuts_preserve_text_keys_and_require_intent(display_roots):
     display_roots(1)
     from bagu_trainer.desktop import DesktopApp
-    from bagu_trainer.ui_layout import MessageArea
+    from tkinter import ttk
     app = DesktopApp(SimpleNamespace(paused=False))
     try:
         app._show_quiz({"quiz_id": "keyboard", "question": "中 English？", "options": {l: l for l in "ABCD"}})
-        practice = app._page_frame("practice")
+        practice = app._answer_window()
+        queue_page = app._page_frame("practice")
         app._navigate_page("practice")
+        practice.show()
         app.root.update()
-        focus_key(app.root, practice, "<Control-c>")
-        focus_key(app.root, practice, "<Control-a>")
-        focus_key(app.root, practice, "<Alt-b>")
+        canvas = practice.view.canvas
+        focus_key(practice, canvas, "<Control-c>")
+        focus_key(practice, canvas, "<Control-a>")
+        focus_key(practice, canvas, "<Alt-b>")
         assert app.answer.get() == "" and app.jobs.empty()
-        focus_key(app.root, practice, "<b>")
+        focus_key(practice, canvas, "<b>")
         assert app.answer.get() == "B"
-        focus_key(app.root, practice, "<Return>")
+        focus_key(practice, canvas, "<Return>")
         assert app.jobs.empty()
-        if not practice.pending_list.winfo_ismapped():
-            practice.compact_toggle.invoke()
-            app.root.update()
-        focus_key(app.root, practice.pending_list, "<a>")
-        focus_key(app.root, practice.pending_list, "<Control-Return>")
-        if practice.compact_expanded:
-            practice.compact_toggle.invoke()
-            app.root.update()
-        focus_key(app.root, practice.dismiss_button, "<Control-Return>")
+        focus_key(app.root, queue_page.pending_list, "<a>")
+        focus_key(app.root, queue_page.pending_list, "<Control-Return>")
+        entry = ttk.Entry(practice.view.body)
+        entry.grid()
+        focus_key(practice, entry, "<a>")
+        focus_key(practice, entry, "<Control-Return>")
         assert app.answer.get() == "B" and app.jobs.empty()
-        focus_key(app.root, practice, "<Control-Return>")
+        focus_key(practice, canvas, "<Control-Return>")
         assert app.jobs.get_nowait() == ("submit", ("keyboard", "B"))
-        focus_key(app.root, practice, "<Control-Return>")
+        focus_key(practice, canvas, "<Control-Return>")
         assert app.jobs.empty() and practice.submit_button.instate(["disabled"])
         app.practice.apply_grade({"ok": True, "correct": True, "correct_answer": "B", "analysis": "解释"})
         assert practice.dismiss_button.instate(["!disabled"])

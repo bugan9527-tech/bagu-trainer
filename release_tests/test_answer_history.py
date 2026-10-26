@@ -320,7 +320,7 @@ def test_real_tk_manual_practice_uses_existing_submit_and_keyboard(history):
         pump(app, lambda: app.practice.current is not None and app.practice.manual)
         qid = app.practice.quiz_id
         assert "缓存空值可避免" not in app.feedback.get()
-        practice = app._page_frame("practice")
+        practice = app._answer_window()
         practice.focus_force()
         practice.event_generate("<KeyPress-a>")
         app.root.update()
@@ -375,7 +375,7 @@ def test_real_monitor_continues_file_observation_and_queues_during_history(histo
         store.create_quiz("from-watch", "historic-kp", {**SNAP, "review": True}, "ready", root, "", NOW, NOW+3600)
         engine.session._hydrate_pending_locked(store)
         return [1], [1], 0, []
-    monkeypatch.setattr(engine, "_generate_matches_locked", generate)
+    monkeypatch.setattr(engine, "_generate_matches", generate)
     monitor.poll()
     baseline = dict(engine.session._diff_readers)
     monitor.delivery_paused.set()
@@ -404,17 +404,25 @@ def test_worker_finishes_already_queued_submission_on_exit(history):
     assert done.is_set() and store.attempt_count(qid) == 1
 
 
-def test_dismiss_each_deferred_popup_keeps_its_own_id(history):
+def test_next_validates_deferred_quizzes_and_keeps_its_own_id(history):
     app, _, errors = desktop(history)
     try:
         quiz = {"quiz_id": "first", "question": SNAP["question"], "options": SNAP["options"]}
         app._show_quiz(quiz)
         app._show_quiz({**quiz, "quiz_id": "second"})
-        assert len(app.practice.deferred) == 1
+        app._pending_items = [quiz, {**quiz, "quiz_id": "second"}]
+        app._refresh_practice()
         app.practice.dismiss()
+        assert app.practice.quiz_id == "first"
+        name, request = app.jobs.get_nowait()
+        assert name == "practice_open" and request["kind"] == "next_quiz"
+        app._finish_practice_open(dict(request=request, quiz={**quiz, "quiz_id": "second"}, failed=False, note=""))
         assert app.practice.quiz_id == "second"
-        app.practice.dismiss()  # before worker has consumed the first dismissal
-        assert [app.jobs.get_nowait(), app.jobs.get_nowait()] == [("dismiss", "first"), ("dismiss", "second")]
+        app._pending_items = [{**quiz, "quiz_id": "second"}]
+        app._refresh_practice()
+        app.practice.dismiss()
+        assert app.practice.quiz_id == "second" and app.practice_window.state() == "withdrawn"
+        assert app.jobs.empty()
         assert not errors
     finally:
         dispose(app)

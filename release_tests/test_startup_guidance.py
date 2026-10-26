@@ -2,6 +2,7 @@
 import json
 import sys
 import urllib.request
+from types import SimpleNamespace
 
 import pytest
 
@@ -144,7 +145,8 @@ def test_restored_configuration_notice_and_existing_page_actions(installation, l
             app.root.destroy()
 
     monkeypatch.setattr(DesktopApp, "run", run)
-    coordinator = startup.StartupCoordinator(engine_loader=lambda: object())
+    coordinator = startup.StartupCoordinator(
+        engine_loader=lambda: SimpleNamespace(load_config=config.load_config))
     coordinator.run()
     assert len(apps) == 1 and coordinator.state == "stopped"
     assert_preserved(before, installation)

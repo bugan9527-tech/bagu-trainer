@@ -140,7 +140,7 @@ def test_worker_pause_resume_preserves_ui_counts_selection_and_grade(pending, mo
         toggle(True)
         toggle(False)
         toggle(True)
-        assert not page.submit_button.instate(["disabled"])
+        assert not app._answer_window().submit_button.instate(["disabled"])
         assert app.practice.submit()
         pump(app, lambda: app.practice.submit_state == "finished", timeout=6)
         result = app.feedback.get()
@@ -182,7 +182,7 @@ def test_history_retry_enter_and_submit_remain_available_while_paused(history, m
         practice.enter_button.invoke()
         pump(app, lambda: not app.practice.busy and not app.pending_actions, timeout=6)
         app.practice.choose("A")
-        practice.submit_button.invoke()
+        app._answer_window().submit_button.invoke()
         pump(app, lambda: app.practice.submit_state == "finished", timeout=6)
         assert SNAP["analysis"] in app.feedback.get()
         assert store.attempt_count(qid) == store.attempt_count("original-1") == 1

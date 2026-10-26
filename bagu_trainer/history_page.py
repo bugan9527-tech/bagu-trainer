@@ -280,13 +280,14 @@ class HistoryPage:
     def retry(self):
         if self.closed or self.retry_busy or self.retry_button.instate(["disabled"]):
             return
+        if not self.app._start_repractice(self.page_id, self.detail_id):
+            self.retry_reason.set("请等待当前切题或提交完成后重练。")
+            return
         self.retry_busy = True
         self.retry_button.state(["disabled"])
         self.home_button.state(["disabled"])
         self.back_button.state(["disabled"])
         self.retry_reason.set("正在准备快照重练…重复操作已阻止。")
-        self.app.pending_actions.add("repractice")
-        self.app.jobs.put(("repractice", (self.page_id, self.detail_id)))
 
     def retry_finished(self, result):
         self.retry_busy = False

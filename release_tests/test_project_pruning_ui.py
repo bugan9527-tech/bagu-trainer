@@ -34,10 +34,8 @@ def test_cleanup_and_restored_notices_do_not_hide_readiness(installation, ready,
         for above, below in zip(visible, visible[1:]):
             assert above.winfo_y() + above.winfo_height() <= below.winfo_y()
         if not ready:
-            from PIL import ImageGrab
-            x, y = app.root.winfo_rootx(), app.root.winfo_rooty()
-            ImageGrab.grab(bbox=(x, y, x + app.root.winfo_width(),
-                                y + app.root.winfo_height())).save(tmp_path / "dashboard.png")
+            from release_tests.window_capture import capture_window
+            capture_window(app.root, tmp_path / "dashboard.png")
     finally:
         app.root.destroy()
 

@@ -27,6 +27,7 @@ def dashboard(installation, monkeypatch):
         engine=engine, paused=False, active=None, initialized=set(), waiting={},
         failed_generations={}, ui_state={}, poll=lambda: {"state": "watching", "projects": 1},
         take_quiz=lambda: None, list_pending=lambda: [],
+        reset=lambda: None, set_paused=lambda value: setattr(monitor, "paused", value),
     )
     app = DesktopApp(monitor)
     app.root.withdraw()
@@ -63,7 +64,8 @@ def test_bank_and_model_roundtrips_keep_the_same_window(installation, model_http
             assert app.shell.current_page == page_key
             assert app.shell.current_frame is app._cached_pages[page_key]
             assert app.root is original_root
-            assert not [w for w in app.root.winfo_children() if w.winfo_class() == "Toplevel"]
+            assert [w for w in app.root.winfo_children() if w.winfo_class() == "Toplevel"] == [app.practice_window]
+            assert app.practice_window.state() == "withdrawn"
             assert app.worker_thread is not None and app.worker_thread.is_alive() and not app.stop.is_set()
             assert app.monitor.initialized == {"baseline-kept"}
             app.shell.buttons["dashboard"].invoke()

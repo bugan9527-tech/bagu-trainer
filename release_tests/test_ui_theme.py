@@ -169,21 +169,23 @@ def test_all_windows_keep_actions_visible_at_minimum_size(monkeypatch, scale):
                 "question": "较长的中文题干。" * 25,
                 "options": {letter: "中文选项解释。" * 12 for letter in "ABCD"}}
         app._show_quiz(quiz)
-        practice = app._page_frame("practice")
+        practice = app._answer_window()
         app._navigate_page("practice")
+        practice.show()
+        practice.geometry("%dx%d" % practice.minsize())
         app.root.update()
-        practice.focus_force()
+        practice.view.canvas.focus_force()
         practice.update()
-        practice.event_generate("<KeyPress-b>")
+        practice.view.canvas.event_generate("<KeyPress-b>")
         assert app.answer.get() == "B"
-        practice.event_generate("<Control-Return>")
+        practice.view.canvas.event_generate("<Control-Return>")
         assert app.jobs.get_nowait() == ("submit", ("theme-only", "B"))
         assert practice.submit_button.instate(["disabled"])
         # Long questions remain in the scrollable body rather than clipped.
         canvas = practice.view.canvas
         assert canvas.bbox("all")[3] > canvas.winfo_height()
         canvas.yview_moveto(1)
-        assert_inside(practice.submit_button, app.root)
+        assert_inside(practice.submit_button, practice)
     finally:
         cancel_timers(app.root)
         app.stop.set()

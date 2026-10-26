@@ -333,12 +333,14 @@ def phase(options):
                         (watched / "query.py").write_text(CHANGE.replace("100", "101"), encoding="utf-8")
                     return False
                 app._navigate_page("practice")
-                practice = app._page_frame("practice")
+                practice = app._answer_window()
+                check(practice.master is app.root and practice.winfo_ismapped(),
+                      "Answer window is not visible or owned by the main window")
                 check(practice.submit_button.instate(["!disabled"]), "Practice cannot be answered")
                 check(quality_skipped[0], "Rejected first review was not silently skipped")
                 check(engine.session._state["quizzes"][monitor.active]["grounding"]["review"]["context_relevant"],
                       "Displayed quiz has no approved review")
-                capture("quiz", app.root)
+                capture("quiz", practice)
                 first_quiz[0] = monitor.active
                 app.answer.set("B")
                 assert app.practice.submit()
@@ -354,10 +356,10 @@ def phase(options):
                 check(state["concepts"][0][1] == 1 and state["concepts"][0][2] == 0, "Concept state missing")
                 write_json(work / "first-state.json", state)
                 milestones.append("grade_analysis_and_sqlite_persistence")
-                practice = app._page_frame("practice")
+                practice = app._answer_window()
                 app.root.update_idletasks()
                 practice.view._key_position(1)  # same explicit End action as a reader
-                capture("grade-and-review", app.root)
+                capture("grade-and-review", practice)
                 app.practice.dismiss()
                 from bagu_trainer import onboarding
                 from bagu_trainer.settings_window import ModelSettingsWindow
@@ -429,7 +431,8 @@ def phase(options):
             elif stage[0] == 7:
                 if not app.practice.current or not app.practice.current.get("manual_review"):
                     return False
-                check(app.shell.current_page == "practice", "Repractice did not enter embedded practice")
+                check(app.shell.current_page == "practice" and app._answer_window().winfo_ismapped(),
+                      "Repractice did not open the answer window")
                 retry = engine.session._store.get_quiz(app.practice.quiz_id)
                 check(retry["snapshot"]["retry_of_quiz_id"] == first_quiz[0], "Repractice source association lost")
                 app.practice.choose("A")
@@ -445,7 +448,7 @@ def phase(options):
                 check(state["attempts"] == 2 and state["answered"] == 2, "History/repractice persistence missing")
                 write_json(work / "first-state.json", state)
                 milestones.append("history_snapshot_repractice_and_idempotent_second_answer")
-                capture("repractice-grade", app.root)
+                capture("repractice-grade", app._answer_window())
                 app.practice.dismiss()
                 cleanup()
                 return True

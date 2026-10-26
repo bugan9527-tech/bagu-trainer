@@ -8,10 +8,10 @@
 | 激活题库、匹配器 | `engine.kb` / `engine.matcher` | `BankBuildService` 在构建锁内发布题库版本；`TaskController` 报告 built 后，桌面串行工作线程执行 `reload_bank()`。此批保留模块级装配。 |
 | 待答题、完整答题快照、去重指纹 | `engine.session: EngineSession` | 列表读取、主动选题、自动交付、继续练习共用实例状态；未作答题与冷却按项目隔离，人工历史重练沿用既有例外。 |
 | 学习数据库连接 | `EngineSession` | 首次使用打开并水合；`Store` 自己的锁保护 SQLite 操作。作答、复习计划、来源关联格式不变；历史读取仍使用独立只读连接，避免被出题网络请求阻塞。 |
-| 引擎状态锁、内容代次 | `EngineSession` | 可重入锁覆盖采集、匹配、生成、清理和学习写入；手动出题在锁外等待网络结果，用会话身份及内容代次拒绝迟到结果。 |
+| 引擎状态锁、内容代次 | `EngineSession` | 可重入锁保护生成预留、结果提交、清理及学习写入；模型请求在锁外运行，提交前重新检查会话身份、题库代次、任务预留、项目范围、待答去重和复习冷却。 |
 | 文件差异读取器 | `EngineSession` | `observe_project()` 安装桌面 `ActivityDiffReader` 并采集脱敏上下文；移除项目只删除其基线，不删除历史。 |
-| 防抖、待检查上下文、出题失败重试、暂停、当前自动交付题号 | `DesktopMonitor` | 既有串行线程调用；暂停/浏览控制自动交付，不禁止用户主动练习。监测层不再操作队列、连接或状态锁。 |
-| 桌面 jobs/events、退出等待 | `DesktopApp` | Tk 主线程只更新页面；数据工作线程执行监测、作答、题库重载、来源删除。退出先完成已排队写入并等待后台任务，再关闭会话。 |
+| 防抖、待检查上下文、出题失败重试、暂停、当前自动交付题号 | `DesktopMonitor` | 监听/生成执行器维护防抖；短时元数据锁保护项目应用、暂停及清理，文件扫描和模型网络请求不占用元数据锁。暂停/浏览控制自动交付，不禁止用户主动练习。 |
+| 桌面 jobs/events、退出等待 | `DesktopApp` | Tk 主线程只更新页面；可唤醒的数据工作线程执行作答、切题、题库重载和来源删除，独立执行器串行处理扫描、生成和显式重试。退出先完成已排队写入并等待后台任务，再关闭会话。 |
 | 题库构建任务 | `TaskController` / `BankTask` | 取消事件、构建进度、built/applied 状态随应用存活，切换页面不取消构建。继续复用现有控制器。 |
 | 作答草稿、提交状态、迟到判分、延迟显示队列 | `PracticeController` | 以 quiz_id 关联结果；页面切换保留选择，提交与切题互斥，迟到判分不覆盖另一题。继续复用现有练习页面。 |
 | 页面可见性、查询结果 | 现有页面 / 桌面 shell | 历史页独立读取学习历史；页面实例及状态继续缓存。删除后仍由既有 `bank_cleaned` 事件清理页面与练习缓存。 |
@@ -20,7 +20,7 @@
 
 ```text
 StartupCoordinator.prepare -> engine.initialize (仅重建已关闭的会话)
-DesktopApp.worker -> DesktopMonitor.poll -> engine.observe_project
+DesktopApp.generation executor -> DesktopMonitor.poll -> engine.observe_project
                                        -> engine.generate_activity
 DesktopMonitor -> session.list_pending / take_quiz / enter_quiz / resume_quiz
 PracticeController -> jobs.submit -> engine.submit_answer -> Store.record_attempt
@@ -72,3 +72,9 @@ DesktopApp 安全退出 -> StartupCoordinator.finally -> session.close
 最终核心组 84 项通过（含新增 9 项业务回归）；包含 Tk 的完整相关组 263 项通过、1 项删除确认按钮可见性检查失败。重构前独立快照同组为 255 项通过、同一项失败。没有放宽断言或将完整验收标记为全部通过。
 
 本次命令、最终数量与 JUnit 记录见 `validation/core-refactor-20261025/REPORT.md`。初次沙箱内 Tk 未能加载 `init.tcl`，该结果不会作为界面验收通过；相关检查已另行在临时合成数据下执行。此处没有运行安装包生命周期或覆盖历史验收结论。
+
+## 2026-10-27：切题延迟修复
+
+工作队列入队及退出事件唤醒 worker，三秒监听期限独立计算；生成执行器和练习队列分离。自动与手动活动入口复用同一生成预留流程，锁外请求后重验会话及题库代次，旧任务只能释放自己的预留。清理仍持会话锁完成数据库/文件维护，迟到请求不能重开已关闭的库或恢复删除内容。已有明确重试和计费去重规则保持不变。
+
+下一题在 worker 上查询实时待答列表并通过 enter_quiz 交付，UI 在结果到达前保留原题；列表浏览不交付。已提交结果按题号回写，未提交选择继续保留。相关性能、竞态和后台测试命令见 validation/practice-latency/REPORT.md；scripts/test_hidden_desktop.py 在独立 Windows 桌面运行 Tk 验证，不切换当前桌面。

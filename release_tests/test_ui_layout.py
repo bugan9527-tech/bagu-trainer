@@ -86,13 +86,15 @@ def test_window_content_reflows_and_actions_remain_reachable(monkeypatch, scale,
         quiz = {"quiz_id": "layout", "knowledge_point": "缓存一致性", "project_root": text,
                 "question": text, "options": {letter: text for letter in "ABCD"}}
         app._show_quiz(quiz)
-        practice = app._page_frame("practice")
+        practice = app._answer_window()
         app._navigate_page("practice")
+        practice.show()
+        practice.geometry("%dx%d" % practice.minsize())
         app.root.update()
-        assert_inside(practice.submit_button, app.root)
+        assert_inside(practice.submit_button, practice)
         app.root.update()
         narrow_height = practice.question_label.winfo_reqheight()
-        app.root.geometry("%dx%d" % app.theme.px((1000, 700)))
+        practice.geometry("%dx%d" % app.theme.px((1000, 700)))
         app.root.update()
         assert practice.question_label.winfo_reqheight() <= narrow_height
         assert practice.question_label.cget("wrap") == "word"
@@ -106,7 +108,7 @@ def test_window_content_reflows_and_actions_remain_reachable(monkeypatch, scale,
             app.root.update()
             assert practice.view.canvas.yview()[1] == 1
         # Footer belongs to the outer layout, so scrolling cannot hide it.
-        assert_inside(practice.submit_button, app.root)
+        assert_inside(practice.submit_button, practice)
         assert all(button.instate(["disabled"]) for button in practice.option_buttons)
     finally:
         cancel_timers(app.root)

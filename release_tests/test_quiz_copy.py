@@ -36,6 +36,7 @@ def enter(practice):
     root.geometry("1000x800+0+0")
     controller.enter({**quiz, "question": QUESTION, "options": OPTIONS,
                       "answer": "D", "analysis": "不得读取题目对象中的隐藏解析"})
+    page.show()
     root.update()
     return root, page, controller, submissions
 
@@ -92,43 +93,15 @@ def test_mouse_selection_ctrl_c_context_copy_and_readonly(practice, field, monke
         assert widget.cget("state") == "disabled"
 
 
-def test_copy_buttons_visibility_success_failure_expiry_and_next_question(practice):
+def test_dedicated_copy_controls_removed_and_hidden_solution_never_shown(practice):
     root, page, ctl, _ = enter(practice)
-    expected = QUESTION + "\n\n" + "\n".join(f"{letter}. {OPTIONS[letter]}" for letter in "ABCD")
-    with clipboard(root):
-        assert page.copy_solution_button.instate(["disabled"])
-        page._copy_solution()  # Guard the callback, not just the button state.
-        assert root.clipboard_get() == "未复制答案"
-        page.copy_question_button.invoke()
-        assert root.clipboard_get() == expected
-        assert "隐藏解析" not in root.clipboard_get()
-        ctl.choose("B")
-        ctl.submit()
-        assert page.copy_solution_button.instate(["disabled"])
-        page._copy_solution()
-        assert root.clipboard_get() == expected
-        ctl.apply_grade({"ok": False, "note": "网络错误，请重试", "analysis": "不能复制"})
-        assert page.copy_solution_button.instate(["disabled"])
-        page._copy_solution()
-        assert root.clipboard_get() == expected
-        ctl.apply_grade({"ok": False, "note": "已过期", "correct_answer": "D", "analysis": "不能复制"})
-        assert ctl.submit_state == "finished" and page.copy_solution_button.instate(["disabled"])
-        page._copy_solution()
-        assert root.clipboard_get() == expected
-        ctl.enter({"quiz_id": "second", "question": QUESTION, "options": OPTIONS})
-        ctl.choose("A")
-        ctl.submit()
-        ctl.apply_grade({"ok": True, "correct": True, "correct_answer": "A", "analysis": ANALYSIS}, "A")
-        assert page.copy_solution_button.instate(["!disabled"])
-        page.copy_solution_button.invoke()
-        assert root.clipboard_get() == "正确答案：A\n\n解析：\n" + ANALYSIS
-        ctl.enter({"quiz_id": "third", "question": "新题", "options": OPTIONS, "manual_review": True})
-        assert page.copy_solution_button.instate(["disabled"])
-        assert ANALYSIS not in page.feedback_label.get("1.0", "end-1c")
-        root.clipboard_clear()
-        root.clipboard_append("新题未提交")
-        page._copy_solution()
-        assert root.clipboard_get() == "新题未提交"
+    for name in ("copy_question_button", "copy_solution_button", "_copy_question", "_copy_solution"):
+        assert not hasattr(page, name)
+    assert "隐藏解析" not in page.feedback_label.get("1.0", "end-1c")
+    ctl.apply_grade({"ok": True, "correct": True, "correct_answer": "A", "analysis": ANALYSIS}, "A")
+    assert ANALYSIS in page.feedback_label.get("1.0", "end-1c")
+    ctl.enter({"quiz_id": "third", "question": "新题", "options": OPTIONS, "manual_review": True})
+    assert ANALYSIS not in page.feedback_label.get("1.0", "end-1c")
 
 
 def test_text_selection_shortcuts_do_not_change_answer_and_ctrl_enter_still_submits(practice):
@@ -163,8 +136,8 @@ def test_a_to_d_navigation_without_selection_and_tab_out_of_text(practice):
     assert ctl.answer.get() == "A"
     key(root, text, "<Tab>")
     assert root.focus_get() is not text
-    page.pending_list.focus_force()
-    key(root, page.pending_list, "<Control-Return>")
+    page.queue_page.pending_list.focus_force()
+    key(root, page.queue_page.pending_list, "<Control-Return>")
     assert not submissions
 
 
@@ -194,12 +167,11 @@ def test_history_copy_uses_saved_snapshot_and_repractice_hides_solution(history)
                 assert widget.cget("state") == "disabled"
             page.retry_button.invoke()
             pump(app, lambda: app.practice.current is not None and app.practice.manual)
-            practice_page = app._page_frame("practice")
-            assert practice_page.copy_solution_button.instate(["disabled"])
+            practice_page = app._answer_window()
+            assert not hasattr(practice_page, "copy_solution_button")
             assert ANALYSIS not in practice_page.feedback_label.get("1.0", "end-1c")
             app.root.clipboard_clear()
             app.root.clipboard_append("重练未提交")
-            practice_page._copy_solution()
             assert app.root.clipboard_get() == "重练未提交"
             assert not calls and not errors
     finally:

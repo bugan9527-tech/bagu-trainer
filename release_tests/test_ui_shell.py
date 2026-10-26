@@ -268,7 +268,8 @@ def test_all_seven_routes_use_one_shell_and_mount_real_pages(history):
                 expected = {"practice": "PracticePage", "projects": "ProjectsPanel", "bank": "BankPanel",
                             "model": "ModelPanel", "settings": "SettingsPage"}
                 assert type(app.shell.current_frame).__name__ == expected[name]
-            assert not any(child.winfo_class() == "Toplevel" for child in app.root.winfo_children())
+            assert [child for child in app.root.winfo_children() if child.winfo_class() == "Toplevel"] == [app.practice_window]
+            assert app.practice_window.state() == "withdrawn"
             assert app.monitor.delivery_paused.is_set() == (name not in ("dashboard", "practice"))
             assert app.worker_thread is worker and worker.is_alive() and not app.stop.is_set()
             assert app.monitor.initialized == {"baseline-kept"}
@@ -307,7 +308,7 @@ def test_sidebar_keyboard_and_real_pages_at_four_tk_scales(history, monkeypatch,
         practice.event_generate("<Return>")
         app.root.update()
         assert app.shell.current_page == "practice"
-        assert app._page_frame("practice").view.canvas.winfo_height() >= app.theme.px(96)
+        assert app._page_frame("practice").pending_list.winfo_height() >= app.theme.px(48)
         practice.focus_force()
         app.root.update()
         practice.event_generate("<Tab>")
@@ -362,6 +363,7 @@ def test_new_navigation_preserves_draft_defers_each_id_and_submits_once(history)
         assert app.practice.submit() is False  # finished: no resubmit
         assert store.attempt_count(first["quiz_id"]) == 1
         app.practice.dismiss()
+        pump(app, lambda: app.practice.quiz_id == second["quiz_id"])
         assert app.practice.quiz_id == second["quiz_id"] and app.practice.submit_state == "ready"
         assert store.attempt_count(second["quiz_id"]) == 0 and not calls and not errors
     finally:

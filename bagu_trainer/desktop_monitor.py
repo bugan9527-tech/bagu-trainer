@@ -1,5 +1,7 @@
 """Debounced desktop activity detection; UI-independent and testable offline."""
 import hashlib
+import copy
+import os
 import time
 import difflib
 import logging
@@ -100,6 +102,8 @@ class ActivityDiffReader(DiffReader):
 
 class DesktopMonitor:
     def __init__(self, engine, quiet_seconds=15, clock=time.monotonic):
+        self._state_lock = threading.RLock()
+        self._epoch = 0
         self.engine = engine
         self.capabilities_ready = engine is not None
         self.quiet_seconds = quiet_seconds
@@ -113,114 +117,275 @@ class DesktopMonitor:
         self.failed_generations = {}
         self.failure_reasons = {}
         self.generating = False
+        self.stop = threading.Event()
         self.ui_post = None
         self.ui_state = {"window_state": "starting"}
+        self.applied_roots = None
+        self.project_states = {}
+        self.project_aliases = {}
+        self.scope_version = 0
+        self._status_sequence = 0
+        self._last_project_snapshot = None
 
-    def poll(self):
-        if self.engine is None or not self.capabilities_ready:
-            return {"state": "not_ready", "projects": 0}
-        if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
+    def project_snapshot(self):
+        """Pure data only; safe for immediate page entry without doing any I/O."""
+        with self._state_lock:
+            return {"version": self.scope_version, "sequence": self._status_sequence,
+                    "ready": self.engine is not None and self.capabilities_ready,
+                    "paused": self.paused, "applied_roots": list(self.applied_roots or []),
+                    "aliases": dict(self.project_aliases),
+                    "projects": copy.deepcopy(self.project_states)}
+
+    def _publish_projects_locked(self):
+        snapshot = self.project_snapshot()
+        snapshot.pop("sequence")
+        if snapshot == self._last_project_snapshot:
+            return
+        self._last_project_snapshot = snapshot
+        self._status_sequence += 1
+        if self.ui_post:
+            self.ui_post(("project_states", self.project_snapshot()))
+
+    def _project_state_locked(self, root, state, *, success=False, reason="", activity=""):
+        old = self.project_states.get(root, {})
+        self.project_states[root] = {"state": state,
+            "last_success_at": time.time() if success else old.get("last_success_at"),
+            "reason": reason, "activity": activity}
+
+    def apply_projects(self, paths):
+        """Commit only after session application succeeds; retire old scan reports."""
+        with self._state_lock:
+            engine = self.engine
+            if engine is None:
+                raise RuntimeError("监听引擎尚未就绪")
+            normalize = getattr(engine, "_normalize_project_root", str)
+            aliases = {os.path.normcase(os.path.abspath(str(path))): normalize(path) for path in paths}
+            roots = list(dict.fromkeys(aliases.values()))
+            old_roots = set(self.applied_roots or self.initialized)
+            removed = old_roots - set(roots)
+            session = getattr(engine, "session", None)
+            setter = getattr(session, "set_watch_roots", None)
+            if setter is not None:
+                setter(roots)
+            elif removed and session is not None:
+                session.forget_projects(removed)
+            self._epoch += 1
+            self.scope_version += 1
+            self.applied_roots = roots
+            self.project_aliases = aliases
+            self.initialized.intersection_update(roots)
+            for mapping in (self.observed, self.waiting, self.failed_generations,
+                            self.failure_reasons, self.project_states):
+                for root in set(mapping) - set(roots):
+                    mapping.pop(root, None)
+            for root in roots:
+                if root not in self.project_states:
+                    self._project_state_locked(root, "not_ready" if not self.capabilities_ready else
+                                               "paused" if self.paused else "initializing")
+            self._publish_projects_locked()
+
+    def set_ready(self, ready):
+        with self._state_lock:
+            self._epoch += 1
+            self.capabilities_ready = ready
+            for root in self.applied_roots or []:
+                if not ready:
+                    self._project_state_locked(root, "not_ready")
+                elif self.project_states.get(root, {}).get("state") == "not_ready":
+                    self._project_state_locked(root, "paused" if self.paused else "initializing")
+            self._publish_projects_locked()
+
+    def reset(self):
+        """Retire callbacks before a bank cleanup can replace persisted content."""
+        with self._state_lock:
+            self._epoch += 1
             self.waiting.clear()
+            self.initialized.clear()
             self.failed_generations.clear()
             self.failure_reasons.clear()
-            return {"state": "bank_empty", "projects": 0}
-        if self.paused:
+            for root in self.applied_roots or []:
+                self._project_state_locked(root, "not_ready" if not self.capabilities_ready else
+                                           "paused" if self.paused else "initializing")
+            self._publish_projects_locked()
+
+    def set_paused(self, paused):
+        with self._state_lock:
+            self._epoch += 1
+            self.paused = paused
+            self.waiting.clear()
+            self.initialized.clear()
+            for root in self.applied_roots or []:
+                self._project_state_locked(root, "paused" if paused else "initializing")
+            self._publish_projects_locked()
+
+    def poll(self):
+        if self.stop.is_set():
             return {"state": "paused", "projects": 0}
-        engine = self.engine
-        roots = engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
-        roots = list(dict.fromkeys(engine._normalize_project_root(r) for r in roots))
-        for removed in self.initialized - set(roots):
-            self.waiting.pop(removed, None)
-            self.observed.pop(removed, None)
-        self.initialized.intersection_update(roots)
-        self.failed_generations = {r: f for r, f in self.failed_generations.items() if r in roots}
-        self.failure_reasons = {r: reason for r, reason in self.failure_reasons.items()
-                                if r in self.failed_generations}
-        result = {"state": "watching" if roots else "not_ready", "projects": len(roots)}
-        for root in roots:
-            # All desktop activity shares the same scoped context and snapshot pipeline.
-            info = engine.observe_project(
-                root, reader_factory=ActivityDiffReader if root not in self.initialized else None)
-            if info.get("error"):
-                result["state"] = "project_unavailable"
-                continue
-            context = info.get("context") or ""
-            fingerprint = hashlib.sha256(context.encode("utf-8")).hexdigest()
-            if root not in self.initialized:
-                # Login establishes a baseline; old uncommitted work is not a new task.
-                self.initialized.add(root)
-                self.observed[root] = fingerprint
-                continue
-            changes = info.get("changes") or {}
-            if changes.get("source") == "git" and not context.strip():
-                self.waiting.pop(root, None)
-                self.observed[root] = fingerprint
-            elif context.strip() and fingerprint != self.observed.get(root):
-                self.observed[root] = fingerprint
-                previous = self.waiting.get(root)
-                if previous and changes.get("source") == "watch":
-                    info = dict(info)
-                    limit = int(engine.load_config().get("context_char_limit") or 4000)
-                    info["context"] = (previous[1]["context"] + "\n" + context)[-limit:]
-                self.waiting[root] = (self.clock(), info)
-            pending = self.waiting.get(root)
-            if pending is None or self.clock() - pending[0] < self.quiet_seconds:
-                continue
-            self.waiting.pop(root, None)
-            info = pending[1]
-            state = self._generate(root, info)
+        tasks = []
+        with self._state_lock:
+            if (self.engine is not None and self.capabilities_ready and not self.paused
+                    and not getattr(getattr(self.engine, "kb", None), "explicit_empty", False)
+                    and self.applied_roots is None):
+                self.apply_projects(self.engine.load_config().get("project_roots", [str(self.engine.PROJECT_ROOT)]))
+            epoch = self._epoch
+            token = getattr(getattr(self.engine, "session", None), "_generation_token", None)
+            revision = token() if token is not None else None
+        result = self._scan(tasks, epoch)
+        for root, info in tasks:
+            state = self._generate(root, info, epoch=epoch, revision=revision)
             if state != "watching":
                 result["state"] = state
-        if result["state"] == "watching" and self.failed_generations:
-            result["state"] = "generation_unavailable"
         return result
 
-    def _generate(self, root, info, failed_ids=()):
-        engine = self.engine
-        self.generating = True
+    def _scan(self, tasks, epoch):
+        with self._state_lock:
+            if epoch != self._epoch:
+                return {"state": "watching", "projects": 0}
+            if self.engine is None or not self.capabilities_ready:
+                self.set_ready(False)
+                return {"state": "not_ready", "projects": 0}
+            if getattr(getattr(self.engine, "kb", None), "explicit_empty", False):
+                self.waiting.clear()
+                self.failed_generations.clear()
+                self.failure_reasons.clear()
+                for root in self.applied_roots or []:
+                    self._project_state_locked(root, "not_ready", reason="当前无可用题库，请先完成准备。")
+                self._publish_projects_locked()
+                return {"state": "bank_empty", "projects": 0}
+            if self.paused:
+                return {"state": "paused", "projects": 0}
+            engine = self.engine
+            roots = list(self.applied_roots or [])
+            for removed in self.initialized - set(roots):
+                self.waiting.pop(removed, None)
+                self.observed.pop(removed, None)
+            self.initialized.intersection_update(roots)
+            self.failed_generations = {r: f for r, f in self.failed_generations.items() if r in roots}
+            self.failure_reasons = {r: reason for r, reason in self.failure_reasons.items()
+                                    if r in self.failed_generations}
+            result = {"state": "watching" if roots else "not_ready", "projects": len(roots)}
+        for root in roots:
+            with self._state_lock:
+                if self.stop.is_set() or epoch != self._epoch or self.paused:
+                    break
+                baseline = root not in self.initialized
+            # Filesystem I/O must not hold the metadata or learning session lock.
+            try:
+                info = engine.observe_project(root, reader_factory=ActivityDiffReader if baseline else None)
+            except Exception as error:
+                info = {"error": True, "check_reason": "目录无法检查，请确认权限或连接。" if isinstance(error, OSError)
+                        else "项目检查未完成，请稍后重试。"}
+            with self._state_lock:
+                if epoch != self._epoch or self.paused:
+                    continue
+                if info.get("error"):
+                    result["state"] = "project_unavailable"
+                    self._project_state_locked(root, "unavailable", reason=info.get("check_reason") or "目录不可用，请确认路径、权限或连接。")
+                    self._publish_projects_locked()
+                    continue
+                self._project_state_locked(root, "watching", success=True)
+                self._publish_projects_locked()
+                context = info.get("context") or ""
+                fingerprint = hashlib.sha256(context.encode("utf-8")).hexdigest()
+                if root not in self.initialized:
+                    # Login establishes a baseline; old uncommitted work is not a new task.
+                    self.initialized.add(root)
+                    self.observed[root] = fingerprint
+                    continue
+                changes = info.get("changes") or {}
+                if changes.get("source") == "git" and not context.strip():
+                    self.waiting.pop(root, None)
+                    self.observed[root] = fingerprint
+                elif context.strip() and fingerprint != self.observed.get(root):
+                    self.observed[root] = fingerprint
+                    previous = self.waiting.get(root)
+                    if previous and changes.get("source") == "watch":
+                        info = dict(info)
+                        limit = int(engine.load_config().get("context_char_limit") or 4000)
+                        info["context"] = (previous[1]["context"] + "\n" + context)[-limit:]
+                    self.waiting[root] = (self.clock(), info)
+                pending = self.waiting.get(root)
+                if pending is None or self.clock() - pending[0] < self.quiet_seconds:
+                    if pending is not None:
+                        self.project_states[root]["activity"] = "等待文件稳定"
+                        self._publish_projects_locked()
+                    continue
+                self.waiting.pop(root, None)
+                info = pending[1]
+                tasks.append((root, info))
+            with self._state_lock:
+                if epoch == self._epoch and root in self.project_states:
+                    self.project_states[root]["activity"] = "等待文件稳定" if root in self.waiting else ""
+                    self._publish_projects_locked()
+        with self._state_lock:
+            if result["state"] == "watching" and self.failed_generations:
+                result["state"] = "generation_unavailable"
+        return result
+
+    def _generate(self, root, info, failed_ids=(), *, epoch=None, revision=None):
+        with self._state_lock:
+            if self.stop.is_set() or (epoch is not None and epoch != self._epoch):
+                return "watching"
+            epoch = self._epoch
+            engine = self.engine
+            revision = revision or engine.session._generation_token()
+            self.generating = True
+            if root in self.project_states:
+                self.project_states[root]["activity"] = "正在出题"
+                self._publish_projects_locked()
         if self.ui_post:
             self.ui_post(("generation", {"busy": True, "project": root}))
         try:
             matches, generated, skipped, unavailable = engine.generate_activity(
-                root, info, retry_failed_ids=failed_ids)
-            service_failures = [item for item in unavailable if item.get("failure_kind") != "quality"]
-            if service_failures:
-                self.failed_generations[root] = (info, tuple(item["kp_id"] for item in service_failures))
-                reason = service_failures[0].get("reason") or "暂时无法出题，请检查模型配置后重试。"
-                self.failure_reasons[root] = reason
-                state = "generation_unavailable"
-            else:
-                self.failed_generations.pop(root, None)
-                self.failure_reasons.pop(root, None)
-                if generated:
-                    reason = "题目已准备好，可开始作答。"
-                elif unavailable:
-                    reason = "等待新的代码改动。"
-                elif not matches:
-                    reason = (f"已检测到代码改动，但未匹配到题库知识点（当前 {len(engine.kb.all())} 个）；"
-                              "未调用 AI。可更换或扩充题库来源。")
+                root, info, retry_failed_ids=failed_ids, revision=revision, stop=self.stop)
+            with self._state_lock:
+                if (epoch != self._epoch or engine is not self.engine
+                        or not engine.session._accepts_result(revision)):
+                    if self.ui_post:
+                        self.ui_post(("generation", {"busy": False, "retryable": False, "reason": ""}))
+                    return "watching"
+                service_failures = [item for item in unavailable if item.get("failure_kind") != "quality"]
+                if service_failures:
+                    self.failed_generations[root] = (info, tuple(item["kp_id"] for item in service_failures))
+                    reason = service_failures[0].get("reason") or "暂时无法出题，请检查模型配置后重试。"
+                    self.failure_reasons[root] = reason
+                    state = "generation_unavailable"
                 else:
-                    reason = f"已匹配知识点，其中 {skipped} 个因重复、待答或复习冷却跳过；未调用 AI。"
-                state = "quiz_ready" if generated else "watching"
-            # A quiet skip in one project must not replace another project's
-            # actionable service diagnostic with a generic waiting message.
-            if self.failed_generations and not service_failures:
-                failed_root = next(iter(self.failed_generations))
-                reason = self.failure_reasons.get(failed_root) or "暂时无法出题，请检查模型配置后重试。"
-                state = "generation_unavailable"
-            elif self.paused and state == "watching":
-                state = "paused"
-            # Counts only: never persist project code, prompts or credentials.
-            logging.getLogger("bagu-trainer").info(
-                "[monitor] checked files=%d context_chars=%d bank=%d matched=%d generated=%d skipped=%d unavailable=%d state=%s",
-                len((info.get("changes") or {}).get("files") or []), len(info["context"]),
-                len(engine.kb.all()), len(matches), len(generated), skipped, len(unavailable), state)
-            if self.ui_post:
-                self.ui_post(("generation", {"busy": False, "state": state, "reason": reason,
-                                              "retryable": bool(self.failed_generations)}))
-            return state
+                    self.failed_generations.pop(root, None)
+                    self.failure_reasons.pop(root, None)
+                    if generated:
+                        reason = "题目已准备好，可开始作答。"
+                    elif unavailable:
+                        reason = "等待新的代码改动。"
+                    elif not matches:
+                        reason = (f"已检测到代码改动，但未匹配到题库知识点（当前 {len(engine.kb.all())} 个）；"
+                                  "未调用 AI。可更换或扩充题库来源。")
+                    else:
+                        reason = f"已匹配知识点，其中 {skipped} 个因重复、待答或复习冷却跳过；未调用 AI。"
+                    state = "quiz_ready" if generated else "watching"
+                # A quiet skip in one project must not replace another project's
+                # actionable service diagnostic with a generic waiting message.
+                if self.failed_generations and not service_failures:
+                    failed_root = next(iter(self.failed_generations))
+                    reason = self.failure_reasons.get(failed_root) or "暂时无法出题，请检查模型配置后重试。"
+                    state = "generation_unavailable"
+                elif self.paused and state == "watching":
+                    state = "paused"
+                # Counts only: never persist project code, prompts or credentials.
+                logging.getLogger("bagu-trainer").info(
+                    "[monitor] checked files=%d context_chars=%d bank=%d matched=%d generated=%d skipped=%d unavailable=%d state=%s",
+                    len((info.get("changes") or {}).get("files") or []), len(info["context"]),
+                    len(engine.kb.all()), len(matches), len(generated), skipped, len(unavailable), state)
+                if self.ui_post:
+                    self.ui_post(("generation", {"busy": False, "state": state, "reason": reason,
+                                                  "retryable": bool(self.failed_generations)}))
+                return state
         finally:
             self.generating = False
+            with self._state_lock:
+                if epoch == self._epoch and root in self.project_states:
+                    self.project_states[root]["activity"] = ""
+                    self._publish_projects_locked()
 
     def retry_generation(self):
         """Explicit retry of failed items; preserve scope, dedupe and cooldown."""
@@ -231,15 +396,18 @@ class DesktopMonitor:
         if self.paused:
             return {"state": "paused", "projects": 0}
         engine = self.engine
-        roots = engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
+        roots = self.applied_roots if self.applied_roots is not None else engine.load_config().get("project_roots", [str(engine.PROJECT_ROOT)])
         roots = {engine._normalize_project_root(r) for r in roots}
         result = {"state": "watching" if roots else "not_ready", "projects": len(roots)}
-        for root, (info, failed_ids) in list(self.failed_generations.items()):
+        with self._state_lock:
+            epoch = self._epoch
+            failures = list(self.failed_generations.items())
+        for root, (info, failed_ids) in failures:
             if root not in roots:
                 self.failed_generations.pop(root, None)
                 self.failure_reasons.pop(root, None)
                 continue
-            result["state"] = self._generate(root, info, failed_ids)
+            result["state"] = self._generate(root, info, failed_ids, epoch=epoch)
         return result
 
     def take_quiz(self):

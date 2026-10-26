@@ -16,7 +16,7 @@ def test_manual_generation_retry_bypasses_only_failed_fingerprint(env, monkeypat
         return original(question, text)
     monkeypatch.setattr(env["gen"], "generate", generate)
     monitor = DesktopMonitor(engine, quiet_seconds=0, clock=lambda: clock[0])
-    monitor.ui_post = events.append
+    monitor.ui_post = lambda event: events.append(event) if event[0] == "generation" else None
     monitor.poll()
     context[0] = "redis cache new code"
     assert monitor.poll()["state"] == "generation_unavailable"
@@ -41,9 +41,8 @@ def test_generator_exception_becomes_safe_retryable_unavailable(env, monkeypatch
     def broken(*_):
         raise OSError("must-not-display-secret")
     monkeypatch.setattr(env["gen"], "generate", broken)
-    with engine.session._lock:
-        _, generated, _, unavailable = engine._generate_matches_locked(
-            "redis changed", str(engine.PROJECT_ROOT), 1, engine._caps())
+    _, generated, _, unavailable = engine.generate_activity(
+        str(engine.PROJECT_ROOT), {"context": "redis changed"})
     assert not generated and "OSError" in unavailable[0]["reason"]
     assert unavailable[0]["failure_kind"] == "service"
     assert "must-not-display" not in unavailable[0]["reason"]
@@ -76,12 +75,13 @@ def test_mixed_success_retry_never_replays_successful_kp(env, monkeypatch):
             return {"available": False, "unavailable_reason": "暂不可用"}
         return original(q, text)
     monkeypatch.setattr(env["gen"], "generate", generate)
-    with engine.session._lock:
-        _, generated, _, failed = engine._generate_matches_locked("redis", str(engine.PROJECT_ROOT), 2, engine._caps())
-        assert len(generated) == 1 and failed[0]["kp_id"] == "failed"
-        _, retried, _, failures = engine._generate_matches_locked("redis", str(engine.PROJECT_ROOT), 2, engine._caps(), retry_failed_ids={"failed"})
-        assert len(retried) == 1 and not failures
-        engine._generate_matches_locked("redis", str(engine.PROJECT_ROOT), 2, engine._caps(), retry_failed_ids={"failed"})
+    env["cfg"]["max_quizzes_per_hit"] = 2
+    _, generated, _, failed = engine.generate_activity(str(engine.PROJECT_ROOT), {"context": "redis"})
+    assert len(generated) == 1 and failed[0]["kp_id"] == "failed"
+    _, retried, _, failures = engine.generate_activity(
+        str(engine.PROJECT_ROOT), {"context": "redis"}, retry_failed_ids={"failed"})
+    assert len(retried) == 1 and not failures
+    engine.generate_activity(str(engine.PROJECT_ROOT), {"context": "redis"}, retry_failed_ids={"failed"})
     assert calls == {"success": 1, "failed": 2}
 
 
@@ -100,7 +100,7 @@ def test_quality_skip_is_silent_and_only_new_context_generates_again(env, monkey
 
     monkeypatch.setattr(env["gen"], "generate", generate)
     monitor = DesktopMonitor(engine, quiet_seconds=0)
-    monitor.ui_post = events.append
+    monitor.ui_post = lambda event: events.append(event) if event[0] == "generation" else None
     monitor.poll()
     context[0] = "redis first edit"
     assert monitor.poll()["state"] == "watching"
@@ -126,7 +126,7 @@ def test_unknown_or_service_failure_remains_retryable(env, monkeypatch, kind, ex
     monkeypatch.setattr(env["gen"], "generate", lambda *_: dict(candidate))
     monitor = DesktopMonitor(engine)
     events = []
-    monitor.ui_post = events.append
+    monitor.ui_post = lambda event: events.append(event) if event[0] == "generation" else None
     root = engine._normalize_project_root(engine.PROJECT_ROOT)
     assert monitor._generate(root, {"context": "redis edit"}) == "generation_unavailable"
     assert monitor.failed_generations and events[-1][1]["retryable"]
@@ -144,7 +144,7 @@ def test_quality_skip_clears_only_its_project_service_failure(env, monkeypatch, 
         "available": False, "failure_kind": next(results), "unavailable_reason": "fixed diagnostic"})
     monitor = DesktopMonitor(engine)
     events = []
-    monitor.ui_post = events.append
+    monitor.ui_post = lambda event: events.append(event) if event[0] == "generation" else None
     for root in roots:
         assert monitor._generate(root, {"context": "redis edit"}) == "generation_unavailable"
     monitor._generate(roots[0], {"context": "redis edit"}, ("test-kp-1",))
@@ -199,7 +199,7 @@ def test_pause_during_quality_skip_stays_paused(env, monkeypatch):
 
     monkeypatch.setattr(env["gen"], "generate", generate)
     events = []
-    monitor.ui_post = events.append
+    monitor.ui_post = lambda event: events.append(event) if event[0] == "generation" else None
     root = engine._normalize_project_root(engine.PROJECT_ROOT)
     assert monitor._generate(root, {"context": "redis edit"}) == "paused"
     assert events[-1][1]["state"] == "paused"
