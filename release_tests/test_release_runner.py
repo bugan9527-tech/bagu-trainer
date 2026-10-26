@@ -1,6 +1,8 @@
 """A combined report must preserve failed, skipped and crashed modules."""
 import xml.etree.ElementTree as ET
 import json
+from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -33,3 +35,36 @@ def test_old_bundle_is_rejected_before_any_test_process(tmp_path, monkeypatch):
     root = ET.parse(tmp_path / "report.xml").getroot()
     assert root.get("errors") == "1"
     assert "0.3.0" in root.find(".//error").text
+
+
+@pytest.mark.parametrize("module", ["test_ui_shell", "test_ui_display", "test_ui_layout", "test_ui_theme"])
+def test_native_ui_cases_run_once_in_separate_processes_and_keep_failures(tmp_path, monkeypatch, module):
+    source = tmp_path / "release_tests"
+    source.mkdir()
+    (source / (module + ".py")).write_text("# synthetic collection only\n")
+    output = tmp_path / "report.xml"
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    monkeypatch.setattr(runner.sys, "argv", ["run_release_tests.py", "--module", module,
+                                           "--output", str(output)])
+    target = SimpleNamespace(bundle=tmp_path / "bundle", archive=tmp_path / "bundle.zip", describe=lambda: {})
+    monkeypatch.setattr(runner, "resolve_target", lambda *_: target)
+    monkeypatch.setattr(runner, "validate_target", lambda *_: {"passed": True})
+    cases = ["release_tests/" + module + ".py::test_layout[100]",
+             "release_tests/" + module + ".py::test_layout[150]"]
+    executed = []
+    def run(command, **_kwargs):
+        if "--collect-only" in command:
+            return SimpleNamespace(returncode=0, stdout="\n".join(cases), stderr="")
+        executed.append(command[5])
+        assert "-W" in command and command[command.index("-W") + 1] == "error"
+        report = next(part.split("=", 1)[1] for part in command if part.startswith("--junitxml="))
+        failed = len(executed) == 1
+        Path(report).write_text('<testsuites><testsuite tests="1" failures="' + str(int(failed)) +
+                               '" errors="0" skipped="0"><testcase name="layout">' +
+                               ('<failure message="synthetic failure"/>' if failed else '') +
+                               '</testcase></testsuite></testsuites>')
+        return SimpleNamespace(returncode=int(failed))
+    monkeypatch.setattr(runner.subprocess, "run", run)
+    assert runner.main() == 1
+    assert executed == cases
+    assert ET.parse(output).getroot().get("failures") == "1"

@@ -17,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts.portable_artifacts import require_new, resolve_target, validate_target
 
+CASE_ISOLATED_MODULES = frozenset({"test_ui_shell", "test_ui_display", "test_ui_layout", "test_ui_theme"})
+
 
 def merge_reports(reports, output, process_errors=()):
     result = ET.Element("testsuites")
@@ -71,9 +73,10 @@ def main():
     targets = []
     for module in modules:
         relative = module.relative_to(ROOT).as_posix()
-        if module.stem in {"test_ui_shell", "test_ui_display"}:
+        if module.stem in CASE_ISOLATED_MODULES:
             # Native window state survives Tk destruction on Windows. Each
-            # shell scenario (including each scale) needs a fresh GUI process.
+            # shell/layout scenario (including each scale) needs a fresh GUI
+            # process; Tcl initialization state can also outlive a dead root.
             collected = subprocess.run([sys.executable, "-B", "-m", "pytest", relative,
                 "--collect-only", "-q", "-p", "no:cacheprovider"], cwd=ROOT, env=environment, capture_output=True, text=True)
             cases = [line.strip() for line in collected.stdout.splitlines() if line.startswith(relative + "::")]
