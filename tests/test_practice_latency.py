@@ -35,18 +35,35 @@ def seed(env, monkeypatch, count=3):
                                                             {"context": f"redis edit {index}"})
         assert not failures
         quizzes.extend(generated)
-    return quizzes
+    # Windows clocks can give multiple generated quizzes the same timestamp.
+    # The pending list then breaks ties by id; next-question expectations must
+    # follow the actual displayed queue rather than generation-call order.
+    order = {item["quiz_id"]: index for index, item in enumerate(engine.session.list_pending())}
+    return sorted(quizzes, key=lambda quiz: order[quiz["quiz_id"]])
 
 
 @pytest.fixture
 def live_app(env, monkeypatch, request):
+    mode = getattr(request, "param", "idle")
+    if mode == "tied-clock":
+        import uuid
+        now = engine._now()
+        monkeypatch.setattr(engine, "_now", lambda: now)
+        ids = iter(uuid.UUID(int=index << 96) for index in (3, 2, 1))
+        original_uuid = uuid.uuid4
+        def next_id():
+            try:
+                return next(ids)
+            except StopIteration:
+                return original_uuid()
+        monkeypatch.setattr(uuid, "uuid4", next_id)
+        mode = "idle"
     quizzes = seed(env, monkeypatch)
     monitor = DesktopMonitor(engine)
     scanned = threading.Event()
     polls = []
     entered, release = threading.Event(), threading.Event()
     tail_entered, tail_release = threading.Event(), threading.Event()
-    mode = getattr(request, "param", "idle")
     gc.collect()  # Release prior Tk cycles on the UI thread before starting workers.
     actual_poll = monitor.poll
     original_generate = env["gen"].generate
@@ -295,6 +312,7 @@ def test_queued_bank_maintenance_finishes_while_model_is_blocked(live_app, monke
     assert not any(q["kp_id"] == "background-new" for q in app.monitor.list_pending())
 
 
+@pytest.mark.parametrize("live_app", ["idle", "tied-clock"], indirect=True)
 def test_next_cycles_pending_order_and_restores_unsubmitted_drafts(live_app):
     app, quizzes, _ = live_app
     app.practice.choose("B")
