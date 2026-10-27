@@ -274,6 +274,11 @@ def _caps() -> dict:
     }
 
 
+def _quiz_deadline(now, caps):
+    # Keep persisted deadlines finite and compatible with SQLite/JSON readers.
+    return now + caps["ttl"] if caps["ttl"] > 0 else 253402300799.0
+
+
 def _norm_context(ctx: str) -> str:
     """归一化上下文：压缩多余空白，保证换行/缩进差异不构成新指纹"""
     return " ".join((ctx or "").split())
@@ -374,13 +379,13 @@ def _generate_matches(ctx: str, project_root: str, top_n: int, caps: dict,
                 now = _now()
                 status = "delivered" if deliver_generated else "ready"
                 delivered_at = now if deliver_generated else None
-                quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
+                quiz.update({"_created_at": now, "_expires_at": _quiz_deadline(now, caps),
                              "_status": status})
                 quiz_id = uuid.uuid4().hex[:8]
                 store.create_quiz(
                     quiz_id, q["id"], _quiz_snapshot(quiz), status,
                     str(project_root), f"{source_summary} | kp={q['id']}"[:200],
-                    now, now + caps["ttl"], delivered_at=delivered_at)
+                    now, _quiz_deadline(now, caps), delivered_at=delivered_at)
                 owner._state["quizzes"][quiz_id] = quiz
                 public = {"hits": list(hits), "score": score,
                           "confidence": r["confidence"], "margin": r["margin"],
@@ -393,7 +398,7 @@ def _generate_matches(ctx: str, project_root: str, top_n: int, caps: dict,
                     "created_at": now,
                     "delivered_at": delivered_at,
                     "answered_at": None,
-                    "expires_at": now + caps["ttl"],
+                    "expires_at": _quiz_deadline(now, caps),
                     **public,
                 })
                 generated.append(public)
@@ -601,14 +606,14 @@ def create_quiz(knowledge_point_id: str, context: str = "") -> dict:
             return {"ok": False, "note": "题库内容已变化，已丢弃过期出题结果。"}
         caps = _caps()
         now = _now()
-        quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
+        quiz.update({"_created_at": now, "_expires_at": _quiz_deadline(now, caps),
                      "_status": "delivered"})
         session._state["quizzes"][quiz_id] = quiz
         session._get_store_locked().create_quiz(
             quiz_id, quiz.get("kp_id") or knowledge_point_id,
             _quiz_snapshot(quiz), "delivered", str(PROJECT_ROOT),
             f"手动 create_quiz | kp={knowledge_point_id}",
-            now, now + caps["ttl"], delivered_at=now)
+            now, _quiz_deadline(now, caps), delivered_at=now)
         session._cleanup_locked(caps)
     return {"ok": True, **_public_quiz(quiz_id, quiz, str(PROJECT_ROOT)),
             "next": "用 submit_answer(quiz_id, 用户答案) 判分并获取解析"}
@@ -637,7 +642,7 @@ def submit_answer(quiz_id: str, answer: str) -> dict:
         if failure:
             session._cleanup_locked(_caps())
             return {"ok": False, "note": failure}
-        if (quiz.get("_expires_at") or 0) <= now:
+        if _caps()["ttl"] > 0 and (quiz.get("_expires_at") or 0) <= now:
             session._get_store_locked().set_status(quiz_id, "expired")
             session._state["quizzes"].pop(quiz_id, None)
             session._state["pending"] = [p for p in session._state["pending"]
@@ -739,7 +744,7 @@ def repractice_attempt(attempt_id):
             return {"ok": False, "note": detail.get("retry_reason") or detail.get("note")}
         store = session._get_store_locked()
         now, caps = _now(), _caps()
-        row = store.unfinished_repractice(int(attempt_id), now)
+        row = store.unfinished_repractice(int(attempt_id), now, expire=caps["ttl"] > 0)
         if row is None:
             quiz = dict(detail["snapshot"])
             quiz.update(review=True, manual_review=True, retry_of_attempt_id=int(attempt_id),
@@ -747,7 +752,7 @@ def repractice_attempt(attempt_id):
             quiz["kp_id"] = detail.get("kp_id") or quiz.get("kp_id") or ""
             qid = uuid.uuid4().hex
             store.create_quiz(qid, quiz["kp_id"], quiz, "delivered", detail.get("project_root"),
-                              detail.get("source_summary"), now, now + caps["ttl"], delivered_at=now)
+                              detail.get("source_summary"), now, _quiz_deadline(now, caps), delivered_at=now)
             row = store.get_quiz(qid)
         qid, quiz = row["quiz_id"], dict(row["snapshot"])
         quiz.update(_status=row["status"], _created_at=row["created_at"], _expires_at=row["expires_at"])
@@ -911,9 +916,9 @@ class EngineSession:
         return self._store
 
     def _hydrate_pending_locked(self, store):
-        """服务重启水合：库中未过期且未作答的题回到内存队列（幂等，不重复添加）"""
+        """Restore unfinished work, applying expiry only for an explicit TTL."""
         now = self._now()
-        for row in store.load_pending(now):
+        for row in store.load_pending(now, expire=_caps()["ttl"] > 0):
             qid = row["quiz_id"]
             if qid in self._state["quizzes"]:
                 continue
@@ -978,7 +983,7 @@ class EngineSession:
         for p in self._state["pending"]:
             quiz = self._state["quizzes"].get(p["quiz_id"], {})
             if p["status"] in ("ready", "delivered") and (
-                    p["expires_at"] <= now or
+                    (caps["ttl"] > 0 and p["expires_at"] <= now) or
                     _generation_failure(quiz, require_review=not quiz.get("review"))):
                 p["status"] = "expired"
                 store.set_status(p["quiz_id"], "expired")
@@ -989,7 +994,7 @@ class EngineSession:
         #   DB 侧仅淘汰未作答的（过期=放弃作答）；已作答行永久保留 answered，
         #   作为复习快照来源与学习历史（复习可能安排在 TTL 之后到期）。
         for qid, q in list(self._state["quizzes"].items()):
-            if q.get("_expires_at", float("inf")) <= now:
+            if caps["ttl"] > 0 and q.get("_expires_at", float("inf")) <= now:
                 self._state["quizzes"].pop(qid, None)
                 if q.get("_status") != "answered":
                     store.set_status(qid, "expired")
@@ -1065,7 +1070,7 @@ class EngineSession:
             for field in ("manual_review", "retry_of_attempt_id", "retry_of_quiz_id"):
                 quiz.pop(field, None)
             quiz["review"] = True
-            quiz.update({"_created_at": now, "_expires_at": now + caps["ttl"],
+            quiz.update({"_created_at": now, "_expires_at": _quiz_deadline(now, caps),
                          "_status": "delivered"})
             quiz_id = uuid.uuid4().hex[:8]
             self._state["quizzes"][quiz_id] = quiz
@@ -1078,13 +1083,13 @@ class EngineSession:
                 "created_at": now,
                 "delivered_at": now,
                 "answered_at": None,
-                "expires_at": now + caps["ttl"],
+                "expires_at": _quiz_deadline(now, caps),
                 **public,
             })
             store.create_quiz(
                 quiz_id, row["kp_id"], _quiz_snapshot(quiz), "delivered", root,
                 f"到期复习 | kp={row['kp_id']} | 上次作答 {hist['answered_at']}"[:200],
-                now, now + caps["ttl"], delivered_at=now)
+                now, _quiz_deadline(now, caps), delivered_at=now)
             return public
         return None
 

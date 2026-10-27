@@ -206,13 +206,14 @@ class Store:
             conn.close()
         return out
 
-    def unfinished_repractice(self, attempt_id, now):
+    def unfinished_repractice(self, attempt_id, now, *, expire=True):
         with self._lock:
             row = self._conn.execute(
-                "SELECT quiz_id FROM quizzes WHERE status IN ('ready','delivered') AND expires_at > ?"
+                "SELECT quiz_id FROM quizzes WHERE status IN ('ready','delivered')"
+                + (" AND expires_at > ?" if expire else "") +
                 " AND json_extract(CASE WHEN json_valid(snapshot) THEN snapshot ELSE '{}' END,"
                 " '$.retry_of_attempt_id') = ? ORDER BY created_at DESC LIMIT 1",
-                (now, attempt_id)).fetchone()
+                (now, attempt_id) if expire else (attempt_id,)).fetchone()
         return self.get_quiz(row[0]) if row else None
 
     # ---- quizzes ----
@@ -337,20 +338,23 @@ class Store:
         out["snapshot"] = json.loads(out.get("snapshot") or "{}")
         return out
 
-    def load_pending(self, now):
-        """服务重启水合：返回未过期且未作答的题（按创建顺序）。
-        同时把已过期的 ready/delivered 题写通为 expired。
+    def load_pending(self, now, *, expire=True):
+        """Load unfinished work; expire it only when TTL is explicitly enabled.
+
+        Previously retired rows stay retired, including rejected snapshots.
         """
         self._writable()
         with self._lock:
-            self._conn.execute(
-                "UPDATE quizzes SET status='expired'"
-                " WHERE status IN ('ready','delivered') AND expires_at <= ?",
-                (now,))
+            if expire:
+                self._conn.execute(
+                    "UPDATE quizzes SET status='expired'"
+                    " WHERE status IN ('ready','delivered') AND expires_at <= ?",
+                    (now,))
             rows = self._conn.execute(
                 "SELECT * FROM quizzes"
-                " WHERE status IN ('ready','delivered') AND expires_at > ?"
-                " ORDER BY created_at, quiz_id", (now,)).fetchall()
+                " WHERE status IN ('ready','delivered')"
+                + (" AND expires_at > ?" if expire else "")
+                + " ORDER BY created_at, quiz_id", (now,) if expire else ()).fetchall()
             self._conn.commit()
         return [{**dict(r), "snapshot": json.loads(r["snapshot"] or "{}")}
                 for r in rows]

@@ -91,8 +91,8 @@ def test_failed_hydration_releases_connection_and_retry_restores_one_queue(env, 
     engine.initialize()
     original = engine.Store.load_pending
 
-    def interrupted(store, now):
-        yield from original(store, now)
+    def interrupted(store, now, **kwargs):
+        yield from original(store, now, **kwargs)
         raise OSError("synthetic interrupted hydration")
 
     with monkeypatch.context() as temporary:

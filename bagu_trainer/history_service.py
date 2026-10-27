@@ -25,7 +25,10 @@ class LearningHistory:
             try:
                 attempts, correct = conn.execute("SELECT COUNT(*),COALESCE(SUM(correct),0) FROM attempts").fetchone()
                 due = conn.execute("SELECT COUNT(*) FROM concept_state WHERE next_review_at<=?", (time.time(),)).fetchone()[0]
-                pending = conn.execute("SELECT COUNT(*) FROM quizzes WHERE status IN ('ready','delivered') AND expires_at>?", (time.time(),)).fetchone()[0]
+                expire = int(settings.get("quiz_ttl_seconds") or config.DEFAULTS["quiz_ttl_seconds"]) > 0
+                pending = conn.execute("SELECT COUNT(*) FROM quizzes WHERE status IN ('ready','delivered')"
+                                       + (" AND expires_at>?" if expire else ""),
+                                       (time.time(),) if expire else ()).fetchone()[0]
                 stats.update(total_attempts=attempts, accuracy=correct / attempts if attempts else 0, due_reviews=due, pending=pending)
             finally:
                 conn.close()

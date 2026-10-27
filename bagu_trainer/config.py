@@ -52,7 +52,7 @@ DEFAULTS = {
     "session_ingest": False,         # 会话摄取默认关闭：无法可靠判断项目归属时绝不读会话
     "context_char_limit": 4000,      # 进入 matcher/LLM 前的上下文总字符上限
     "llm": None,  # {"base_url": str, "api_key": str(旧配置兼容位，新保存恒为空), "model": str, "timeout_sec": int}
-    "quiz_ttl_seconds": 3600,      # 待答题有效期（秒），超时确定性清理
+    "quiz_ttl_seconds": 0,         # 默认保留未答题；正数可显式启用有效期（秒）
     "max_pending_quizzes": 20,     # pending 队列容量上限，超量淘汰最旧
     "max_quizzes": 200,            # 内存保留 quiz 总数上限，超量淘汰最旧
     "seen_hash_capacity": 1000,    # 去重指纹容量上限，超量淘汰最旧指纹

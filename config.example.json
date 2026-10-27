@@ -5,6 +5,7 @@
   "session_recent_minutes": 180,
   "session_ingest": false,
   "context_char_limit": 4000,
+  "quiz_ttl_seconds": 0,
   "db_path": "data/trainer.db",
   "llm": {
     "base_url": "https://api.openai.com/v1",

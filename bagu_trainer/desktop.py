@@ -1078,6 +1078,8 @@ class DesktopApp:
         self.monitor.ui_state = {"window_state": self.root.state(), "monitor_paused": self.monitor.paused,
                                  "page": self.shell.current_page,
                                  "inflight_submissions": len(self.inflight_submissions),
+                                 "practice_pending_count": len(self._pending_items),
+                                 "practice_due_reviews": self._due_reviews,
                                  "pending_jobs": self.jobs.qsize(), "closing": self.closing,
                                  "status": self.status.get(),
                                  "bank_inventory_ready": bool(getattr(self._cached_pages.get("bank"), "inventory", None))}
