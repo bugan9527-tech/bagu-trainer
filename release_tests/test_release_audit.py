@@ -1,6 +1,7 @@
 """Privacy scanner regressions use generated synthetic bytes, never credentials."""
 import io
 import zipfile
+import json
 
 from scripts.audit_release import Scanner
 
@@ -33,3 +34,21 @@ def test_compiled_code_filenames_and_constants_are_scanned():
     scanner = Scanner(markers={"local_machine_path": [b"synthetic-private-root"]})
     scanner.code("module", compile("def inner(): return 'synthetic-private-root'", "synthetic-private-root/module.py", "exec"))
     assert scanner.code_objects_scanned == 2 and scanner.findings
+
+
+def test_electron_audit_checks_both_python_archives_instead_of_chromium(tmp_path, monkeypatch):
+    (tmp_path / "BUILD_MANIFEST.json").write_text(json.dumps({"layout": "Electron with Python engine"}), encoding="utf-8")
+    seen = []
+    scanner = Scanner(markers={})
+    monkeypatch.setattr(scanner, "frozen_exe", lambda path: seen.append(path.name))
+    scanner.frozen_bundle(tmp_path)
+    assert seen == ["BaguBackend.exe", "BaguCleanup.exe"]
+
+
+def test_legacy_bundle_still_audits_its_main_python_archive(tmp_path, monkeypatch):
+    (tmp_path / "BUILD_MANIFEST.json").write_text(json.dumps({"layout": "PyInstaller onedir"}), encoding="utf-8")
+    seen = []
+    scanner = Scanner(markers={})
+    monkeypatch.setattr(scanner, "frozen_exe", lambda path: seen.append(path.name))
+    scanner.frozen_bundle(tmp_path)
+    assert seen == ["BaguTrainer.exe"]

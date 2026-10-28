@@ -96,6 +96,13 @@ class Scanner:
                 import marshal
                 self.code("frozen/" + name, marshal.loads(archive.extract(name)))
 
+    def frozen_bundle(self, bundle):
+        """Inspect the Python archives behind either supported desktop shell."""
+        manifest = json.loads((bundle / "BUILD_MANIFEST.json").read_text(encoding="utf-8"))
+        names = ("BaguBackend.exe", "BaguCleanup.exe") if manifest.get("layout") == "Electron with Python engine" else ("BaguTrainer.exe",)
+        for name in names:
+            self.frozen_exe(bundle / name)
+
 
 def scan_source(scanner):
     raw = subprocess.check_output(["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"], cwd=ROOT)
@@ -122,7 +129,7 @@ def run(bundle=None, archive=None, setup=None, unpacker=None, attachments=None, 
             raise ValueError("Full scan requires --bundle, --zip, --setup and --innounp")
         for entry in audit(bundle):
             scanner.scan("payload/" + entry["path"], (bundle / entry["path"]).read_bytes())
-        scanner.frozen_exe(bundle / "BaguTrainer.exe")
+        scanner.frozen_bundle(bundle)
         with zipfile.ZipFile(archive) as zipped:
             for item in zipped.infolist():
                 if item.is_dir():
