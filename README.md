@@ -4,9 +4,11 @@
 
 AI interview practice from your code changes.
 
+**v0.5.0 采用 Electron + React + TypeScript + Vite 桌面界面**，保留 Python 学习引擎、原有用户数据与凭据存储。源码启动、升级与构建步骤见 [Electron 桌面版说明](docs/ELECTRON_DESKTOP.md)。从旧版升级时正常退出后覆盖安装，**不要先卸载**。
+
 面向正在写项目、准备技术面试的开发者：监听项目变化，匹配题库知识点，生成贴近代码场景的 AI 情景题；作答后查看解析，按计划复习。
 
-**[下载 Windows 安装版 · v0.4.4](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.4/BaguTrainer-0.4.4-windows-x64-Setup.exe)** · [便携 ZIP](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.4.4/BaguTrainer-0.4.4-windows-x64.zip) · [最新发布与校验文件](https://github.com/bugan9527-tech/bagu-trainer/releases/latest) · [三步上手](#三步上手)
+**[下载 Windows 安装版 · v0.5.0](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.5.0/BaguTrainer-0.5.0-windows-x64-Setup.exe)** · [便携 ZIP](https://github.com/bugan9527-tech/bagu-trainer/releases/download/v0.5.0/BaguTrainer-0.5.0-electron-windows-x64.zip) · [最新发布与校验文件](https://github.com/bugan9527-tech/bagu-trainer/releases/latest) · [三步上手](#三步上手)
 
 适用于 Windows x64，无需安装 Python。首次使用需要下载题库来源并配置模型 API，模型请求可能产生服务商费用。
 
@@ -94,7 +96,10 @@ git clone https://github.com/bugan9527-tech/bagu-trainer.git
 cd bagu-trainer
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -B scripts/start_desktop.py
+$env:BAGU_PYTHON = (Resolve-Path .\.venv\Scripts\python.exe).Path
+npm ci
+npx install-electron --no
+npm start
 ```
 
 下载源码 ZIP 的用户直接在解压后的项目根目录执行从 `python -m venv` 开始的命令。
@@ -141,6 +146,7 @@ python -m venv .venv
 | --- | --- |
 | 操作系统 | Windows 桌面及当前用户登录自启动 |
 | Python | 仅源码运行需要 3.10 或更高及 Tcl/Tk；便携版已内置运行库 |
+| Node.js | 仅 Electron 源码开发与构建需要 22.12 或更高；安装版和便携版无需安装 |
 | 下载题库 | 桌面内置 HTTPS ZIP 下载和构建，无需 Git 或外部构建命令 |
 | 模型接口 | 支持 `/chat/completions`、Bearer Key 认证和文本 JSON 输出的兼容接口 |
 | 网络 | 首次安装依赖、下载来源及调用远程模型时需要连接相应服务 |

@@ -49,13 +49,13 @@ def _shell_link():
         ole.CoUninitialize()
 
 
-def install(directory=None):
+def install(directory=None, *, executable=None):
     destination = Path(directory) if directory else shortcut_directory()
     if not destination.is_dir():
         raise OSError("自启动目录不存在")
-    target = Path(paths.command()[0])
-    arguments = "--background" if paths.FROZEN else '-B "' + str(paths.RESOURCE_ROOT / "scripts" / "start_desktop.py") + '" --background'
-    if not paths.FROZEN:
+    target = Path(executable).resolve() if executable else Path(paths.command()[0])
+    arguments = "--background" if paths.FROZEN or executable else '-B "' + str(paths.RESOURCE_ROOT / "scripts" / "start_desktop.py") + '" --background'
+    if not paths.FROZEN and not executable:
         target = target.with_name("pythonw.exe")
     if not target.is_file():
         raise OSError("找不到自启动可执行文件")

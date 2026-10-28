@@ -34,7 +34,8 @@ def preview():
     return "\n\n".join(lines)
 
 
-def launch_uninstall():
+def launch_uninstall(*, wait_pid=None):
+    owner_pid = wait_pid or os.getpid()
     uninstaller = paths.INSTALL_ROOT / "unins000.exe"
     if paths.FROZEN and uninstaller.is_file():
         subprocess.Popen([str(uninstaller)], cwd=paths.INSTALL_ROOT)
@@ -63,9 +64,9 @@ def launch_uninstall():
             shutil.rmtree(temporary)
             raise
         command = [str(helper / "BaguCleanup.exe"), "--install", str(paths.INSTALL_ROOT),
-            "--temporary-tool", str(temporary), "--wait-pid", str(os.getpid())]
+            "--temporary-tool", str(temporary), "--wait-pid", str(owner_pid)]
     else:
-        command = [sys.executable, "-B", "-m", "bagu_trainer.cleanup_cli", "--wait-pid", str(os.getpid())]
+        command = [sys.executable, "-B", "-m", "bagu_trainer.cleanup_cli", "--wait-pid", str(owner_pid)]
     subprocess.Popen(command, cwd=paths.RESOURCE_ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 

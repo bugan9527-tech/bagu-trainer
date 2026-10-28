@@ -1,4 +1,4 @@
-name: Windows x64 installer and portable draft
+name: Legacy Tk Windows compatibility (v0.4.x)
 
 on:
   pull_request:
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag; must be v followed by the version in bagu_trainer/version.py'
+        description: 'Legacy Tk v0.4.x tag only; use the Electron workflow for the new desktop'
         required: true
         type: string
       previous_tag:
@@ -185,7 +185,7 @@ jobs:
           retention-days: 14
 
   draft-release:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v0.4.')
     needs: build-and-test
     runs-on: windows-2022
     timeout-minutes: 10

@@ -80,9 +80,12 @@ def audit(directory):
 
 def source_provenance():
     """Fingerprint runtime/build code, including current uncommitted modules."""
-    paths = [path for folder in ("bagu_trainer", "scripts", "packaging")
-             for path in (ROOT / folder).rglob("*") if path.suffix in {".py", ".spec", ".iss", ".isl", ".ico", ".json"}]
+    paths = [path for folder in ("bagu_trainer", "scripts", "packaging", "electron", "frontend")
+             for path in (ROOT / folder).rglob("*") if path.suffix in {
+                 ".py", ".spec", ".iss", ".isl", ".ico", ".json", ".cjs", ".ts", ".tsx", ".css", ".html"}]
     paths.extend(ROOT.glob("requirements*.txt"))
+    paths.extend(ROOT / name for name in ("package.json", "package-lock.json", "tsconfig.json", "vite.config.ts")
+                 if (ROOT / name).is_file())
     files = {path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
              for path in sorted(paths)}
     digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode("utf-8")).hexdigest()

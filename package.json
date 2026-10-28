@@ -1,0 +1,78 @@
+{
+  "name": "bagu-trainer-desktop",
+  "version": "0.5.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 八股训练器桌面应用",
+  "author": "Bagu Trainer contributors",
+  "license": "MIT",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "node electron/dev.cjs",
+    "start": "npm run build && electron .",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --test electron/*.test.cjs",
+    "test:desktop": "node electron/smoke.cjs",
+    "build:backend": "python scripts/build_electron_backend.py",
+    "package:dir": "npm run build && npm run build:backend && electron-builder --win --dir",
+    "package:zip": "npm run build && npm run build:backend && electron-builder --win zip",
+    "package:installer": "npm run package:dir && python scripts/build_electron_installer.py"
+  },
+  "build": {
+    "appId": "com.bagu.trainer",
+    "productName": "BaguTrainer",
+    "asar": true,
+    "electronDist": "node_modules/electron/dist",
+    "afterPack": "electron/after-pack.cjs",
+    "directories": {
+      "output": "output/electron"
+    },
+    "files": [
+      "electron/main.cjs",
+      "electron/preload.cjs",
+      "electron/backend.cjs",
+      "electron/policy.cjs",
+      "dist-renderer/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "build/electron-backend/BaguBackend",
+        "to": "."
+      }
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "icon": "packaging/BaguTrainer.ico",
+      "target": [
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "artifactName": "BaguTrainer-${version}-electron-${os}-${arch}.${ext}"
+  },
+  "dependencies": {
+    "lucide-react": "1.62.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "react-markdown": "10.1.0",
+    "rehype-highlight": "7.0.2",
+    "remark-gfm": "4.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "26.6.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.5"
+  }
+}

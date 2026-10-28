@@ -36,6 +36,11 @@ htmlcov/
 coverage.xml
 /build/
 /dist/
+/node_modules/
+/dist-renderer/
+/.npm-cache/
+/playwright-report/
+/test-results/
 *.egg-info/
 
 # 本地学习记录、SQLite 辅助文件及桌面进程认证信息

@@ -54,7 +54,8 @@ def pe_resources(path, *, production=False):
         import pefile
     except ImportError as error:
         raise RuntimeError("缺少 PE 检查依赖；请使用安装了 requirements-build.txt 的构建环境") from error
-    with pefile.PE(str(path)) as pe:
+    with pefile.PE(str(path), fast_load=True) as pe:
+        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_RESOURCE']])
         if production and pe.FILE_HEADER.Machine != 0x8664:
             raise ValueError("生产 EXE 必须为 Windows x64")
         strings = {}
@@ -87,7 +88,8 @@ def validate_bundle(bundle, *, current_source=True, check_exe=True):
     manifest_path = bundle / "BUILD_MANIFEST.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (manifest.get("application") != "BaguTrainer" or manifest.get("version") != __version__
-            or manifest.get("architecture") != "windows-x64" or manifest.get("layout") != "PyInstaller onedir"):
+            or manifest.get("architecture") != "windows-x64" or manifest.get("layout") not in {
+                "PyInstaller onedir", "Electron with Python engine"}):
         raise ValueError("生产清单的产品、版本、架构或 onedir 布局不符")
     expected = {}
     for item in manifest["files"]:
@@ -103,6 +105,9 @@ def validate_bundle(bundle, *, current_source=True, check_exe=True):
     required = {"BaguTrainer.exe", "BaguCleanup.exe", "使用说明.md", "_internal/LICENSE", "_internal/THIRD_PARTY_NOTICES.txt",
                 "_internal/interview-banks/sources.json", "_internal/licenses/Python-LICENSE.txt",
                 "_internal/_tcl_data/init.tcl", "_internal/_tk_data/tk.tcl"}
+    electron = manifest.get("layout") == "Electron with Python engine"
+    if electron:
+        required.update({"BaguBackend.exe", "resources/app.asar"})
     if not required <= names or not any(name.startswith("_internal/") and name.endswith(".dll") for name in names):
         raise ValueError("缺少生产运行资源或许可文件")
     if current_source and manifest.get("source_tree") != source_provenance():
@@ -111,12 +116,14 @@ def validate_bundle(bundle, *, current_source=True, check_exe=True):
         pe_resources(bundle / "BaguTrainer.exe", production=True)
         try:
             from PyInstaller.archive.readers import CArchiveReader
-            archive = CArchiveReader(str(bundle / "BaguTrainer.exe"))
+            archive = CArchiveReader(str(bundle / ("BaguBackend.exe" if electron else "BaguTrainer.exe")))
             modules = set(archive.toc)
             for name, item in archive.toc.items():
                 if item[-1] == "z":
                     modules.update(archive.open_embedded_archive(name).toc)
-            if "start_desktop" not in modules or "bagu_trainer.desktop" not in modules:
+            entry = "start_electron_backend" if electron else "start_desktop"
+            implementation = "bagu_trainer.desktop_service" if electron else "bagu_trainer.desktop"
+            if entry not in modules or implementation not in modules:
                 raise ValueError("生产 EXE 入口或运行模块不符")
             if any(re.search(r"(^|[._/])(acceptance|desktop_acceptance|tests|release_tests|pytest)([._/]|$)", name)
                    for name in modules):

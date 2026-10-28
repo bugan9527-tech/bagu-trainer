@@ -1,0 +1,14 @@
+:root {
+  color-scheme: light;
+  --background: #f4f6fa;
+  --surface: #ffffff;
+  --text: #202938;
+  --muted: #586579;
+  --border: #dfe4ed;
+  --primary: #4338ca;
+  --success: #176448;
+  --danger: #b42332;
+  --hover: #f0f2f8;
+  --font: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  --mono: 'Cascadia Code', Consolas, 'Liberation Mono', monospace;
+}

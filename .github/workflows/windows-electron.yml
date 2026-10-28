@@ -1,0 +1,100 @@
+name: Electron Windows build and verification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - 'electron/**'
+      - 'bagu_trainer/**'
+      - 'scripts/**'
+      - 'packaging/**'
+      - 'package*.json'
+      - 'tsconfig.json'
+      - 'vite.config.ts'
+      - '.github/workflows/windows-electron.yml'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'electron/**'
+      - 'bagu_trainer/**'
+      - 'scripts/**'
+      - 'packaging/**'
+      - 'package*.json'
+      - 'tests/**'
+      - '.github/workflows/windows-electron.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-electron:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.10.11'
+          architecture: x64
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked frontend and isolated Python dependencies
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npx install-electron --no
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m venv .venv-build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv-build\Scripts\python.exe -m pip install -r requirements-build.txt
+          exit $LASTEXITCODE
+      - name: Verify frontend and engine contracts
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m pytest tests/test_desktop_service.py tests/test_electron_transport.py tests/test_engine_session.py tests/test_generation_concurrency.py tests/test_store.py tests/test_learning_loop.py tests/test_pending_flow.py tests/test_privacy.py release_tests/test_installer_bundle.py -q -W error --junitxml=validation/electron-core.xml
+          exit $LASTEXITCODE
+      - name: Exercise the source Electron windows using synthetic data
+        run: npm run test:desktop
+      - name: Build the distributable with the embedded Python engine
+        run: npm run package:dir
+      - name: Exercise the actual frozen EXE using synthetic data
+        run: |
+          $env:BAGU_ELECTRON_EXECUTABLE = Join-Path $PWD 'output/electron/win-unpacked/BaguTrainer.exe'
+          npm run test:desktop
+          exit $LASTEXITCODE
+      - name: Preserve validation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: electron-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            validation/electron-core.xml
+            validation/electron-*/RESULTS.json
+            validation/electron-*/FIRST_USE.json
+            validation/electron-*/*.png
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Preserve the verified Windows program directory
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: electron-windows-x64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: output/electron/win-unpacked/
+          retention-days: 14
