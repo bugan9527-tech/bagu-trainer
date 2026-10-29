@@ -4,19 +4,15 @@ import json
 
 import pytest
 
-import bagu_trainer.quiz_generator as qg
-import bagu_trainer.engine as engine
-import bagu_trainer.fallback_bank as fallback_archive
-from bagu_trainer.fallback_bank import (
-    find_fallback,
-    load_fallback_quizzes,
-    validate_fallback_quiz,
-)
-from bagu_trainer.source_extractor import (
-    assess_excerpt,
-    excerpt_for_detailed,
-    extract_excerpt,
-)
+import bagu_trainer.application.learning.generator as qg
+import bagu_trainer.application.learning.engine as engine
+import bagu_trainer.infrastructure.fallback_bank as fallback_archive
+from bagu_trainer.infrastructure.fallback_bank import find_fallback
+from bagu_trainer.infrastructure.fallback_bank import load_fallback_quizzes
+from bagu_trainer.infrastructure.fallback_bank import validate_fallback_quiz
+from bagu_trainer.infrastructure.source_extractor import assess_excerpt
+from bagu_trainer.infrastructure.source_extractor import excerpt_for_detailed
+from bagu_trainer.infrastructure.source_extractor import extract_excerpt
 
 
 LONG_EXCERPT = (
@@ -241,10 +237,3 @@ def test_manual_quiz_by_offline_id_still_requires_ai(env, monkeypatch):
     assert result["ok"] is False and "未配置 LLM" in result["reason"]
     assert "options" not in result and "quiz_id" not in result
     assert engine.session._state["quizzes"] == {}
-
-
-def test_startup_log_reports_ai_only_policy(env, capsys):
-    engine._startup_log()
-    err = capsys.readouterr().err
-    assert "所有新题须由 AI 生成" in err
-    assert "离线选择题回退已禁用" in err

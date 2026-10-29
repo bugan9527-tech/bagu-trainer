@@ -31,9 +31,9 @@ SECRET_PATTERNS = (
 # adding another token, even in these files, invalidates the exemption.
 # Hashes use the LF bytes enforced by .gitattributes (identical Git blobs).
 SYNTHETIC_TEST_FILES = {
-    "source/release_tests/test_first_use.py": "97e3da75ee6758ea2093a5e94e87dbdb43359d3c21b18a53f356ce9cb6145d4e",
-    "source/tests/test_privacy.py": "6a8055e0aa42d9943fc74380eff71b8bad72fe057f7ac6e269f3ecb471f29b83",
-    "source/tests/test_secret_migration.py": "408dd3fb3473ac04fed0b14b090b6b5ea17ef41ba5bc230f047b625e470c9e03",
+    "source/release_tests/test_first_use.py": "834e36ec40681c966a07945e50216ea2b65e44f24a87075f4be1261c6bb423fc",
+    "source/tests/test_privacy.py": "1a1bc6be67a7dfe39221a19a48757690b7d7bf9197f070b01ddf57dde33347b8",
+    "source/tests/test_secret_migration.py": "8f5f504fd788c9b0db80b5b988426535ecb00fa8a9fc190558b8cdc2c3f88c0a",
 }
 
 

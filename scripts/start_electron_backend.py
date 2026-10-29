@@ -1,6 +1,5 @@
 """Private JSON-lines transport; stdout must contain protocol messages only."""
 import json
-import os
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +13,7 @@ def main():
     from multiprocessing import freeze_support
     freeze_support()
     if Path(sys.executable).name.casefold() == "bagucleanup.exe":
-        from bagu_trainer.cleanup_cli import main as cleanup_main
+        from bagu_trainer.desktop.cleanup_cli import main as cleanup_main
         return cleanup_main()
     # Frozen Python ignores PYTHONIOENCODING; the pipe protocol is always UTF-8.
     for stream in (sys.stdin, sys.stdout, sys.stderr):
@@ -23,11 +22,13 @@ def main():
     channel = sys.stdout
     # Python diagnostics and libraries cannot corrupt the protocol stream.
     sys.stdout = sys.stderr
-    from bagu_trainer.runtime import configure_logs
+    from bagu_trainer.desktop.runtime import configure_logs
     configure_logs()
-    from bagu_trainer.desktop_instance import OwnerLock, WindowBroker
-    from bagu_trainer.desktop_service import DesktopService, public_value
-    from bagu_trainer.onboarding import SetupError
+    from bagu_trainer.infrastructure.desktop_instance import OwnerLock
+    from bagu_trainer.infrastructure.desktop_instance import WindowBroker
+    from bagu_trainer.desktop.service import DesktopService
+    from bagu_trainer.desktop.service import public_value
+    from bagu_trainer.application.settings.verification import SetupError
     lock = threading.Lock()
 
     def send(value):
@@ -35,8 +36,8 @@ def main():
             channel.write(json.dumps(public_value(value), ensure_ascii=False) + "\n")
             channel.flush()
 
-    from bagu_trainer.app_cleanup import maintenance_active
-    from bagu_trainer.cleanup_cli import journal_path
+    from bagu_trainer.infrastructure.app_cleanup import maintenance_active
+    from bagu_trainer.desktop.cleanup_cli import journal_path
     if maintenance_active() or journal_path().is_file():
         send({"type": "fatal", "data": {"message": "应用清理尚未完成，请先运行原卸载工具完成恢复。"}})
         return 2
@@ -44,7 +45,7 @@ def main():
     if not owner.acquire():
         send({"type": "fatal", "data": {"message": "另一个训练器正在运行，请先退出旧窗口。"}})
         return 2
-    from bagu_trainer.cleanup_manifest import register_profile
+    from bagu_trainer.infrastructure.cleanup_manifest import register_profile
     try:
         register_profile(global_index=True)
     except (OSError, ValueError):
@@ -68,7 +69,7 @@ def main():
         except Exception as error:
             # Never echo model credentials, raw transport bodies or tracebacks.
             message = str(error) if isinstance(error, (ValueError, SetupError)) else f"操作未完成（{type(error).__name__}），请检查设置后重试。"
-            from bagu_trainer import secrets
+            from bagu_trainer.infrastructure import secrets
             message = secrets.redact_text(message, secrets.known_keys())
             send({"id": request_id, "error": message})
 

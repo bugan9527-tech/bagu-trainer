@@ -7,9 +7,10 @@ import pytest
 
 from release_tests.test_answer_history import history, seed, desktop, dispose, pump, dump
 from release_tests.test_first_use import installation
-from bagu_trainer.tk_runtime import create_root
-from bagu_trainer.ui_theme import apply_theme, work_area
-from bagu_trainer.ui_window import WindowPlacement
+from bagu_trainer.desktop.tk_runtime import create_root
+from bagu_trainer.desktop.ui_theme import apply_theme
+from bagu_trainer.desktop.ui_theme import work_area
+from bagu_trainer.desktop.ui_window import WindowPlacement
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk shell")
 
@@ -281,10 +282,10 @@ def test_all_seven_routes_use_one_shell_and_mount_real_pages(history):
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2])
 def test_sidebar_keyboard_and_real_pages_at_four_tk_scales(history, monkeypatch, scale):
     if scale == 2:
-        from bagu_trainer import ui_theme
+        from bagu_trainer.desktop import ui_theme
         # Keep the hosted runner's small work area reproducible on larger monitors.
         monkeypatch.setattr(ui_theme, "work_area", lambda _: (0, 0, 1024, 728))
-    from bagu_trainer.tk_runtime import prepare_tk
+    from bagu_trainer.desktop.tk_runtime import prepare_tk
     prepare_tk()
     import tkinter as tk
     import ttkbootstrap
@@ -392,7 +393,7 @@ def test_settings_race_retains_first_and_additional_deliveries(history):
 
 
 def test_nav_icons_and_collapse_keep_text_hints(history):
-    from bagu_trainer.ui_icons import make_icon
+    from bagu_trainer.desktop.ui_icons import make_icon
     app, _, errors = desktop(history)
     try:
         shell = app.shell

@@ -10,7 +10,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import config, secrets, startup
+from bagu_trainer.infrastructure import config
+from bagu_trainer.infrastructure import secrets
+from bagu_trainer.desktop import startup
 
 
 QUESTION = {"id": "test-1", "knowledge_point": "缓存", "question": "缓存失效？",
@@ -52,8 +54,8 @@ def write_configuration(install, configuration):
 
 def mark_model_tested(install):
     """Isolate startup/engine retry tests from HTTP; HTTP is tested in test_first_use."""
-    from bagu_trainer import onboarding
-    from bagu_trainer.bank_storage import atomic_json
+    from bagu_trainer.application.settings import verification as onboarding
+    from bagu_trainer.infrastructure.bank_storage import atomic_json
     llm = install.configuration["llm"]
     settings = onboarding.validate_settings(llm["base_url"], llm["model"], "test-only-key", llm["timeout_sec"])
     atomic_json(onboarding.state_path(), {"schema_version": 1, "model_verification": onboarding._receipt(settings)})
@@ -223,95 +225,6 @@ def wait_for_ui(app, predicate):
     assert predicate()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk UI")
-def test_initialization_ui_save_failure_retry_and_success(install, monkeypatch):
-    from bagu_trainer import initialization
-    engine = object()
-    loads = []
-    def load():
-        loads.append(1)
-        if len(loads) == 1:
-            raise RuntimeError("load failed")
-        return engine
-    coordinator = startup.StartupCoordinator(engine_loader=load)
-    install.settings.unlink()
-    assert coordinator.prepare() is None
-    app = initialization.InitializationApp(coordinator)
-    app.root.withdraw()
-    try:
-        wait_for_ui(app, lambda: not app.busy)
-        app._save_projects()  # Empty list fails, UI stays usable.
-        wait_for_ui(app, lambda: not app.busy)
-        assert "失败" in app.status.get()
-        assert not app.test_button.instate(["disabled"])
-        app.projects = [str(install.watched)]
-        app._save_projects()
-        wait_for_ui(app, lambda: not app.busy)
-        assert checks()["projects"] and not checks()["model"]
-        write_configuration(install, install.configuration)
-        mark_model_tested(install)
-        app._retry()
-        wait_for_ui(app, lambda: not app.busy)
-        assert not app.closed and "RuntimeError" in app.status.get()
-        coordinator.window_command("_show_dashboard", {})
-        app._drain()
-        assert app.root.state() == "normal"
-        app.root.withdraw()
-        app._retry()
-        wait_for_ui(app, lambda: app.closed)
-        assert app.engine is engine
-    finally:
-        if not app.closed:
-            app.root.destroy()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk UI")
-def test_wizard_model_page_stays_in_main_window_and_closes_without_engine(install):
-    from bagu_trainer.initialization import InitializationApp
-    coordinator = startup.StartupCoordinator(engine_loader=lambda: pytest.fail("unexpected engine"))
-    install.bank.unlink()
-    coordinator.prepare()
-    app = InitializationApp(coordinator)
-    app.root.withdraw()
-    try:
-        wait_for_ui(app, lambda: not app.busy)
-        app._show("model")
-        assert all(child.winfo_class() != "Toplevel" for child in app.root.winfo_children())
-        app.base_url.set("")
-        app._test_model()
-        wait_for_ui(app, lambda: not app.busy)
-        assert "基础地址" in app.status.get()
-        assert not app.closed
-        app._close()
-        assert app.closed and app.engine is None
-    finally:
-        if not app.closed:
-            app.root.destroy()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk UI")
-def test_setup_can_edit_malformed_model_and_recover_from_save_failure(install, monkeypatch):
-    from bagu_trainer.initialization import InitializationApp
-    write_configuration(install, {**install.configuration, "llm": "invalid"})
-    coordinator = startup.StartupCoordinator()
-    coordinator.prepare()
-    app = InitializationApp(coordinator)
-    app.root.withdraw()
-    try:
-        wait_for_ui(app, lambda: not app.busy)
-        assert app.step == "model" and app.base_url.get() == ""
-        app.base_url.set("https://example.invalid/v1")
-        app.model_name.set("test")
-        # Corruption after the editor opens must also remain untouched on save.
-        install.settings.write_text("broken", encoding="utf-8")
-        app._test_model()
-        wait_for_ui(app, lambda: not app.busy)
-        assert "失败" in app.status.get()
-        assert install.settings.read_text(encoding="utf-8") == "broken"
-    finally:
-        app._close()
-
-
 def test_import_and_missing_bank_probe_never_import_engine(tmp_path):
     source = Path(__file__).resolve().parents[1]
     project = tmp_path / "isolated"
@@ -321,15 +234,15 @@ def test_import_and_missing_bank_probe_never_import_engine(tmp_path):
 import sys
 class BlockEngine:
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == 'bagu_trainer.engine':
+        if fullname == 'bagu_trainer.application.learning.engine':
             raise AssertionError('engine loaded before readiness')
 sys.meta_path.insert(0, BlockEngine())
 from bagu_trainer.desktop import main
-from bagu_trainer.startup import StartupCoordinator
+from bagu_trainer.desktop.startup import StartupCoordinator
 c = StartupCoordinator()
 assert c.prepare() is None
 assert c.state == 'initialization'
-assert 'bagu_trainer.engine' not in sys.modules
+assert 'bagu_trainer.application.learning.engine' not in sys.modules
 """
     result = subprocess.run([sys.executable, "-B", "-c", probe], cwd=tmp_path,
                             env={**os.environ, "PYTHONPATH": str(project)},
@@ -352,8 +265,10 @@ import time
 from pathlib import Path
 project = Path(sys.argv[1])
 sys.path.insert(0, str(project))
-from bagu_trainer import desktop, desktop_instance, startup
-assert 'bagu_trainer.engine' not in sys.modules
+from bagu_trainer import desktop
+from bagu_trainer.infrastructure import desktop_instance
+from bagu_trainer.desktop import startup
+assert 'bagu_trainer.application.learning.engine' not in sys.modules
 loads, windows, failures = [], [], []
 original_init = startup.StartupCoordinator.__init__
 def coordinator_init(self):
@@ -399,7 +314,7 @@ def app_init(self, *args, **kwargs):
                     self.root.after(20, step)
                     return
                 assert 'RuntimeError' in self.readiness_text.get()
-                assert 'bagu_trainer.engine' not in sys.modules
+                assert 'bagu_trainer.application.learning.engine' not in sys.modules
                 self.jobs.put(('prepare', None))
                 stage[0] = 2
             elif (stage[0] == 2 or len(windows) > 1) and self.ready:
@@ -438,7 +353,8 @@ print('first run, retry, restart and singleton passed')
 
 
 def test_entrypoint_releases_owner_when_setup_closes_or_startup_raises(monkeypatch):
-    from bagu_trainer import desktop, desktop_instance
+    from bagu_trainer import desktop
+    from bagu_trainer.infrastructure import desktop_instance
     calls = []
     class Owner:
         def acquire(self):

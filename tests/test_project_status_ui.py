@@ -6,9 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from bagu_trainer import config, engine, startup
+from bagu_trainer.infrastructure import config
+from bagu_trainer.application.learning import engine
+from bagu_trainer.desktop import startup
 from bagu_trainer.desktop import DesktopApp
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.application.monitor import DesktopMonitor
 
 
 def pump(app, check, timeout=3):
@@ -21,7 +23,7 @@ def pump(app, check, timeout=3):
 
 
 def status(panel, path):
-    from bagu_trainer.projects_panel import _key
+    from bagu_trainer.desktop.projects_panel import _key
     return panel.tree.set(panel._row_ids[_key(path)], "status")
 
 
@@ -231,7 +233,7 @@ def test_screenshot_real_projects_page_on_hidden_desktop(status_app, monkeypatch
     monkeypatch.setattr(engine, "observe_project", check)
     monitor.poll()
     app._drain()
-    from bagu_trainer.projects_panel import _key
+    from bagu_trainer.desktop.projects_panel import _key
     panel.tree.selection_set(panel._row_ids[_key(b)])
     panel._selection_changed()
     assert status(panel, b) == "目录不可用" and "尚未检查" in panel.detail.get()
@@ -264,7 +266,7 @@ def test_old_application_ack_cannot_finish_a_newer_request(status_app):
 @pytest.mark.parametrize("scale", [1, 1.5, 2])
 def test_standalone_panel_dpi_keyboard_and_responsive_layout(status_app, scale):
     from dataclasses import replace
-    from bagu_trainer.projects_panel import ProjectsPanel
+    from bagu_trainer.desktop.projects_panel import ProjectsPanel
     app, _, _, (a, _) = status_app
     theme = replace(app.theme, scale=scale)
     panel = ProjectsPanel(app.content_host, theme)

@@ -1,0 +1,174 @@
+[
+  [
+    {
+      "id": "ttl",
+      "score": 0.4608,
+      "raw_score": 21.3684,
+      "confidence": 0.4608,
+      "margin": 0.3405,
+      "hits": [
+        "陈旧(2.77)",
+        "失效(2.29)",
+        "缓存(2.19)",
+        "redis(2.08)",
+        "旧数(1.69)",
+        "旧数据(1.69)",
+        "陈旧数(1.69)",
+        "ttl(1.20)"
+      ],
+      "matched_tags": [
+        "Redis",
+        "缓存有效期"
+      ],
+      "matched_concept_terms": [
+        "缓存失效",
+        "陈旧状态"
+      ],
+      "concept_boost": 0.2467,
+      "npe_precision": null
+    },
+    {
+      "id": "penetration",
+      "score": 0.1204,
+      "raw_score": 3.4212,
+      "confidence": 0.1204,
+      "margin": 0.1204,
+      "hits": [
+        "缓存(1.62)",
+        "redis(1.11)",
+        "数据(0.69)"
+      ],
+      "matched_tags": [
+        "Redis",
+        "缓存穿透"
+      ],
+      "matched_concept_terms": [],
+      "concept_boost": 0.0,
+      "npe_precision": null
+    }
+  ],
+  [
+    {
+      "id": "penetration",
+      "score": 0.595,
+      "raw_score": 36.7304,
+      "confidence": 0.595,
+      "margin": 0.5146,
+      "hits": [
+        "存穿(2.81)",
+        "存穿透(2.81)",
+        "穿透(2.81)",
+        "缓存穿(2.81)",
+        "缓存(1.62)",
+        "不存(1.01)",
+        "不存在(1.01)",
+        "值缓(1.01)"
+      ],
+      "matched_tags": [
+        "缓存穿透"
+      ],
+      "matched_concept_terms": [],
+      "concept_boost": 0.0,
+      "npe_precision": null
+    },
+    {
+      "id": "ttl",
+      "score": 0.0804,
+      "raw_score": 2.1853,
+      "confidence": 0.0804,
+      "margin": 0.0534,
+      "hits": [
+        "缓存(2.19)"
+      ],
+      "matched_tags": [
+        "缓存有效期"
+      ],
+      "matched_concept_terms": [
+        "缓存失效"
+      ],
+      "concept_boost": 0.4123,
+      "npe_precision": null
+    },
+    {
+      "id": "index",
+      "score": 0.027,
+      "raw_score": 0.6931,
+      "confidence": 0.027,
+      "margin": 0.027,
+      "hits": [
+        "查询(0.69)"
+      ],
+      "matched_tags": [],
+      "matched_concept_terms": [],
+      "concept_boost": 0.0,
+      "npe_precision": null
+    }
+  ],
+  [
+    {
+      "id": "npe",
+      "score": 0.5421,
+      "raw_score": 29.5979,
+      "confidence": 0.5421,
+      "margin": 0.5421,
+      "hits": [
+        "java(3.61)",
+        "异常(3.13)",
+        "exception(1.20)",
+        "null(1.20)",
+        "pointer(1.20)",
+        "录接(1.20)",
+        "录接口(1.20)",
+        "指针(1.20)"
+      ],
+      "matched_tags": [
+        "Java",
+        "异常"
+      ],
+      "matched_concept_terms": [],
+      "concept_boost": 0.0,
+      "npe_precision": "direct_npe"
+    }
+  ],
+  [
+    {
+      "id": "index",
+      "score": 0.5231,
+      "raw_score": 27.4213,
+      "confidence": 0.5231,
+      "margin": 0.5003,
+      "hits": [
+        "索引(3.61)",
+        "my(3.13)",
+        "sql(3.13)",
+        "前缀(1.20)",
+        "合索(1.20)",
+        "合索引(1.20)",
+        "左前(1.20)",
+        "左前缀(1.20)"
+      ],
+      "matched_tags": [
+        "MySQL",
+        "索引"
+      ],
+      "matched_concept_terms": [],
+      "concept_boost": 0.0,
+      "npe_precision": null
+    },
+    {
+      "id": "penetration",
+      "score": 0.0228,
+      "raw_score": 0.5827,
+      "confidence": 0.0228,
+      "margin": 0.0228,
+      "hits": [
+        "查询(0.58)"
+      ],
+      "matched_tags": [],
+      "matched_concept_terms": [],
+      "concept_boost": 0.0,
+      "npe_precision": null
+    }
+  ],
+  []
+]

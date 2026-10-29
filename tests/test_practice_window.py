@@ -3,7 +3,7 @@ import threading
 from types import SimpleNamespace
 
 from test_practice_latency import live_app, pump
-from bagu_trainer import engine
+from bagu_trainer.application.learning import engine
 
 
 def window(app):
@@ -75,12 +75,12 @@ def test_hide_during_submit_keeps_real_status_and_one_persisted_attempt(live_app
     win = window(app)
     qid = quizzes[0]["quiz_id"]
     entered, release = threading.Event(), threading.Event()
-    submit = engine.submit_answer
+    submit = app.monitor.engine.learning.submit_answer
     def slow_submit(*args):
         entered.set()
         assert release.wait(4)
         return submit(*args)
-    monkeypatch.setattr(engine, "submit_answer", slow_submit)
+    monkeypatch.setattr(app.monitor.engine.learning, "submit_answer", slow_submit)
     try:
         app.practice.choose("A")
         assert app.practice.submit()
@@ -218,6 +218,8 @@ def test_shortcuts_scope_hide_destroy_and_reopen(live_app):
 
 def test_page_switch_and_list_refresh_preserve_selection_scroll_and_draft(live_app):
     app, quizzes, _ = live_app
+    project_watch = app.monitor.projects
+    project_scope = app.monitor.project_snapshot()["applied_roots"]
     win = window(app)
     app.root.deiconify()
     app._navigate_page("practice")
@@ -243,6 +245,8 @@ def test_page_switch_and_list_refresh_preserve_selection_scroll_and_draft(live_a
     assert abs(tree.yview()[0] - scroll) < .03
     assert app.answer.get() == "B" and app.practice.drafts[quizzes[0]["quiz_id"]] == "B"
     assert win.state() == "withdrawn"
+    assert app.monitor.projects is project_watch
+    assert app.monitor.project_snapshot()["applied_roots"] == project_scope
 
 
 def test_background_does_not_deliver_until_explicit_entry(live_app):

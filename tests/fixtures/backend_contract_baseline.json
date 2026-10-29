@@ -1,0 +1,33 @@
+{
+  "origin": "Original Git HEAD contracts; steps 1-7 preserved these formats",
+  "sqlite_schema_sha256": "6add48f855037f4cfb7b0318cba3d35825204a78021e949e6f8ee745d80121dd",
+  "config_defaults_ast_sha256": "21ad5b2b9faf2306dd7bd833043b35b47b167968772e51ab63fe56ee5290c239",
+  "desktop_commands": [
+    "bank.build",
+    "bank.cancel",
+    "bank.clean",
+    "bank.inventory",
+    "bank.plan",
+    "history.detail",
+    "history.list",
+    "history.repractice",
+    "model.cancel",
+    "model.save",
+    "model.test",
+    "monitor.pause",
+    "monitor.retry",
+    "practice.enter",
+    "practice.next",
+    "practice.resume",
+    "practice.submit",
+    "prepare",
+    "projects.save",
+    "settings.save",
+    "shutdown",
+    "snapshot",
+    "startup.set",
+    "startup.status",
+    "uninstall.launch",
+    "uninstall.preview"
+  ]
+}

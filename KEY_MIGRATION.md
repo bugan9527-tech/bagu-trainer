@@ -19,10 +19,11 @@ python -m bagu_trainer.secrets check
 
 ## 从旧 config.json 明文 Key 迁移
 
-便携版和源码当前默认配置为 `%LOCALAPPDATA%\BaguTrainer\config.json`。
-下方模块命令只处理该用户配置；若旧配置仍在项目旁，先通过首次向导“迁移旧数据…”
-或 `BaguTrainer.exe --migrate-from "旧项目目录"` 复制迁移，过程会先验证凭据存储再启用新配置，
-旧目录保留。便携版无须另装 Python。
+安装版、便携版和 Electron 源码运行当前默认配置为 `%LOCALAPPDATA%\BaguTrainer\config.json`。
+0.5.0 Electron **没有**“迁移旧数据”按钮或 `--migrate-from` 命令；旧配置在项目旁时，先退出所有副本，
+备份 `%LOCALAPPDATA%\BaguTrainer` 后手工复制配置，并在“模型配置”重新保存 API Key（Windows 凭据不随目录复制）。
+0.4.x Tk 兼容版仍保留首次向导“迁移旧数据…”和 `--migrate-from "旧项目目录"`（历史说明见 [FIRST_USE.md](FIRST_USE.md)）。
+下方模块命令只适用于源码 Python 环境；安装版/便携版请在“模型配置”页重新测试并保存 Key，不提供该命令行入口。
 
 ```powershell
 python -m bagu_trainer.secrets migrate

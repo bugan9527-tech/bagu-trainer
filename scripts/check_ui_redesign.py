@@ -38,12 +38,12 @@ def main():
         (Path(isolated) / "config.json").write_text(json.dumps({"llm": None, "project_roots": projects,
                                                               "session_ingest": False}), encoding="utf-8")
         from bagu_trainer import engine
-        from bagu_trainer import login_startup
+        from bagu_trainer.infrastructure import login_startup
         login_startup.shortcut_directory = lambda: Path(isolated) / "startup"
-        from bagu_trainer.store import Store
-        from bagu_trainer.scheduler import next_state
+        from bagu_trainer.infrastructure.store import Store
+        from bagu_trainer.domain.review import next_state
         from bagu_trainer.desktop import DesktopApp
-        from bagu_trainer.tk_runtime import prepare_tk
+        from bagu_trainer.desktop.tk_runtime import prepare_tk
         prepare_tk()
         import tkinter as tk
         import ttkbootstrap

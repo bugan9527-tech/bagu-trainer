@@ -2,7 +2,7 @@
 import threading
 from types import SimpleNamespace
 
-from bagu_trainer import engine
+from bagu_trainer.application.learning import engine
 
 
 def test_late_generation_is_discarded_at_content_revision_boundary(env, monkeypatch):

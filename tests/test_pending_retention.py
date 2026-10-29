@@ -1,7 +1,8 @@
 """Pending work survives overnight and an application upgrade/restart."""
 import pytest
 
-from bagu_trainer import config, engine
+from bagu_trainer.infrastructure import config
+from bagu_trainer.application.learning import engine
 
 
 @pytest.mark.parametrize("restart", [False, True])
@@ -20,7 +21,7 @@ def test_default_pending_survives_overnight_and_remains_answerable(env, monkeypa
         engine.initialize()
     try:
         assert [q["quiz_id"] for q in engine.session.list_pending()] == [qid]
-        from bagu_trainer.history_service import LearningHistory
+        from bagu_trainer.application.learning.history import LearningHistory
         monkeypatch.setattr(config, "read_user_config", lambda: {
             "db_path": str(engine.session.database_path), "quiz_ttl_seconds": 0})
         assert LearningHistory().dashboard()["stats"]["pending"] == 1

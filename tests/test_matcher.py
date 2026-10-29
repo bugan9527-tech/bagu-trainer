@@ -8,8 +8,9 @@
 """
 import pytest
 
-from bagu_trainer.knowledge_base import KnowledgeBase
-from bagu_trainer.matcher import Matcher, tokenize
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
+from bagu_trainer.infrastructure.matcher import Matcher
+from bagu_trainer.infrastructure.matcher import tokenize
 from eval_cases import NEGATIVE_CASES, POSITIVE_CASES
 
 
@@ -139,7 +140,7 @@ def test_tokenize_junk_char_grams():
 
 # ---- server 端：resolve confidence/margin 增量字段 ----
 def test_server_surfaces_confidence_and_margin(env):
-    import bagu_trainer.engine as engine
+    import bagu_trainer.application.learning.engine as engine
     env["diff"].results = [{"source": "git", "files": ["x.py"],
                             "diff_text": "redis 缓存穿透"}]
     rep = engine.process_activity()

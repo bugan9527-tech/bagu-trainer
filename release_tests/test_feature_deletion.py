@@ -6,14 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from bagu_trainer import config
-from bagu_trainer.bank_cleanup import BankCleanupService
-from bagu_trainer.bank_storage import active_bank_dir
-from bagu_trainer.store import Store
-from bagu_trainer.scheduler import next_state
-from bagu_trainer.source_deletion import SourceDeletion
-from bagu_trainer.app_cleanup import AppCleanup
-from bagu_trainer.cleanup_manifest import profile_files, register_profile
+from bagu_trainer.infrastructure import config
+from bagu_trainer.infrastructure.bank_cleanup import BankCleanupService
+from bagu_trainer.infrastructure.bank_storage import active_bank_dir
+from bagu_trainer.infrastructure.store import Store
+from bagu_trainer.domain.review import next_state
+from bagu_trainer.infrastructure.source_deletion import SourceDeletion
+from bagu_trainer.infrastructure.app_cleanup import AppCleanup
+from bagu_trainer.infrastructure.cleanup_manifest import profile_files
+from bagu_trainer.infrastructure.cleanup_manifest import register_profile
 from release_tests.test_bank_batch import batch, REPOS
 from release_tests.test_bank_build import installed
 
@@ -88,8 +89,8 @@ def test_unknown_requires_explicit_confirmation_and_preserves_until_then(expande
 
 
 def test_colliding_legacy_ids_and_orphan_history_are_unknown_not_guessed(tmp_path):
-    from bagu_trainer.provenance import bank_index
-    from bagu_trainer.bank_storage import atomic_json
+    from bagu_trainer.infrastructure.provenance import bank_index
+    from bagu_trainer.infrastructure.bank_storage import atomic_json
     versions = []
     for number, repo in enumerate(REPOS[:2]):
         directory = tmp_path / str(number)
@@ -148,18 +149,19 @@ def test_failure_leaves_retryable_journal_and_startup_recovers(expanded, monkeyp
     assert not (expanded.install.data / "source-deletion.json").exists()
 
 
-def test_real_process_interruption_before_switch_rolls_back_and_can_delete_again(expanded):
+def test_real_process_interruption_before_switch_rolls_back_and_can_delete_again(expanded, monkeypatch):
     import os
     import subprocess
     import sys
+    monkeypatch.chdir(expanded.install.project)
     before = (expanded.install.data / "active-bank.json").read_bytes()
     with closing(sqlite3.connect(expanded.install.learning)) as conn:
         original = list(conn.iterdump())
     child = r'''
 import os, sys
-from bagu_trainer.bank_build.service import BankBuildService
-from bagu_trainer.bank_cleanup import BankCleanupService
-from bagu_trainer.source_deletion import SourceDeletion
+from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+from bagu_trainer.infrastructure.bank_cleanup import BankCleanupService
+from bagu_trainer.infrastructure.source_deletion import SourceDeletion
 service = BankBuildService(sys.argv[1], manifest=sys.argv[2], opener=lambda *a, **k: (_ for _ in ()).throw(AssertionError('network forbidden')))
 original = SourceDeletion._write
 def interrupt(self, state):
@@ -173,7 +175,7 @@ cleanup.execute(cleanup.plan('sources', ['fixture/first']))
     environment = dict(os.environ, BAGU_USER_DATA_DIR=str(expanded.install.project), BAGU_TEST_INSTANCE="interruption-fixture",
         PYTHON_KEYRING_BACKEND="keyring.backends.null.Keyring")
     process = subprocess.run([sys.executable, "-B", "-c", child, str(expanded.install.project), str(expanded.install.manifest)],
-        env=environment, capture_output=True, timeout=15)
+        cwd=Path(__file__).resolve().parents[1], env=environment, capture_output=True, timeout=15)
     assert process.returncode == 77, process.stderr.decode(errors="replace")
     cleanup = BankCleanupService(expanded.service)
     assert (expanded.install.data / "source-deletion.json").exists()
@@ -185,7 +187,7 @@ cleanup.execute(cleanup.plan('sources', ['fixture/first']))
 
 
 def test_stale_approval_and_build_lock_are_rejected(expanded):
-    from bagu_trainer.bank_build.service import _build_lock
+    from bagu_trainer.infrastructure.bank_build.service import _build_lock
     cleanup = BankCleanupService(expanded.service)
     plan = cleanup.plan("sources", [REPOS[0]])
     store = Store(expanded.install.learning)
@@ -199,7 +201,7 @@ def test_stale_approval_and_build_lock_are_rejected(expanded):
 
 
 def test_legacy_mixed_backups_fallback_and_concepts_are_partitioned_and_recoverable(expanded, monkeypatch):
-    from bagu_trainer.bank_storage import atomic_json
+    from bagu_trainer.infrastructure.bank_storage import atomic_json
     data = expanded.install.data
     backup = data / "questions_backup_pre_source_excerpt.json"
     a = {"id": "legacy-a", "question": "A content", "sources": [{"repository": REPOS[0], "commit": "a" * 40}]}
@@ -232,7 +234,7 @@ def test_legacy_mixed_backups_fallback_and_concepts_are_partitioned_and_recovera
 
 def test_uninstall_includes_migration_receipt_staging_and_known_legacy_backups(tmp_path):
     import uuid
-    from bagu_trainer.bank_storage import atomic_json
+    from bagu_trainer.infrastructure.bank_storage import atomic_json
     profile = tmp_path / "profile"
     original_project = tmp_path / "original-source"
     original_project.mkdir()
@@ -267,7 +269,7 @@ class Credentials:
 
 
 def test_uninstall_uses_authoritative_windows_vault_not_runtime_fallback(monkeypatch):
-    from bagu_trainer import secrets
+    from bagu_trainer.infrastructure import secrets
     import keyring.backends.Windows
     vault = Credentials()
     monkeypatch.setattr(keyring.backends.Windows, "WinVaultKeyring", lambda: vault)
@@ -282,7 +284,10 @@ def test_uninstall_uses_authoritative_windows_vault_not_runtime_fallback(monkeyp
 
 
 def test_pending_uninstall_blocks_new_app_writes_and_reopens_retry_tool(tmp_path, monkeypatch):
-    from bagu_trainer import cleanup_cli, desktop, desktop_instance, runtime
+    from bagu_trainer.desktop import cleanup_cli
+    from bagu_trainer import desktop
+    from bagu_trainer.infrastructure import desktop_instance
+    from bagu_trainer.desktop import runtime
     pending = tmp_path / "pending-uninstall.json"
     pending.write_text('{"schema":1}')
     monkeypatch.setattr(cleanup_cli, "journal_path", lambda: pending)
@@ -380,8 +385,8 @@ def test_junction_and_replaced_external_database_are_rejected(tmp_path, monkeypa
 def test_cleanup_file_lock_is_reported_and_retry_verifies(tmp_path):
     import ctypes
     from ctypes import wintypes
-    from bagu_trainer.desktop_instance import OwnerLock
-    from bagu_trainer.cleanup_manifest import identity
+    from bagu_trainer.infrastructure.desktop_instance import OwnerLock
+    from bagu_trainer.infrastructure.cleanup_manifest import identity
     root = tmp_path / "profile"
     root.mkdir()
     (root / "config.json").write_text(json.dumps({"project_roots": []}))

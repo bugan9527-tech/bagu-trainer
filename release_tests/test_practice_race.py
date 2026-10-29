@@ -109,7 +109,7 @@ def test_submitting_blocks_enter_but_navigation_keeps_grade(practice_app):
 def test_worker_enter_failure_restores_original_and_allows_retry(practice_app, history, graded, outcome):
     app, page = practice_app
     engine, store, _ = history
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     monitor = DesktopMonitor(engine)
     if outcome == "expired":
         store.create_quiz("second", "historic-kp", {**SNAP, "review": True}, "ready",

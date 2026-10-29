@@ -1,4 +1,6 @@
-# Windows x64 安装、维护与构建（0.4.0）
+# Windows x64 安装、维护与构建（0.4.x Tk 时代记录，安装器共用）
+
+> 版本范围：本文记录 0.4.0 Tk 时代的安装/升级/卸载细节，保留历史事实；安装器脚本目前仍被 Electron 0.5.0 复用。当前 Electron 载荷、使用和验证边界见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md) 与[项目仓库 docs/ELECTRON_VALIDATION.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_VALIDATION.md)。真实安装、覆盖升级、登录自启动和完整卸载仍须另行实测，不因本文或构建审计自动通过。
 
 ## 普通用户安装
 
@@ -13,7 +15,7 @@
 
 ### 启动、准备与练习
 
-从开始菜单启动即直接进入唯一正式工作台，显示完整七项侧栏，不打开首次使用向导。
+0.4.x Tk 兼容版从开始菜单启动即直接进入唯一正式工作台，显示完整七项侧栏，不打开首次使用向导。
 Setup 的安装向导与应用使用准备是两回事；安装完成后在以下页面完成准备，无强制顺序：
 
 1. “题库管理”：选择来源、阅读许可声明，点击“构建 / 重新构建”；失败可“仅重试失败项”。

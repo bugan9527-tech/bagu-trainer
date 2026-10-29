@@ -1,13 +1,12 @@
 """Real Tk state transitions with gated workers and isolated localhost requests."""
-import queue
 import sys
 import threading
 from types import SimpleNamespace
 
 import pytest
 
-from release_tests.test_first_use import installation, model_http, KEY, wait_ui, seed_bank, make_wizard, fill_model
-from release_tests.test_ui_theme import cancel_timers, assert_inside
+from release_tests.test_first_use import installation, model_http, KEY, wait_ui
+from release_tests.test_ui_theme import cancel_timers
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk interactions")
 
@@ -19,16 +18,16 @@ def close_root(root):
 
 
 def test_settings_cancel_test_blocks_repeat_and_stale_save(installation, model_http):
-    from bagu_trainer.settings_window import ModelSettingsWindow
-    from bagu_trainer import config
-    app = ModelSettingsWindow()
+    from release_tests.fakes import make_model_panel
+    from bagu_trainer.infrastructure import config
+    app = make_model_panel()
     app.root.withdraw()
     errors = []
     app.root.report_callback_exception = lambda *args: errors.append(args)
     try:
-        app.url_var.set(model_http.base_url)
-        app.key_var.set(KEY)
-        app.timeout_var.set("1")
+        app.base_url.set(model_http.base_url)
+        app.api_key.set(KEY)
+        app.timeout.set("1")
         model_http.delay = .15
         app._test()
         worker = app.worker
@@ -55,15 +54,18 @@ def test_settings_cancel_test_blocks_repeat_and_stale_save(installation, model_h
         assert "已保存" in app.result_heading.get()
         assert not errors
     finally:
-        app._close()
+        app.close()
+        app.root.destroy()
 
 
 def test_bank_cancel_close_and_external_destroy_ignore_late_events(installation):
-    from bagu_trainer.tk_runtime import prepare_tk, create_root
+    from bagu_trainer.desktop.tk_runtime import prepare_tk
+    from bagu_trainer.desktop.tk_runtime import create_root
     prepare_tk()
     import tkinter as tk
-    from bagu_trainer.bank_setup import BankSetupWindow
-    from bagu_trainer.bank_build.control import BuildCancelled, BuildProgress
+    from bagu_trainer.desktop.bank_setup import BankSetupWindow
+    from bagu_trainer.infrastructure.bank_build.control import BuildCancelled
+    from bagu_trainer.infrastructure.bank_build.control import BuildProgress
     parent = create_root()
     parent.withdraw()
     entered, release = threading.Event(), threading.Event()
@@ -111,32 +113,10 @@ def test_bank_cancel_close_and_external_destroy_ignore_late_events(installation)
         close_root(parent)
 
 
-def test_wizard_empty_disabled_and_external_close_during_test(installation, model_http):
-    seed_bank(installation)
-    app = make_wizard(installation)
-    app._show("projects")
-    app.projects = []
-    app._render_projects()
-    app._sync_controls()
-    assert app.start_button.instate(["disabled"])
-    assert "尚未选择" in app.operation_hint.get()
-    app._show("model")
-    fill_model(app, model_http)
-    model_http.delay = .1
-    app._test_model()
-    worker = app.worker
-    app._test_model()
-    assert app.worker is worker
-    app.root.destroy()
-    assert app.closed and app.cancel.is_set()
-    worker.join(2)
-    app._drain()
-    assert app.verified is None
-
-
 def desktop_stub():
     from bagu_trainer.desktop import DesktopApp
-    monitor = SimpleNamespace(paused=False, active=None, waiting={}, initialized=set())
+    from release_tests.fakes import ui_monitor
+    monitor = ui_monitor()
     return DesktopApp(monitor)
 
 
@@ -237,6 +217,8 @@ def test_real_desktop_worker_converts_submit_exception_without_tk_access():
         raise OSError("secret-error-body")
     app.monitor.engine = SimpleNamespace(submit_answer=fail_submit,
         load_config=lambda: {"project_roots": []}, get_learning_stats=lambda: {"ok": False}, PROJECT_ROOT="C:/none")
+    from release_tests.fakes import LearningFake
+    app.monitor.engine.learning = LearningFake(app.monitor.engine)
     app.monitor.poll = lambda: {"state": "watching", "projects": 0}
     app.monitor.take_quiz = lambda: None
     app.monitor.list_pending = lambda: []

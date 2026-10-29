@@ -1,4 +1,6 @@
-# 桌面 UI 视觉规范
+# 桌面 UI 视觉规范（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留 Tk 主题规范。0.5.0 Electron 的视觉规范以 `frontend/src/tokens.css`、`frontend/src/styles.css` 和[项目仓库 docs/ELECTRON_MIGRATION.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_MIGRATION.md) 为准。
 
 适用范围：Windows 中文学习工具，长时间阅读与答题。采用浅色、扁平、低装饰界面；每组操作只突出一个主要动作。使用已安装的 UI UX Pro Max 辅助检索，采纳 Minimalism & Swiss Style 的留白、清晰层级、单一强调色和键盘焦点建议；不采用首次通用检索中偏营销页的轮播、拟物与英文字体组合。
 

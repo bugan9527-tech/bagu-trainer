@@ -3,9 +3,9 @@ import sys
 
 import pytest
 
-from bagu_trainer import startup
+from bagu_trainer.desktop import startup
 from bagu_trainer.desktop import DesktopApp
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.application.monitor import DesktopMonitor
 from release_tests.test_first_use import installation
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk feedback")
@@ -41,7 +41,7 @@ def test_cleanup_and_restored_notices_do_not_hide_readiness(installation, ready,
 
 
 def test_project_panel_cleanup_preserves_unsaved_additions(installation):
-    from bagu_trainer import config
+    from bagu_trainer.infrastructure import config
     missing = str(installation.watched / "deleted")
     config._write_config_atomic({"project_roots": [missing, str(installation.watched)]})
     app = DesktopApp(DesktopMonitor(None), coordinator=startup.StartupCoordinator())

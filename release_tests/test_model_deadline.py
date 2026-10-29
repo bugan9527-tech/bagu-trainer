@@ -14,7 +14,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import model_http, onboarding, quiz_generator as qg
+from bagu_trainer.infrastructure import model_http
+from bagu_trainer.application.settings import verification as onboarding
+from bagu_trainer.application.learning import generator as qg
 from release_tests.test_quiz_grounding import CANDIDATE, REVIEW, CONTEXT, SOURCE
 from release_tests.test_answer_history import history, pump
 
@@ -159,17 +161,12 @@ def test_normal_responses_and_size_limit_still_work(drip_model, mode):
         assert drip_model.requests == 1
 
 
-@pytest.mark.parametrize("entry", ["connection", "legacy_connection"])
-def test_connection_tests_obey_same_total_budget(drip_model, entry):
+def test_connection_test_obeys_total_budget(drip_model):
     started = time.monotonic()
-    if entry == "connection":
-        settings = onboarding.ModelSettings(drip_model.llm["base_url"], "fixture", "local-deadline-fixture", .12)
-        with pytest.raises(onboarding.SetupError) as error:
-            onboarding.test_connection(settings)
-        assert error.value.code == "timeout"
-    else:
-        message = qg.test_llm(drip_model.llm["base_url"], "local-deadline-fixture", "fixture", timeout=.12)
-        assert "超时" in message
+    settings = onboarding.ModelSettings(drip_model.llm["base_url"], "fixture", "local-deadline-fixture", .12)
+    with pytest.raises(onboarding.SetupError) as error:
+        onboarding.test_connection(settings)
+    assert error.value.code == "timeout"
     assert time.monotonic() - started < .45
 
 
@@ -319,7 +316,7 @@ def test_slow_system_dns_does_not_hold_request_or_grow_workers(model_server, mon
 @pytest.fixture
 def engine_model(history, drip_model, monkeypatch):
     engine, store, _ = history
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     monkeypatch.setattr(engine, "generator", qg.QuizGenerator())
     monkeypatch.setattr(engine, "kb", SimpleNamespace(get=lambda _: QUESTION, all=lambda: [QUESTION]))
     monkeypatch.setattr(engine, "cfg", {"max_quizzes_per_hit": 1})

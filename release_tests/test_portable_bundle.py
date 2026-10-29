@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from bagu_trainer import desktop_instance
+from bagu_trainer.infrastructure import desktop_instance
 from bagu_trainer.version import __version__
 from release_tests.test_migration import assert_history, legacy_project
 from scripts.portable_artifacts import resolve_target, validate_target
@@ -225,7 +225,7 @@ def test_native_startup_shortcut_points_to_exe(tmp_path):
     invoke(exe, env, "--install-startup", "--startup-directory", startup)
     shortcut = startup / "BaguTrainer.lnk"
     assert shortcut.is_file()
-    from bagu_trainer.login_startup import read_shortcut
+    from bagu_trainer.infrastructure.login_startup import read_shortcut
     details = read_shortcut(shortcut)
     assert Path(details["target"]) == exe
     assert details["arguments"] == "--background"

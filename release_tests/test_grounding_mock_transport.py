@@ -9,7 +9,7 @@ import urllib.request
 
 import pytest
 
-from bagu_trainer import quiz_generator as qg
+from bagu_trainer.application.learning import generator as qg
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell acceptance mock")

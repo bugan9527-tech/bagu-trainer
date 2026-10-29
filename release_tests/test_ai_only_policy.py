@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from bagu_trainer import quiz_generator as qg
+from bagu_trainer.application.learning import generator as qg
 
 
 @pytest.mark.parametrize("failure", ["no_model", "timeout", "invalid_output", "missing_excerpt"])

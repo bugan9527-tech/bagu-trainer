@@ -1,14 +1,14 @@
 """One native Tk root, real DesktopApp, real engine, synthetic local bank."""
 import importlib
-import json
 import threading
 import time
 
-from bagu_trainer import config, secrets
-from bagu_trainer.bank_storage import atomic_json
+from bagu_trainer.infrastructure import config
+from bagu_trainer.infrastructure import secrets
+from bagu_trainer.infrastructure.bank_storage import atomic_json
 from bagu_trainer.desktop import DesktopApp
-from bagu_trainer.desktop_monitor import DesktopMonitor
-from bagu_trainer.startup import StartupCoordinator
+from bagu_trainer.application.monitor import DesktopMonitor
+from bagu_trainer.desktop.startup import StartupCoordinator
 
 
 def test_first_partial_failed_engine_complete_and_all_pages_share_one_root(tmp_path, monkeypatch):
@@ -61,10 +61,10 @@ def test_first_partial_failed_engine_complete_and_all_pages_share_one_root(tmp_p
         app.jobs.put(("prepare", None))
         wait(lambda: coordinator.report.error)
         assert not app.ready and app.root.winfo_exists()
-        coordinator.engine_loader = lambda: importlib.import_module("bagu_trainer.engine")
+        coordinator.engine_loader = lambda: importlib.import_module("bagu_trainer.application.learning.engine")
         app.jobs.put(("prepare", None))
         wait(lambda: app.ready)
-        assert monitor.engine.__name__ == "bagu_trainer.engine"
+        assert monitor.engine.__name__ == "bagu_trainer.application.learning.engine"
         assert coordinator.window_command("_navigate", {"page": "model"})["ok"]
         wait(lambda: app.shell.current_page == "model")
         assert not coordinator.window_command("_navigate", {"page": "execute-anything"})["ok"]

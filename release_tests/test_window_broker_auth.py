@@ -5,13 +5,14 @@ import os
 import subprocess
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from multiprocessing import AuthenticationError
 from multiprocessing.connection import Client, CHALLENGE, FAILURE, answer_challenge, deliver_challenge
 
 import pytest
 
-from bagu_trainer import desktop_instance as bridge
+from bagu_trainer.infrastructure import desktop_instance as bridge
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows named pipes")
@@ -140,21 +141,23 @@ def test_malformed_json_does_not_stop_authenticated_service(service):
     assert bridge.remote_call("_desktop_status", {})["ok"]
 
 
-def test_single_instance_lock_remains_owned_after_bad_auth(service):
+def test_single_instance_lock_remains_owned_after_bad_auth(service, monkeypatch):
+    monkeypatch.chdir(service.runtime)
     reject_bad_key(service)
     assert bridge.desktop_running()
     other = bridge.OwnerLock(service.runtime)
     assert not other.acquire() and other.handle is None
-    probe = "from bagu_trainer.desktop_instance import OwnerLock; import sys; lock=OwnerLock(sys.argv[1]); assert not lock.acquire(); print('owner retained')"
+    probe = "from bagu_trainer.infrastructure.desktop_instance import OwnerLock; import sys; lock=OwnerLock(sys.argv[1]); assert not lock.acquire(); print('owner retained')"
     process = subprocess.run([sys.executable, "-B", "-c", probe, str(service.runtime)],
-                             capture_output=True, text=True, timeout=5)
+                             cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=5)
     assert process.returncode == 0, "separate process unexpectedly acquired the instance lock"
     assert process.stdout.strip() == "owner retained"
     assert bridge.remote_call("_desktop_status", {})["ok"]
 
 
 def test_duplicate_startup_queries_and_activates_existing_window_after_bad_auth(service, monkeypatch):
-    from bagu_trainer import startup
+    monkeypatch.chdir(service.runtime)
+    from bagu_trainer.desktop import startup
     coordinator = startup.StartupCoordinator(engine_loader=lambda: pytest.fail("duplicate loaded the engine"))
     service.broker.dispatch = coordinator.window_command
     assert coordinator.events.empty()
@@ -163,7 +166,9 @@ import json, sys
 from pathlib import Path
 from multiprocessing import AuthenticationError
 from multiprocessing.connection import Client
-from bagu_trainer import desktop, desktop_instance as bridge, startup
+from bagu_trainer import desktop
+from bagu_trainer.infrastructure import desktop_instance as bridge
+from bagu_trainer.desktop import startup
 bridge.RUNTIME = Path(sys.argv[1])
 endpoint = json.loads((bridge.RUNTIME / "bridge-credentials.json").read_text(encoding="utf-8"))
 try:
@@ -180,7 +185,7 @@ assert desktop.main([]) == 0
 print("rejected, queried, activated")
 '''
     process = subprocess.run([sys.executable, "-B", "-c", child, str(service.runtime)],
-                             capture_output=True, text=True, timeout=5)
+                             cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=5)
     assert process.returncode == 0, process.stderr
     assert process.stdout.strip() == "rejected, queried, activated"
     assert coordinator.events.get(timeout=1) == ("show", "dashboard")

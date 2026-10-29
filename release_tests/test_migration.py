@@ -4,10 +4,12 @@ import threading
 
 import pytest
 
-from bagu_trainer import config, migration, secrets
-from bagu_trainer.bank_storage import atomic_json
-from bagu_trainer.scheduler import next_state
-from bagu_trainer.store import Store
+from bagu_trainer.infrastructure import config
+from bagu_trainer.infrastructure import migration
+from bagu_trainer.infrastructure import secrets
+from bagu_trainer.infrastructure.bank_storage import atomic_json
+from bagu_trainer.domain.review import next_state
+from bagu_trainer.infrastructure.store import Store
 
 
 def legacy_project(root, *, custom_db=None, key=""):
@@ -137,7 +139,7 @@ def test_existing_data_and_wrong_source_are_never_overwritten(tmp_path):
 
 
 def test_running_legacy_owner_blocks_migration_then_allows_retry(tmp_path):
-    from bagu_trainer.desktop_instance import OwnerLock
+    from bagu_trainer.infrastructure.desktop_instance import OwnerLock
     source = legacy_project(tmp_path / "old")
     owner = OwnerLock(source / "data" / ".desktop-runtime")
     assert owner.acquire()

@@ -29,28 +29,37 @@ def test_short_workspace_can_toggle_queue_without_hiding_reading_actions(install
         dispose(app)
 
 
-def test_project_apply_runs_on_data_only_worker_and_keeps_existing_baseline():
+def test_project_apply_runs_on_data_only_worker_and_keeps_existing_baseline(tmp_path):
+    from bagu_trainer.application.monitor import DesktopMonitor
+    from bagu_trainer.application.projects import canonical_root
+    from release_tests.fakes import LearningFake
+    for name in ('kept', 'removed', 'new'):
+        (tmp_path / name).mkdir()
+    kept, removed, new = [canonical_root(tmp_path / name) for name in ('kept', 'removed', 'new')]
     events, jobs, stop = queue.Queue(), queue.Queue(), threading.Event()
     baseline = object()
-    readers = {"kept": baseline, "removed": object()}
+    readers = {kept: baseline, removed: object()}
     engine = SimpleNamespace(_normalize_project_root=str,
                              session=SimpleNamespace(forget_projects=lambda roots: [readers.pop(root, None) for root in roots]),
-                             PROJECT_ROOT="kept", load_config=lambda: {"project_roots": ["kept", "new"]},
+                             PROJECT_ROOT=kept, load_config=lambda: {"project_roots": [kept, new]},
                              get_learning_stats=lambda: {"ok": False})
-    monitor = SimpleNamespace(engine=engine, initialized={"kept", "removed"},
-                              observed={"kept": "fingerprint", "removed": "old"},
-                              waiting={"kept": "change", "removed": "old"}, failed_generations={"removed": 1},
-                              list_pending=lambda: [], take_quiz=lambda: None)
+    engine.learning = LearningFake(engine)
+    monitor = DesktopMonitor(engine)
+    monitor.apply_projects([kept, removed])
+    monitor.initialized = {kept, removed}
+    monitor.observed = {kept: "fingerprint", removed: "old"}
+    monitor.waiting = {kept: "change", removed: "old"}
+    monitor.failed_generations = {removed: 1}
     def poll():
         stop.set()
         return {"state": "watching", "projects": 2}
     monitor.poll = poll
     context = SimpleNamespace(monitor=monitor, events=events, jobs=jobs, stop=stop, worker_done=threading.Event())
-    jobs.put(("apply_projects", ["kept", "new"]))
+    jobs.put(("apply_projects", [kept, new]))
     DesktopApp._worker(context)
-    assert monitor.initialized == {"kept"}
-    assert monitor.waiting == {"kept": "change"} and monitor.observed == {"kept": "fingerprint"}
-    assert readers == {"kept": baseline} and not monitor.failed_generations
+    assert monitor.initialized == {kept}
+    assert monitor.waiting == {kept: "change"} and monitor.observed == {kept: "fingerprint"}
+    assert readers == {kept: baseline} and not monitor.failed_generations
     assert not any("操作失败" in str(event) for event in list(events.queue))
 
 

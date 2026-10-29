@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import onboarding, quiz_generator as qg
+from bagu_trainer.application.settings import verification as onboarding
+from bagu_trainer.application.learning import generator as qg
 from release_tests.test_quiz_grounding import CANDIDATE, CONTEXT, REVIEW, SOURCE
 
 
@@ -90,8 +91,6 @@ def invoke(state, entry):
         except onboarding.SetupError as error:
             return str(error)
         return ""
-    if entry == "legacy_connection":
-        return qg.test_llm(state.base_url, KEY, "local-fixture", timeout=3)
     result = qg.QuizGenerator().generate(QUESTION, CONTEXT)
     assert not any(call["has_authorization"] for call in state.target), "redirect target received Authorization"
     assert result.get("available") is False
@@ -99,7 +98,7 @@ def invoke(state, entry):
     return result["unavailable_reason"]
 
 
-@pytest.mark.parametrize("entry", ["generation", "review", "connection", "legacy_connection"])
+@pytest.mark.parametrize("entry", ["generation", "review", "connection"])
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
 @pytest.mark.parametrize("destination", ["cross_origin", "same_origin_relative", "cross_origin_scheme_relative"])
 def test_redirects_never_forward_authorization(model_http, entry, status, destination, capsys):
@@ -124,7 +123,7 @@ def test_redirects_never_forward_authorization(model_http, entry, status, destin
     assert model_http.target_url not in message
 
 
-@pytest.mark.parametrize("entry", ["generation", "review", "connection", "legacy_connection"])
+@pytest.mark.parametrize("entry", ["generation", "review", "connection"])
 @pytest.mark.parametrize("status,hint", [(401, "Key"), (403, "权限"), (404, "地址"),
                                          (429, "额度"), (500, "重试"), (418, "重试")])
 def test_http_errors_keep_status_and_safe_actionable_message(model_http, entry, status, hint, capsys):
@@ -152,12 +151,8 @@ def test_normal_generation_and_review_use_authenticated_post(model_http):
     assert json.loads(review["messages"][-1]["content"])["task"] == "review_context_grounding"
 
 
-@pytest.mark.parametrize("entry", ["connection", "legacy_connection"])
-def test_normal_connection_test_still_succeeds(model_http, entry):
+def test_normal_connection_test_still_succeeds(model_http):
     model_http.fail_at = 0
-    if entry == "connection":
-        assert onboarding.test_connection(model_http.settings).settings == model_http.settings
-    else:
-        assert "连接成功" in qg.test_llm(model_http.base_url, KEY, "local-fixture", timeout=3)
+    assert onboarding.test_connection(model_http.settings).settings == model_http.settings
     assert len(model_http.origin) == 1 and model_http.target == []
     assert model_http.origin[0]["authorized"]

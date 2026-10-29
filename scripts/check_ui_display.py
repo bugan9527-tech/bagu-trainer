@@ -9,7 +9,6 @@ import ctypes
 import json
 import os
 from pathlib import Path
-import queue
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -31,14 +30,13 @@ def main():
         os.environ["BAGU_USER_DATA_DIR"] = user
         os.environ.pop("BAGU_LLM_API_KEY", None)
         os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
-        from bagu_trainer.tk_runtime import prepare_tk
+        from bagu_trainer.desktop.tk_runtime import prepare_tk
         prepare_tk()
         import tkinter as tk
         import ttkbootstrap  # load the real Tk subclass before installing the fixture
         from PIL import ImageGrab
-        from bagu_trainer import ui_theme
-        from bagu_trainer.first_use import FirstUseWizard
-        from bagu_trainer.settings_window import ModelSettingsWindow
+        from bagu_trainer.desktop import ui_theme
+        from bagu_trainer.application.monitor import DesktopMonitor
         from bagu_trainer.desktop import DesktopApp
         real_tk = tk.Tk
         if args.tk_scale is not None:
@@ -49,7 +47,6 @@ def main():
             tk.Tk = scaled_root
         if args.fallback_font:
             ui_theme.FONT_FAMILIES = ("Unavailable Chinese Font", "Noto Sans SC", "Noto Sans CJK SC", "SimHei", "SimSun")
-        FirstUseWizard._restore = lambda self: None
         report = {"mode": "tk-simulation" if args.tk_scale else "native-windows",
                   "requested_tk_scale": args.tk_scale,
                   "fallback_simulation": args.fallback_font,
@@ -102,57 +99,10 @@ def main():
         if args.normal:
             identifier = "deepseek-chat"
             path = "C:/学习项目/BaguaDemo"
-        wizard = FirstUseWizard(SimpleNamespace(events=queue.Queue()))
-        wizard.root.report_callback_exception = errors
-        try:
-            wizard.root.geometry("%dx%d" % wizard.root.minsize())
-            wizard._show("bank")
-            capture(wizard.root, "wizard-bank-top", [wizard.start_button, wizard.back_button])
-            wizard.bank_view.reveal(wizard.bank_setup.start_button)
-            capture(wizard.root, "wizard-bank-small", [wizard.bank_setup.start_button, wizard.bank_setup.cancel_button,
-                                                      wizard.start_button, wizard.back_button])
-            wizard._show("model")
-            wizard.base_url.set("https://example.invalid/v1")
-            wizard.model_name.set(identifier)
-            wizard.status.set(mixed * (1 if args.normal else 6))
-            wizard.model_view.reveal(wizard.model_entries[1])
-            wizard.model_entries[1].focus_force()
-            wizard.model_entries[1].icursor("end")
-            wizard.model_entries[1].xview_moveto(1)
-            capture(wizard.root, "wizard-model-small", [wizard.start_button, wizard.back_button])
-            wizard._show("projects")
-            wizard.projects = [path]
-            wizard.project_list.insert("end", path)
-            wizard.project_list.selection_set(0)
-            wizard._sync_controls()
-            wizard.project_list.xview_moveto(1)
-            capture(wizard.root, "wizard-projects-small", [wizard.start_button, *wizard.project_buttons])
-            wizard.root.state("zoomed")
-            capture(wizard.root, "wizard-projects-maximized", [wizard.start_button, *wizard.project_buttons])
-        finally:
-            wizard._close()
-        settings = ModelSettingsWindow()
-        settings.root.report_callback_exception = errors
-        try:
-            settings.root.geometry("%dx%d" % settings.root.minsize())
-            settings.model_var.set(identifier)
-            settings.url_var.set("https://example.invalid/v1" if args.normal else "https://example.invalid/" + "LongEndpoint/" * 10)
-            settings.status.set("未发送请求：显示检查。" + mixed * (1 if args.normal else 12))
-            settings.form_view.reveal(settings.entries[1])
-            settings.entries[1].focus_force()
-            settings.entries[1].icursor("end")
-            settings.entries[1].xview_moveto(1)
-            capture(settings.root, "settings-model-small", [settings.test_button, settings.save_button, settings.cancel_button])
-            settings.status_area.text.focus_force()
-            settings.status_area.text.yview_moveto(1)
-            capture(settings.root, "settings-status-focus", [settings.test_button, settings.save_button])
-            settings.root.state("zoomed")
-            capture(settings.root, "settings-maximized", [settings.test_button, settings.save_button])
-        finally:
-            # No test/save tasks exist in this capture tool. Destroy externally
-            # to avoid recursively destroying Tk during the panel's Destroy event.
-            settings.root.destroy()
-        app = DesktopApp(SimpleNamespace(paused=False))
+        # A display-only ready bank lets the ordinary delivery gate accept the
+        # synthetic quiz without loading local questions or starting workers.
+        engine = SimpleNamespace(learning=SimpleNamespace(has_question_bank=lambda: True))
+        app = DesktopApp(DesktopMonitor(engine))
         app.root.report_callback_exception = errors
         try:
             app.root.geometry("%dx%d" % app.root.minsize())
@@ -182,26 +132,27 @@ def main():
                 "options": {letter: mixed if args.normal else mixed * 3 + identifier for letter in "ABCD"}})
             app._navigate_page("practice")
             app.root.update()
-            practice = app._page_frame("practice")
-            # A nonempty list activates the wide split: without this fixture,
-            # screenshots miss regressions that push answer controls offscreen.
-            practice.set_pending([app.practice.current], 4)
+            queue_page = app._page_frame("practice")
+            queue_page.set_pending([app.practice.current], 4)
+            practice = app._answer_window()
+            practice.show()
+            practice.geometry("%dx%d" % practice.minsize())
             app.root.state("normal")
             app.root.geometry("1200x800+0+0")
-            capture(app.root, "quiz-pending-split", [practice.enter_button, *practice.option_buttons])
+            capture(app.root, "quiz-pending-list", [queue_page.enter_button])
             app.root.geometry("%dx%d" % app.root.minsize())
-            capture(app.root, "quiz-question-small", [practice.submit_button, practice.dismiss_button])
+            capture(practice, "quiz-question-small", [practice.submit_button, practice.dismiss_button])
             practice.view.canvas.focus_force()
             practice.view.canvas.event_generate("<End>")
-            capture(app.root, "quiz-options-end-focus", [practice.submit_button, practice.dismiss_button])
+            capture(practice, "quiz-options-end-focus", [practice.submit_button, practice.dismiss_button])
             app.practice.apply_grade({"ok": True, "correct": False, "correct_answer": "B", "your_answer": "A",
                             "analysis": "先提交数据库，再删除缓存，并对删除失败进行重试。" if args.normal else (mixed + "SQL.Transaction<Result>.Commit/rollback\n") * 45 + "解析末尾-END",
                             "schedule": {"interval_days": 2, "next_review_at": 1792771200}})
-            capture(app.root, "quiz-analysis-small", [practice.submit_button, practice.dismiss_button])
+            capture(practice, "quiz-analysis-small", [practice.submit_button, practice.dismiss_button])
             practice.view.canvas.yview_moveto(1)
-            capture(app.root, "quiz-review-end", [practice.submit_button, practice.dismiss_button])
-            app.root.state("zoomed")
-            capture(app.root, "quiz-maximized", [practice.submit_button, practice.dismiss_button])
+            capture(practice, "quiz-review-end", [practice.submit_button, practice.dismiss_button])
+            practice.state("zoomed")
+            capture(practice, "quiz-maximized", [practice.submit_button, practice.dismiss_button])
         finally:
             app.stop.set()
             app.root.destroy()

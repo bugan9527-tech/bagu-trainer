@@ -1,10 +1,10 @@
-"""Optional CLI adapter. Desktop builds use bagu_trainer.bank_build directly."""
+"""Optional CLI adapter. Desktop builds use bagu_trainer.infrastructure.bank_build directly."""
 import subprocess
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from bagu_trainer.bank_build.extraction import *
-from bagu_trainer.bank_build.extraction import main as _main
+from bagu_trainer.infrastructure.bank_build.extraction import *
+from bagu_trainer.infrastructure.bank_build.extraction import main as _main
 
 def fetch_daily_issues(entries) -> int:
     """抓取 Daily-Interview-Question 的 Issue 标题（每日一题的题目），返回条数。"""

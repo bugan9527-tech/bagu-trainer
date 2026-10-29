@@ -1,4 +1,6 @@
-# 首次使用与修复（0.4.0）
+# 首次使用与修复（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留旧版操作说明和历史事实。0.5.0 Electron 当前桌面说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。本文中的 `scripts/start_desktop.py`、Tk 窗口、`--migrate-from` 和首次向导不代表当前 Electron 行为。
 
 安装版从开始菜单启动，便携版在完整解压目录中双击 `BaguTrainer.exe`，源码版在项目根目录运行
 `.\.venv\Scripts\python.exe -B scripts/start_desktop.py`。三种方式都直接进入唯一正式工作台，

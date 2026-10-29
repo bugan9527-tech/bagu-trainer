@@ -1,12 +1,15 @@
 """Real Tk regressions for theme lifecycle, DPI layout and keyboard actions."""
-import queue
 import sys
-from types import SimpleNamespace
 
 import pytest
+from release_tests.fakes import ui_monitor
 
-from bagu_trainer.tk_runtime import prepare_tk, create_root
-from bagu_trainer.ui_theme import apply_theme, COLORS, PRIMARY, DANGER
+from bagu_trainer.desktop.tk_runtime import prepare_tk
+from bagu_trainer.desktop.tk_runtime import create_root
+from bagu_trainer.desktop.ui_theme import apply_theme
+from bagu_trainer.desktop.ui_theme import COLORS
+from bagu_trainer.desktop.ui_theme import PRIMARY
+from bagu_trainer.desktop.ui_theme import DANGER
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk UI")
 
@@ -60,32 +63,27 @@ def test_fresh_interpreters_and_toplevels_keep_their_images_and_fonts():
             first.destroy()
 
 
-@pytest.mark.parametrize("kind", ["settings", "wizard"])
-def test_closed_model_windows_release_callbacks_even_with_retained_variables(monkeypatch, kind):
+def test_closed_model_panel_releases_callbacks_even_with_retained_variables():
     import gc
     import weakref
-    from bagu_trainer.first_use import FirstUseWizard
-    from bagu_trainer.settings_window import ModelSettingsWindow
-    monkeypatch.setattr(FirstUseWizard, "_restore", lambda self: None)
-    if kind == "settings":
-        window = ModelSettingsWindow()
-        variables = [window.url_var, window.model_var, window.key_var, window.timeout_var]
-    else:
-        window = FirstUseWizard(SimpleNamespace(events=queue.Queue()))
-        variables = [window.base_url, window.model_name, window.api_key, window.timeout]
+    from release_tests.fakes import make_model_panel
+    panel = make_model_panel()
+    root = panel.root
+    variables = [panel.base_url, panel.model_name, panel.api_key, panel.timeout]
     assert all(variable.trace_info() for variable in variables)
-    reference = weakref.ref(window)
-    window._close()
-    del window
+    reference = weakref.ref(panel)
+    panel.close()
+    root.destroy()
+    del panel
     gc.collect()
     assert all(not variable.trace_info() for variable in variables)
-    assert reference() is None  # no Tcl callback may keep a destroyed window alive
+    assert reference() is None
 
 
 def test_closed_variable_can_be_collected_by_worker_without_calling_tcl():
     import gc
     import threading
-    from bagu_trainer.ui_state import window_var
+    from bagu_trainer.desktop.ui_state import window_var
     root = create_root()
     variable = window_var(root, "closed snapshot")
     holder = [variable]
@@ -112,9 +110,8 @@ def test_all_windows_keep_actions_visible_at_minimum_size(monkeypatch, scale):
     prepare_tk()
     import tkinter as tk
     from bagu_trainer.desktop import DesktopApp
-    from bagu_trainer.first_use import FirstUseWizard
-    from bagu_trainer.bank_setup import BankSetupWindow
-    from bagu_trainer.settings_window import ModelSettingsWindow
+    from bagu_trainer.desktop.bank_setup import BankSetupWindow
+    from release_tests.fakes import make_model_panel
 
     real_tk = tk.Tk
     def scaled_root():
@@ -122,46 +119,27 @@ def test_all_windows_keep_actions_visible_at_minimum_size(monkeypatch, scale):
         root.tk.call("tk", "scaling", scale * 96 / 72)
         return root
     monkeypatch.setattr(tk, "Tk", scaled_root)
-    monkeypatch.setattr(FirstUseWizard, "_restore", lambda self: None)
-    wizard = FirstUseWizard(SimpleNamespace(events=queue.Queue()))
+    bank_parent = create_root()
+    bank_parent.withdraw()
+    bank = BankSetupWindow(bank_parent)
     try:
-        wizard.root.geometry("%dx%d" % wizard.root.minsize())
-        for step in wizard.STEPS:
-            wizard._show(step)
-            assert_inside(wizard.start_button, wizard.root)
-            assert_inside(wizard.back_button, wizard.root)
-            if step == "bank":
-                assert wizard.bank_setup is not None
-                wizard.bank_view.reveal(wizard.bank_setup.start_button)
-                assert_inside(wizard.bank_setup.start_button, wizard.root)
-                assert_inside(wizard.bank_setup.cancel_button, wizard.root)
-                assert wizard.bank_setup.source_list.winfo_height() > 30
-            elif step == "model":
-                wizard.model_view.reveal(wizard.test_button)
-                assert_inside(wizard.test_button, wizard.root)
-            elif step == "projects":
-                for button in wizard.project_buttons:
-                    assert_inside(button, wizard.root)
-        bank = BankSetupWindow(wizard.root)
-        try:
-            bank.root.geometry("%dx%d" % bank.root.minsize())
-            assert_inside(bank.start_button, bank.root)
-            assert_inside(bank.cancel_button, bank.root)
-        finally:
-            cancel_timers(bank.root)
-            bank._close()
-        settings = ModelSettingsWindow(wizard.root)
-        try:
-            settings.root.geometry("%dx%d" % settings.root.minsize())
-            assert_inside(settings.save_button, settings.root)
-            assert_inside(settings.test_button, settings.root)
-        finally:
-            settings._close()
+        bank.root.geometry("%dx%d" % bank.root.minsize())
+        assert_inside(bank.start_button, bank.root)
+        assert_inside(bank.cancel_button, bank.root)
     finally:
-        cancel_timers(wizard.root)
-        wizard._close()
+        cancel_timers(bank.root)
+        bank._close()
+        bank_parent.destroy()
+    settings = make_model_panel()
+    try:
+        settings.root.geometry("%dx%d" % settings.root.minsize())
+        assert_inside(settings.save_button, settings.root)
+        assert_inside(settings.test_button, settings.root)
+    finally:
+        settings.close()
+        settings.root.destroy()
 
-    app = DesktopApp(SimpleNamespace(paused=False))
+    app = DesktopApp(ui_monitor())
     try:
         app.root.geometry("%dx%d" % app.root.minsize())
         assert_inside(app.pause_button, app.root)

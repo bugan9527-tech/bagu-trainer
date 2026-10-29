@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from bagu_trainer import engine
+from bagu_trainer.application.learning import engine
 
 
 def generate(root=None, **kwargs):

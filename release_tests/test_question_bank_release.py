@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from bagu_trainer.knowledge_base import KnowledgeBase
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
 
 
 def load_dedupe():

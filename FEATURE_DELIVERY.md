@@ -1,4 +1,6 @@
-# 0.4.0 功能交付说明
+# 0.4.0 功能交付说明（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留旧版功能交付事实。0.5.0 Electron 当前桌面说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 此版本在现有 DesktopApp 和正式安装包中实现单一主窗口、全来源题库删除、主动完整卸载。工作区原有下载状态相关修改继续保留。最终产物路径及原始验证结果见 validation/FEATURE_DELIVERY_REPORT.md。
 

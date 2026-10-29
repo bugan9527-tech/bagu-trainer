@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer.scheduler import next_state
-from bagu_trainer.store import Store
+from bagu_trainer.domain.review import next_state
+from bagu_trainer.infrastructure.store import Store
 
 
 SNAP = {
@@ -25,13 +25,13 @@ NOW = 1_800_000_000.0
 
 @pytest.fixture
 def history(tmp_path, monkeypatch):
-    from bagu_trainer import config
+    from bagu_trainer.infrastructure import config
     bank = config.USER_DATA_ROOT / "data"
     bank.mkdir(parents=True, exist_ok=True)
     (bank / "questions.json").write_text(json.dumps([{
         "id": "fixture", "knowledge_point": "测试知识点", "question": "测试来源题目",
         "tags": ["缓存"], "keywords": ["缓存"]}], ensure_ascii=False), encoding="utf-8")
-    from bagu_trainer import engine
+    from bagu_trainer.application.learning import engine
     session = engine.EngineSession()
     monkeypatch.setattr(engine, "session", session)
     store = Store(tmp_path / "history.db")
@@ -167,7 +167,7 @@ def test_invalid_json_empty_missing_and_query_failure_recovery(history, monkeypa
 
 def test_pending_automatic_quiz_survives_manual_retry_and_caps(history):
     engine, store, _ = history
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     attempt = seed(store)
     snap = {**SNAP, "review": True}
     store.create_quiz("auto", "historic-kp", snap, "ready", engine.load_config()["project_roots"][0], "", NOW, NOW+3600)
@@ -189,7 +189,7 @@ def test_pending_automatic_quiz_survives_manual_retry_and_caps(history):
 
 def test_pending_list_count_and_enter_are_read_only_until_enter(history):
     engine, store, _ = history
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     attempt = seed(store)
     project = engine.load_config()["project_roots"][0]
     for qid in ("p1", "p2"):
@@ -228,7 +228,7 @@ def pump(app, condition, timeout=4):
 
 def desktop(history):
     from bagu_trainer.desktop import DesktopApp
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     engine, store, calls = history
     polls = []
     monitor = DesktopMonitor(engine)
@@ -364,7 +364,7 @@ def test_history_page_error_empty_retry_and_late_result_after_exit(history, monk
 
 def test_real_monitor_continues_file_observation_and_queues_during_history(history, tmp_path, monkeypatch):
     engine, store, calls = history
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     monkeypatch.setattr(engine, "find_trae_home", lambda *args: None)
     path = tmp_path / "cache.py"
     path.write_text("cache = 1\n", encoding="utf-8")
@@ -392,7 +392,7 @@ def test_real_monitor_continues_file_observation_and_queues_during_history(histo
 def test_worker_finishes_already_queued_submission_on_exit(history):
     engine, store, _ = history
     from bagu_trainer.desktop import DesktopApp
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     attempt = seed(store)
     qid = engine.repractice_attempt(attempt)["quiz"]["quiz_id"]
     stop, done = threading.Event(), threading.Event()

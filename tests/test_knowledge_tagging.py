@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Knowledge-point tagging and filtering regression tests."""
-from bagu_trainer.knowledge_base import KnowledgeBase
-from bagu_trainer.knowledge_taxonomy import classify_question
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
+from bagu_trainer.domain.knowledge_taxonomy import classify_question
 
 
 def _q(title, repo="JavaGuide", path="docs/java/basis/java-basic.md"):
@@ -71,7 +71,7 @@ def test_all_questions_have_labels_and_filter_works():
 
 
 def test_server_tag_filter_uses_knowledge_tags(env):
-    import bagu_trainer.engine as engine
+    import bagu_trainer.application.learning.engine as engine
 
     result = engine.list_knowledge_points(tag="Redis")
     assert result["total"] > 0

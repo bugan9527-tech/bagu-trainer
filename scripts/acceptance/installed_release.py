@@ -20,7 +20,7 @@ import winreg
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from bagu_trainer import login_startup
+from bagu_trainer.infrastructure import login_startup
 from bagu_trainer.version import __version__
 from scripts.build_installer import APP_ID, sha256, safe_path
 from scripts.build_portable import audit, source_provenance
@@ -175,7 +175,7 @@ def close_owned_child(child):
 
 
 def check_pristine_start(installed, setup, work, data, bundle, entries):
-    from bagu_trainer import desktop_instance
+    from bagu_trainer.infrastructure import desktop_instance
     from scripts.acceptance.desktop_acceptance import capture_window
     desktop_instance.RUNTIME = Path(os.environ["LOCALAPPDATA"]) / "BaguTrainer" / "runtime"
     check(not (data / "config.json").exists() and not list(data.rglob("*.db")), "Fresh profile already contains settings/history")
@@ -221,7 +221,7 @@ def check_pristine_start(installed, setup, work, data, bundle, entries):
 
 
 def check_restored_start(installed, data, work, label, *, legacy=False):
-    from bagu_trainer import desktop_instance
+    from bagu_trainer.infrastructure import desktop_instance
     from scripts.acceptance.desktop_acceptance import capture_window
     desktop_instance.RUNTIME = Path(os.environ["LOCALAPPDATA"]) / "BaguTrainer/runtime"
     child = subprocess.Popen([str(installed / "BaguTrainer.exe")], env=environment(data),
@@ -289,9 +289,9 @@ class TestVault:
 
 def seed_profile(data, work):
     """Real application schema with entirely synthetic config/bank/attempts."""
-    from bagu_trainer.bank_storage import atomic_json
-    from bagu_trainer.store import Store
-    from bagu_trainer.scheduler import next_state
+    from bagu_trainer.infrastructure.bank_storage import atomic_json
+    from bagu_trainer.infrastructure.store import Store
+    from bagu_trainer.domain.review import next_state
     project = work / "synthetic-project"
     project.mkdir()
     (project / "query.py").write_text("query = 'SELECT id FROM synthetic_table'\n", encoding="utf-8")

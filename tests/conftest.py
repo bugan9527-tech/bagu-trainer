@@ -10,8 +10,8 @@ import atexit
 
 # 在导入 engine 之前把 CONFIG_PATH 指向不存在的文件，
 # 保证模块导入期 load_config() 不会读取真实 config.json
-import bagu_trainer.config as config_mod  # noqa: E402
-import bagu_trainer.secrets as secrets_mod  # noqa: E402
+import bagu_trainer.infrastructure.config as config_mod  # noqa: E402
+import bagu_trainer.infrastructure.secrets as secrets_mod  # noqa: E402
 
 _test_profile = tempfile.TemporaryDirectory(prefix="bagu-unit-tests-")
 atexit.register(_test_profile.cleanup)
@@ -43,8 +43,8 @@ def pytest_runtest_teardown(item, nextitem):
         import gc
         gc.collect()
 
-import bagu_trainer.engine as engine  # noqa: E402
-from bagu_trainer.quiz_validation import grounding_receipt  # noqa: E402
+import bagu_trainer.application.learning.engine as engine  # noqa: E402
+from bagu_trainer.domain.quizzes import grounding_receipt  # noqa: E402
 
 
 @pytest.fixture(scope="session")

@@ -1,6 +1,6 @@
-> 0.4.0 当前行为：启动直接进入唯一正式工作台；准备在原侧栏页完成。主动完整卸载清除受管数据和本机凭据，升级/修复保留数据。以下早期验收记录中的旧向导或卸载保留语义不适用于新版本，当前流程见 [FIRST_USE.md](FIRST_USE.md)、[STARTUP.md](STARTUP.md) 和 [FEATURE_DELIVERY.md](FEATURE_DELIVERY.md)。
+> 版本范围：本文仅适用于 **v0.4.x Tk 兼容版**的 PyInstaller 便携构建与验证，保留旧版构建事实。0.5.0 Electron 便携包结构、构建和验证见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。本文命令 `scripts/build_portable.py`、`scripts/run_release_tests.py` 和 `windows-portable.yml` 不是当前 Electron 构建入口。
 
-# Windows x64 便携应用构建与验证
+# Windows x64 便携应用构建与验证（0.4.x Tk 兼容版，归档）
 
 产物为 PyInstaller **onedir**：`BaguTrainer.exe` 与 `_internal/` 必须一起解压和移动。
 双击 EXE 直接进入唯一正式工作台；在题库管理、模型配置和监听项目页完成准备，始终使用同一主窗口。

@@ -1,4 +1,6 @@
-# bagu-trainer 功能补充开发方案
+# bagu-trainer 功能补充开发方案（Tk 时代历史方案）
+
+> 版本范围：本文是 0.4.x Tk 兼容版的历史方案，不代表当前 Electron 界面或交付状态。当前说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 日期：2026-10-24。状态：方案，尚未实施本轮功能。
 

@@ -39,9 +39,9 @@ GitHub 仓库发布训练器源码、导入/去重/标签/概念构建脚本、�
 
 ## 新用户首次构建
 
-安装依赖并启动 `python -B scripts/start_desktop.py`，在中文向导第 1 步选择来源并阅读声明，
-点击“下载并构建 / 重试”。完成后继续模型测试和监听项目设置，向导支持重开恢复，见
-[FIRST_USE.md](FIRST_USE.md)。下载使用 GitHub HTTPS ZIP 归档接口，锁定
+0.5.0 Electron：按 [docs/ELECTRON_DESKTOP.md](docs/ELECTRON_DESKTOP.md) 启动源码或安装版，在工作台“题库管理”页选择来源并阅读声明，
+点击“下载并构建”；完成后在“模型配置”“监听项目”页完成其余准备。0.4.x Tk 兼容版仍可使用
+`python -B scripts/start_desktop.py` 并从首次向导第 1 步进入，历史说明见 [FIRST_USE.md](FIRST_USE.md)（已归档）。下载使用 GitHub HTTPS ZIP 归档接口，锁定
 `sources.json` 中的完整 `audited_commit`，随后安全解压、提取去重、导入、标签和概念构建。
 整条桌面流程在进程内调用 Python 函数，不依赖 Git、PowerShell 或 Python 子进程。
 
@@ -53,7 +53,7 @@ GitHub 仓库发布训练器源码、导入/去重/标签/概念构建脚本、�
 
 ## 可选：保留的命令行工具
 
-以下是已有开发工作流，仍需要 Git 和 PowerShell；桌面初始化不调用这些外部命令。
+以下是旧版 Tk/命令行开发工作流，仍需要 Git 和 PowerShell；0.5.0 Electron 桌面初始化不调用这些外部命令。
 先阅读清单中的上游条款，选择适合自己用途的来源。下面以 JavaGuide 说明操作步骤，
 示例不构成对其所有内容及所有用途的授权判断。
 

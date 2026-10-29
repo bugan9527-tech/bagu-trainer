@@ -2,8 +2,8 @@
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-from bagu_trainer import engine
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.application.learning import engine
+from bagu_trainer.application.monitor import DesktopMonitor
 
 
 def setup_monitor(env, tmp_path, monkeypatch):
@@ -120,7 +120,7 @@ def test_actual_deleted_directory_is_unavailable_and_readiness_is_not_health(env
 
 
 def test_walker_reports_access_failure_instead_of_empty_success(tmp_path, monkeypatch):
-    from bagu_trainer.desktop_monitor import ActivityDiffReader
+    from bagu_trainer.application.monitor import ActivityDiffReader
     import os
     def walk(*_a, onerror=None, **_kw):
         onerror(PermissionError("private directory"))

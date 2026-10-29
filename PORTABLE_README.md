@@ -1,4 +1,6 @@
-# AI 八股训练器 0.4.0 · Windows x64 便携版
+# AI 八股训练器 0.4.x Tk 兼容版 · Windows x64 便携版（归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，旧 Tk 构建会把本文件复制为包内“使用说明”。0.5.0 Electron 便携包的结构、启动和自启动说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。Electron 包还包含 `BaguBackend.exe`、`BaguCleanup.exe`、`_internal\` 和 `resources\`，不要按本文的旧 Tk 布局只保留 `_internal`。
 
 将整个压缩包解压到任意文件夹，双击 `BaguTrainer.exe`。
 无需另装 Python、Git 或 PowerShell；请保留 EXE 旁的 `_internal` 文件夹和 `BaguCleanup.exe`，不要只复制主 EXE。

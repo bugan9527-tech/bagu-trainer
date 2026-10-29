@@ -1,5 +1,6 @@
 """Batch preparation uses synthetic ZIPs, localhost HTTP and isolated banks."""
 import collections
+import io
 import json
 import sqlite3
 import sys
@@ -12,10 +13,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer.bank_build.control import BuildCancelled, BuildControl, BuildTimeout, SourceBatchError
-from bagu_trainer.bank_build.service import BankBuildService
-from bagu_trainer.bank_storage import active_bank_dir
-from bagu_trainer.knowledge_base import KnowledgeBase
+from bagu_trainer.infrastructure.bank_build.control import BuildCancelled
+from bagu_trainer.infrastructure.bank_build.control import BuildControl
+from bagu_trainer.infrastructure.bank_build.control import BuildTimeout
+from bagu_trainer.infrastructure.bank_build.control import SourceBatchError
+from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+from bagu_trainer.infrastructure.bank_build import service as build_service
+from bagu_trainer.infrastructure.bank_storage import active_bank_dir
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
 from release_tests.test_bank_build import installed, archive_bytes, MARKDOWN, wait_for_ui
 
 
@@ -38,7 +43,7 @@ def batch(installed):
     sources = [{"repository": repo, "directory": f"Repo{i}", "audited_commit": COMMITS[i]}
                for i, repo in enumerate(REPOS)]
     installed.manifest.write_text(json.dumps({"sources": sources}), encoding="utf-8")
-    state = SimpleNamespace(calls=[], failures={}, delay={}, bodies={
+    state = SimpleNamespace(calls=[], failures={}, delay={}, chunk_delay={}, bodies={
         repo: archive_bytes([("snapshot/README.md", MARKDOWN.replace("什么是数据库索引？", f"数据库索引的第{i}种用途？"))])
         for i, repo in enumerate(REPOS)})
     class Handler(BaseHTTPRequestHandler):
@@ -52,7 +57,14 @@ def batch(installed):
                 self.send_header("Content-Length", str(len(state.bodies[repo]) if code == 200 else 0))
                 self.end_headers()
                 if code == 200:
-                    self.wfile.write(state.bodies[repo])
+                    body = state.bodies[repo]
+                    if repo in state.chunk_delay:
+                        for offset in range(0, len(body), 16):
+                            self.wfile.write(body[offset:offset + 16])
+                            self.wfile.flush()
+                            time.sleep(state.chunk_delay[repo])
+                    else:
+                        self.wfile.write(body)
             except (BrokenPipeError, ConnectionError):
                 pass
         def log_message(self, *_):
@@ -183,9 +195,50 @@ def test_cancel_at_task_start_records_every_selected_source(batch, already_cance
     assert_previous_usable(batch)
 
 
-def test_total_deadline_stops_batch_and_retains_finished_cache(batch):
+@pytest.fixture
+def timed_batch(batch, monkeypatch):
+    """Keep real ZIP/cache processing; control only time and network responses."""
+    state = SimpleNamespace(now=0.0, expire_after_reads=None, mode=None, interrupted=False)
+
+    def clock():
+        if state.expire_after_reads is not None:
+            state.expire_after_reads -= 1
+            if state.expire_after_reads == 0:
+                state.now = .15
+                state.expire_after_reads = None
+        return state.now
+
+    monkeypatch.setattr(build_service, "BuildControl", lambda cancel, timeout, progress:
+                        BuildControl(cancel, timeout, progress, clock=clock))
+
+    class Response(io.BytesIO):
+        def __init__(self, body):
+            super().__init__(body)
+            self.headers = {"Content-Length": str(len(body))}
+
+    def opener(request, timeout):
+        parts = urllib.parse.urlsplit(request.full_url).path.split("/")
+        repo = "/".join(parts[2:4])
+        batch.calls.append((repo, timeout))
+        if repo == REPOS[1] and not state.interrupted:
+            state.interrupted = True
+            if state.mode == "request_timeout":
+                state.now = .025  # Individual wait expired; task still has .125s.
+            elif state.mode == "admission_gap":
+                state.now = .149  # A socket timeout can return before the task deadline.
+            else:
+                state.now = .15
+            raise TimeoutError("synthetic socket timeout")
+        return Response(batch.bodies[repo])
+
+    batch.service.opener = opener
+    state.batch = batch
+    return state
+
+
+def test_total_deadline_stops_batch_and_retains_finished_cache(timed_batch):
+    batch = timed_batch.batch
     events = []
-    batch.delay[REPOS[1]] = .3
     with pytest.raises(BuildTimeout) as caught:
         batch.service.build(REPOS, force_download=True, request_timeout=1, timeout=.15,
                             download_retries=0, progress=events.append)
@@ -194,9 +247,64 @@ def test_total_deadline_stops_batch_and_retains_finished_cache(batch):
     assert [repo for repo, _ in batch.calls] == REPOS[:2]
     assert 0 < batch.calls[1][1] <= .15  # The socket wait cannot exceed the total budget.
     assert_previous_usable(batch)
-    batch.delay.clear()
     batch.service.build(REPOS)
     assert [repo for repo, _ in batch.calls[2:]] == REPOS[1:]
+
+
+@pytest.mark.parametrize("mode,expected,requested", [
+    ("request_timeout", ["completed", "failed", "completed"], REPOS),
+    ("before_next_source", ["completed", "cancelled", "cancelled"], REPOS[:1]),
+    ("admission_gap", ["completed", "failed", "cancelled"], REPOS[:2]),
+])
+def test_deadline_boundary_classifies_only_started_sources(timed_batch, mode, expected, requested):
+    state, batch = timed_batch, timed_batch.batch
+    state.mode = mode
+    events = []
+
+    def progress(event):
+        events.append(event)
+        source = event.source
+        if not source:
+            return
+        if mode == "before_next_source" and source.repository == REPOS[0] and source.state == "completed":
+            state.now = .15
+        if mode == "admission_gap" and source.repository == REPOS[1] and source.state == "failed":
+            # Admit-check sees .149; time expires at the next clock sample,
+            # before the following source's preparation has been entered.
+            state.expire_after_reads = 2
+
+    error_type = SourceBatchError if mode == "request_timeout" else BuildTimeout
+    with pytest.raises(error_type) as caught:
+        batch.service.build(REPOS, force_download=True, request_timeout=.025 if mode == "request_timeout" else 1,
+                            timeout=.15, download_retries=0, progress=progress)
+    assert [s.state for s in caught.value.sources] == expected
+    assert [repo for repo, _ in batch.calls] == requested
+    assert not any(e.stage in {"extract", "activate"} for e in events)
+    if mode == "admission_gap":
+        assert not any(e.source and e.source.repository == REPOS[2] and e.source.state == "downloading"
+                       for e in events)
+    assert_previous_usable(batch)
+    # A fresh build must reuse every finished source's real verified cache.
+    state.mode = None
+    state.expire_after_reads = None
+    state.interrupted = True
+    batch.service.build(REPOS)
+    remaining = [repo for repo, status in zip(REPOS, expected) if status != "completed"]
+    assert [repo for repo, _ in batch.calls[len(requested):]] == remaining
+
+
+def test_real_http_total_deadline_interrupts_stream_without_changing_bank(batch):
+    # Keep socket reads active below their wait limit. This tests the real
+    # overall deadline, independently of early socket-timeout rounding.
+    batch.chunk_delay[REPOS[1]] = .02
+    with pytest.raises(BuildTimeout) as caught:
+        batch.service.build([REPOS[1]], force_download=True, timeout=.15,
+                            request_timeout=1, download_retries=0)
+    assert [s.state for s in caught.value.sources] == ["failed"]
+    assert [repo for repo, _ in batch.calls] == [REPOS[1]]
+    assert 0 < batch.calls[0][1] <= .15
+    assert not any(p.is_dir() for p in (batch.install.data / ".bank-builds").iterdir())
+    assert_previous_usable(batch)
 
 
 @pytest.mark.parametrize("stage", ["waiting", "download", "unpack", "completed"])
@@ -240,8 +348,8 @@ def test_retry_only_does_not_download_a_damaged_completed_source(batch):
     with pytest.raises(SourceBatchError):
         batch.service.build(REPOS, force_download=True)
     # Invalidate a previously completed source; do not silently broaden retry scope.
-    from bagu_trainer.bank_build.source_cache import cache_directory
-    from bagu_trainer.bank_build.service import load_sources
+    from bagu_trainer.infrastructure.bank_build.source_cache import cache_directory
+    from bagu_trainer.infrastructure.bank_build.service import load_sources
     source = load_sources(batch.install.manifest)[REPOS[2]]
     directory = cache_directory(batch.install.data / "source-cache", source)
     (directory / "complete.json").unlink()
@@ -256,8 +364,8 @@ def test_retry_only_does_not_download_a_damaged_completed_source(batch):
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk batch view")
 def test_batch_ui_keeps_responsive_and_retries_original_failed_selection(batch):
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.bank_setup import BankSetupWindow
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.bank_setup import BankSetupWindow
     parent = create_root()
     parent.withdraw()
     window = BankSetupWindow(parent, service=batch.service)

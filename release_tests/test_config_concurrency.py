@@ -11,9 +11,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import config, onboarding, secrets, startup
+from bagu_trainer.infrastructure import config
+from bagu_trainer.application.settings import verification as onboarding
+from bagu_trainer.infrastructure import secrets
+from bagu_trainer.desktop import startup
 from bagu_trainer.desktop import DesktopApp
-from bagu_trainer.desktop_monitor import DesktopMonitor, add_project
+from bagu_trainer.application.monitor import DesktopMonitor
+from bagu_trainer.application.monitor import add_project
 
 
 KEY = "local-concurrent-save-fixture"
@@ -209,15 +213,22 @@ def test_editors_serialize_latest_read_through_atomic_commit(installation, monke
 
 def make_monitor():
     visited = []
+    session = SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None)
+    scope = [None]
+    def apply_scope(roots):
+        previous = scope[0] or ()
+        session.forget_projects(set(previous) - set(roots))
+        scope[0] = tuple(roots)
+    learning = SimpleNamespace(has_question_bank=lambda: True, question_count=lambda: 0,
+        apply_project_scope=apply_scope, generation_window=lambda: None)
     engine = SimpleNamespace(load_config=config.load_config, PROJECT_ROOT=config.PROJECT_ROOT,
-        _normalize_project_root=str,
-        session=SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None),
+        session=session, learning=learning,
         observe_project=lambda root, **_: visited.append(root) or {"context": ""})
     return DesktopMonitor(engine), visited
 
 
 def test_project_application_and_fresh_process_restore_only_new_scope(installation):
-    a, b = map(str, installation.projects)
+    a, b = (os.path.normcase(os.path.realpath(path)) for path in map(str, installation.projects))
     monitor, visited = make_monitor()
     monitor.poll()
     assert visited == [a]
@@ -243,22 +254,33 @@ def test_project_application_and_fresh_process_restore_only_new_scope(installati
     assert visited == [b] and monitor.initialized == {b}
     assert (installation.root / "data/original.db").read_bytes() == b"learning data must stay untouched"
     child = r'''
-import json, threading
+import json, os, threading
 from types import SimpleNamespace
-from bagu_trainer import config, onboarding, secrets, startup
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.infrastructure import config
+from bagu_trainer.application.settings import verification as onboarding
+from bagu_trainer.infrastructure import secrets
+from bagu_trainer.desktop import startup
+from bagu_trainer.application.monitor import DesktopMonitor
 secrets._load_keyring = lambda: SimpleNamespace(get_password=lambda *_: "local-concurrent-save-fixture")
 report = startup.check_readiness()
 assert report.ready
 assert onboarding.saved_model_verified()
 visited = []
+session = SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None)
+scope = [None]
+def apply_scope(roots):
+    previous = scope[0] or ()
+    session.forget_projects(set(previous) - set(roots))
+    scope[0] = tuple(roots)
+learning = SimpleNamespace(has_question_bank=lambda: True, question_count=lambda: 0,
+    apply_project_scope=apply_scope, generation_window=lambda: None)
 engine = SimpleNamespace(load_config=config.load_config, PROJECT_ROOT=config.PROJECT_ROOT,
-    _normalize_project_root=str,
-        session=SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None),
+    session=session, learning=learning,
     observe_project=lambda root, **_: visited.append(root) or {"context": ""})
 monitor = DesktopMonitor(engine)
 monitor.poll()
-assert visited == config.read_user_config()["project_roots"]
+assert visited == [os.path.normcase(os.path.realpath(root))
+                   for root in config.read_user_config()["project_roots"]]
 print(json.dumps({"projects": visited, "verified": True}))
 '''
     process = subprocess.run([sys.executable, "-B", "-c", child], env=os.environ.copy(),

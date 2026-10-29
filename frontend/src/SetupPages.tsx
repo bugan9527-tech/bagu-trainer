@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, CheckCircle2, FolderOpen, Pause, Play, Plus, RefreshCw, Save, Trash2, Zap } from 'lucide-react';
+import { CheckCircle2, FolderOpen, Pause, Play, Plus, Save, Trash2, Zap } from 'lucide-react';
 import { request, useDesktop } from './state';
 import type { ModelForm, Preferences } from './types';
 import { basename, date, Empty, ErrorNotice, PageHeading, Spinner, useAction } from './components';

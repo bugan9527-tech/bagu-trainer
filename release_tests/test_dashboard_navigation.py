@@ -1,14 +1,18 @@
 """Dashboard settings reuse its Tk window and return without a subprocess."""
 import sys
 import threading
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import config, onboarding, startup
+from bagu_trainer.infrastructure import config
+from bagu_trainer.application.settings import verification as onboarding
+from bagu_trainer.desktop import startup
 from bagu_trainer.desktop import DesktopApp
+from release_tests.fakes import LearningFake
 from release_tests.test_first_use import (
-    installation, model_http, seed_bank, verify_and_save, wait_ui, fill_model, QUESTION, KEY,
+    installation, model_http, seed_bank, verify_and_save, wait_ui, QUESTION, KEY,
 )
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk navigation")
@@ -23,18 +27,21 @@ def dashboard(installation, monkeypatch):
         reload_bank=lambda: reloads.append(1),
         open_config_window=lambda: pytest.fail("Settings opened another process"),
     )
+    engine.learning = LearningFake(engine)
+    engine.content_maintenance = nullcontext
     monitor = SimpleNamespace(
         engine=engine, paused=False, active=None, initialized=set(), waiting={},
         failed_generations={}, ui_state={}, poll=lambda: {"state": "watching", "projects": 1},
         take_quiz=lambda: None, list_pending=lambda: [],
         reset=lambda: None, set_paused=lambda value: setattr(monitor, "paused", value),
+        set_ready=lambda value: setattr(monitor, "capabilities_ready", value),
     )
     app = DesktopApp(monitor)
     app.root.withdraw()
     # Configuration pages still read the real UI/service, using this fixture's
     # source manifest rather than any downloaded repositories on the machine.
-    from bagu_trainer.bank_build.service import BankBuildService
-    monkeypatch.setattr("bagu_trainer.bank_setup.BankBuildService",
+    from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+    monkeypatch.setattr("bagu_trainer.desktop.bank_setup.BankBuildService",
                         lambda: BankBuildService(installation.project))
     return app, reloads
 
@@ -100,7 +107,7 @@ def test_model_save_returns_to_dashboard_without_project_steps(installation, mod
 
 
 def test_bank_return_reloads_only_after_build_completion(installation, monkeypatch):
-    from bagu_trainer.bank_build.service import BankBuildService
+    from bagu_trainer.infrastructure.bank_build.service import BankBuildService
     app, reloads = dashboard(installation, monkeypatch)
     try:
         app.bank_button.invoke()
@@ -145,7 +152,7 @@ def test_navigation_does_not_wait_for_current_poll(installation, monkeypatch):
 
 def test_engine_reloads_active_bank_without_replacing_learning_state(installation, monkeypatch):
     seed_bank(installation)
-    from bagu_trainer import engine
+    from bagu_trainer.application.learning import engine
     old_kb, old_matcher = engine.kb, engine.matcher
     monkeypatch.setattr(engine, "kb", old_kb)
     monkeypatch.setattr(engine, "matcher", old_matcher)

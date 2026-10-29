@@ -1,4 +1,6 @@
-# 桌面改版状态
+# 桌面改版状态（Tk 时代历史记录）
+
+> 版本范围：本文记录 v0.2.0 Tk 改版状态，不代表当前 Electron 界面。当前说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 ## v0.2.0
 

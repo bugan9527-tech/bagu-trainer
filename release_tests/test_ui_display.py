@@ -1,12 +1,11 @@
 """Display/keyboard regressions. Tk scale fixtures are NOT native DPI evidence."""
-import queue
 import sys
 import time
-from types import SimpleNamespace
 
 import pytest
+from release_tests.fakes import ui_monitor
 
-from bagu_trainer.tk_runtime import prepare_tk
+from bagu_trainer.desktop.tk_runtime import prepare_tk
 from release_tests.test_ui_theme import assert_inside, cancel_timers
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows desktop Tk")
@@ -17,9 +16,7 @@ def display_roots(monkeypatch):
     prepare_tk()
     import tkinter as tk
     import ttkbootstrap
-    from bagu_trainer.first_use import FirstUseWizard
     real_tk = tk.Tk
-    monkeypatch.setattr(FirstUseWizard, "_restore", lambda self: None)
     def install(scale):
         def scaled():
             root = real_tk()
@@ -62,50 +59,21 @@ def assert_in_view(widget, view):
 @pytest.mark.parametrize("scale", [1, 1.25, 1.5, 2], ids=["tk100", "tk125", "tk150", "tk200"])
 def test_mixed_text_resize_focus_and_scroll(display_roots, scale):
     display_roots(scale)
-    from bagu_trainer.first_use import FirstUseWizard
-    from bagu_trainer.settings_window import ModelSettingsWindow
+    from release_tests.fakes import make_model_panel
     from bagu_trainer.desktop import DesktopApp
-    from bagu_trainer.ui_theme import work_area
+    from bagu_trainer.desktop.ui_theme import work_area
     mixed = "中文 English Transaction<T>，标点 UTF-8。" * 12
     model = "provider/LongUnbrokenModelName-235B-Preview" * 12 + "-MODEL-END"
     path = "C:/学习项目/My English Project/" + "很长的目录/Service.API/" * 25 + "PATH-END"
-    wizard = FirstUseWizard(SimpleNamespace(events=queue.Queue()))
-    try:
-        wizard.root.geometry("%dx%d" % wizard.root.minsize())
-        wizard._show("model")
-        wizard.model_name.set(model)
-        wizard.status.set(mixed)
-        assert focus_key(wizard.root, wizard.model_entries[0], "<Tab>") == wizard.model_entries[1]
-        assert_in_view(wizard.model_entries[1], wizard.model_view.form_view)
-        assert focus_key(wizard.root, wizard.model_entries[1], "<Shift-Tab>") == wizard.model_entries[0]
-        assert_inside(wizard.start_button, wizard.root)
-        assert_inside(wizard.back_button, wizard.root)
-        # Both ends of a long single-line model remain editable/reachable.
-        entry = wizard.model_entries[1]
-        focus_key(wizard.root, entry, "<End>")
-        assert entry.index("insert") == len(model)
-        assert entry.xview()[0] > 0
-        focus_key(wizard.root, entry, "<Home>")
-        assert entry.index("insert") == 0
-        assert entry.xview()[0] == 0
-        wizard._show("bank")
-        wizard.bank_view.reveal(wizard.bank_setup.start_button)
-        assert_inside(wizard.bank_setup.start_button, wizard.root)
-        assert_inside(wizard.bank_setup.cancel_button, wizard.root)
-        wizard._show("projects")
-        wizard.project_list.insert("end", path)
-        wizard.root.update()
-        wizard.project_list.xview_moveto(1)
-        assert wizard.project_list.xview()[0] > 0
-        for button in wizard.project_buttons:
-            assert_inside(button, wizard.root)
-    finally:
-        cancel_timers(wizard.root)
-        wizard._close()
-    settings = ModelSettingsWindow()
+    settings = make_model_panel()
     try:
         settings.root.geometry("%dx%d" % settings.root.minsize())
-        settings.model_var.set(model)
+        settings.model_name.set(model)
+        entry = settings.entries[1]
+        focus_key(settings.root, entry, "<End>")
+        assert entry.index("insert") == len(model) and entry.xview()[0] > 0
+        focus_key(settings.root, entry, "<Home>")
+        assert entry.index("insert") == 0 and entry.xview()[0] == 0
         for index in range(len(settings.entries) - 1):
             settings.form_view.reveal(settings.entries[index])
             assert focus_key(settings.root, settings.entries[index], "<Tab>") == settings.entries[index + 1]
@@ -127,8 +95,9 @@ def test_mixed_text_resize_focus_and_scroll(display_roots, scale):
         assert settings.verified is None and settings.save_button.instate(["disabled"])
     finally:
         cancel_timers(settings.root)
-        settings._close()
-    app = DesktopApp(SimpleNamespace(paused=False))
+        settings.close()
+        settings.root.destroy()
+    app = DesktopApp(ui_monitor())
     try:
         app.root.geometry("%dx%d" % app.root.minsize())
         app._render_dashboard({"state": "watching", "projects": [path], "stats": {"ok": True,
@@ -176,7 +145,7 @@ def test_quiz_shortcuts_preserve_text_keys_and_require_intent(display_roots):
     display_roots(1)
     from bagu_trainer.desktop import DesktopApp
     from tkinter import ttk
-    app = DesktopApp(SimpleNamespace(paused=False))
+    app = DesktopApp(ui_monitor())
     try:
         app._show_quiz({"quiz_id": "keyboard", "question": "中 English？", "options": {l: l for l in "ABCD"}})
         practice = app._answer_window()
@@ -216,7 +185,7 @@ def test_chinese_font_fallback_uses_installed_candidate(display_roots, monkeypat
     display_roots(1)
     import tkinter as tk
     from tkinter import font
-    from bagu_trainer import ui_theme
+    from bagu_trainer.desktop import ui_theme
     root = tk.Tk()
     try:
         available = set(font.families(root))

@@ -7,7 +7,8 @@ import urllib.error
 
 import pytest
 
-import bagu_trainer.quiz_generator as qg
+import bagu_trainer.application.learning.generator as qg
+from bagu_trainer.domain.quizzes import parse_quiz
 
 UNVERIFIED = {
     "id": "u1", "knowledge_point": "读写分离", "difficulty": "medium",
@@ -100,7 +101,7 @@ def with_llm(monkeypatch, llm):
 
 # ---- _parse_quiz 严格校验 ----
 def test_parse_quiz_accepts_valid():
-    d = qg.QuizGenerator._parse_quiz("```json\n" + VALID_LLM_CONTENT + "\n```")
+    d = parse_quiz("```json\n" + VALID_LLM_CONTENT + "\n```")
     assert d and d["answer"] == "A" and len(d["options"]) == 4
 
 
@@ -108,39 +109,39 @@ def test_parse_quiz_rejects_duplicate_options():
     content = json.dumps({
         "question": "q12345", "answer": "A", "analysis": "x",
         "options": {"A": "同", "B": "同", "C": "三", "D": "四"}}, ensure_ascii=False)
-    assert qg.QuizGenerator._parse_quiz(content) is None
+    assert parse_quiz(content) is None
 
 
 def test_parse_quiz_rejects_empty_option():
     content = json.dumps({
         "question": "q12345", "answer": "A", "analysis": "x",
         "options": {"A": "", "B": "二", "C": "三", "D": "四"}}, ensure_ascii=False)
-    assert qg.QuizGenerator._parse_quiz(content) is None
+    assert parse_quiz(content) is None
 
 
 def test_parse_quiz_rejects_empty_answer():
     content = json.dumps({
         "question": "q12345", "answer": "", "analysis": "x",
         "options": {"A": "一", "B": "二", "C": "三", "D": "四"}}, ensure_ascii=False)
-    assert qg.QuizGenerator._parse_quiz(content) is None
+    assert parse_quiz(content) is None
 
 
 def test_parse_quiz_rejects_missing_analysis():
     content = json.dumps({
         "question": "q12345", "answer": "A", "analysis": "  ",
         "options": {"A": "一", "B": "二", "C": "三", "D": "四"}}, ensure_ascii=False)
-    assert qg.QuizGenerator._parse_quiz(content) is None
+    assert parse_quiz(content) is None
 
 
 def test_parse_quiz_rejects_absurd_question_length():
     content = json.dumps({
         "question": "短", "answer": "A", "analysis": "x",
         "options": {"A": "一", "B": "二", "C": "三", "D": "四"}}, ensure_ascii=False)
-    assert qg.QuizGenerator._parse_quiz(content) is None
+    assert parse_quiz(content) is None
 
 
 def test_parse_quiz_rejects_invalid_json():
-    assert qg.QuizGenerator._parse_quiz("这不是 JSON") is None
+    assert parse_quiz("这不是 JSON") is None
 
 
 # ---- 无 LLM ----

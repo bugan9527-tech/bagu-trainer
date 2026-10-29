@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-import bagu_trainer.engine as engine
+import bagu_trainer.application.learning.engine as engine
 
 
 @pytest.fixture

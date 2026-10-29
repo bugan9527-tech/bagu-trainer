@@ -154,7 +154,7 @@ def verify_installed_payload(executable, bundle):
     Installer metadata and unrelated user files are outside the production
     inventory. Read only original payload members; preserve every extra file.
     """
-    from bagu_trainer.cleanup_manifest import safe_path as safe_file
+    from bagu_trainer.infrastructure.cleanup_manifest import safe_path as safe_file
     from scripts.build_installer import safe_path as safe_relative
     executable = safe_file(Path(executable).absolute())
     if executable.name != "BaguTrainer.exe":

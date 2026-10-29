@@ -2,12 +2,12 @@
 import sys
 from pathlib import Path
 import pytest
-from bagu_trainer.practice_controller import PracticeController
-from bagu_trainer.practice_page import PracticePage
-from bagu_trainer.practice_window import PracticeWindow
-from bagu_trainer.tk_runtime import create_root
-from bagu_trainer.ui_state import window_var
-from bagu_trainer.ui_theme import apply_theme
+from bagu_trainer.desktop.practice_controller import PracticeController
+from bagu_trainer.desktop.practice_page import PracticePage
+from bagu_trainer.desktop.practice_window import PracticeWindow
+from bagu_trainer.desktop.tk_runtime import create_root
+from bagu_trainer.desktop.ui_state import window_var
+from bagu_trainer.desktop.ui_theme import apply_theme
 from release_tests.window_capture import capture_window
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk layout")

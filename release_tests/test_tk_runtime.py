@@ -14,7 +14,8 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk runt
     ("TCL_LIBRARY", "init.tcl", "No error"),
 ])
 def test_existing_script_initialization_failure_recovers_only_once(monkeypatch, failures, library_name, script_name, reason):
-    from bagu_trainer.tk_runtime import create_root, prepare_tk
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.tk_runtime import prepare_tk
     prepare_tk()
     import tkinter as tk
     script = Path(os.environ[library_name]) / script_name
@@ -40,7 +41,7 @@ def test_existing_script_initialization_failure_recovers_only_once(monkeypatch, 
 
 
 def test_missing_script_is_not_retried_or_hidden(tmp_path, monkeypatch):
-    from bagu_trainer.tk_runtime import create_root
+    from bagu_trainer.desktop.tk_runtime import create_root
     import tkinter as tk
     library = tmp_path / "missing-tk"
     monkeypatch.setenv("TK_LIBRARY", str(library))

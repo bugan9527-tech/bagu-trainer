@@ -20,7 +20,7 @@ import winreg
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from bagu_trainer import login_startup
+from bagu_trainer.infrastructure import login_startup
 from scripts.build_installer import check_compiler
 from scripts.build_portable import source_provenance
 from bagu_trainer.version import __version__
@@ -113,7 +113,7 @@ def owner(data):
     source = """
 import sys
 from pathlib import Path
-from bagu_trainer.desktop_instance import OwnerLock
+from bagu_trainer.infrastructure.desktop_instance import OwnerLock
 lock = OwnerLock(Path(sys.argv[1]) / 'runtime')
 assert lock.acquire()
 print('locked', flush=True)

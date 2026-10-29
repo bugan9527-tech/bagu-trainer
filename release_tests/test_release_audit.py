@@ -3,7 +3,21 @@ import io
 import zipfile
 import json
 
-from scripts.audit_release import Scanner
+from scripts.audit_release import ROOT, SYNTHETIC_TEST_FILES, Scanner
+
+
+def test_reviewed_synthetic_fixtures_pass_but_modified_files_lose_exemption():
+    for name in SYNTHETIC_TEST_FILES:
+        value = (ROOT / name.removeprefix("source/")).read_bytes()
+        scanner = Scanner(markers={})
+        scanner.scan(name, value)
+        assert not scanner.findings, name
+        assert scanner.synthetic_fixture_matches > 0, name
+
+        modified = Scanner(markers={})
+        modified.scan(name, value + b"\n# " + b"sk-" + b"C" * 31)
+        assert modified.findings, name
+        assert modified.synthetic_fixture_matches == 0, name
 
 
 def test_unknown_token_is_reported_without_echoing_matched_content():

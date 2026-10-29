@@ -7,8 +7,8 @@ separation; they do not rewrite accept labels to make a result pass.
 """
 import pytest
 
-from bagu_trainer.knowledge_base import KnowledgeBase
-from bagu_trainer.matcher import Matcher
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
+from bagu_trainer.infrastructure.matcher import Matcher
 from eval_heldout import (
     DOMAIN_SAFETY_CASES,
     NEGATIVE_CASES_HELDOUT,

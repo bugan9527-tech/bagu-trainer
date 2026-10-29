@@ -1,4 +1,8 @@
-# 0.4.0 核心渐进重构记录
+# 0.4.0 核心渐进重构记录（历史架构记录）
+
+2026-10-29 后端分层后的当前结构见 [架构说明](docs/ARCHITECTURE.md) 和 [第 8 步验证记录](docs/BACKEND_REFACTOR_STEP8.md)。本文继续保留历史状态，不作为当前模块位置说明。
+
+> 版本范围：本文保留 0.4.0 引擎会话重构事实，文中 DesktopApp/Tk 交互描述不代表 0.5.0 Electron。当前架构入口见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 ## 所有权与实际调用关系
 

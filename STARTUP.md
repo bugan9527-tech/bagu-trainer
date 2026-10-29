@@ -1,4 +1,6 @@
-# 单一正式主窗口启动（0.4.0）
+# 单一正式主窗口启动（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留旧版 Tk 启动协调、准备检查和单实例说明。0.5.0 Electron 当前桌面说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)；本文的 `scripts/start_desktop.py`、`--configure`、`--migrate-from` 和 Tk 窗口行为不代表当前 Electron。
 
 安装版从开始菜单或安装目录的 `BaguTrainer.exe` 启动；便携版在完整解压目录中运行 `BaguTrainer.exe`；
 源码版先安装 `requirements.txt`，再在项目根目录执行：

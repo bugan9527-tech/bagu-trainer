@@ -7,7 +7,7 @@
 import threading
 import time
 
-import bagu_trainer.engine as engine
+import bagu_trainer.application.learning.engine as engine
 
 
 def _set_diff(diff, text):
@@ -81,7 +81,8 @@ def test_same_context_no_regeneration(env):
     assert r1["has_pending"] is True and env["gen"].calls == 1
     # 上下文仅空白差异：归一化后同指纹，不得再生成
     _set_diff(env["diff"], "  redis\t\n缓存穿透   ")
-    engine._poll_once()
+    root = str(engine.PROJECT_ROOT)
+    engine.learning.generate_for_activity(root, engine.observe_project(root))
     assert env["gen"].calls == 1
     assert len(engine.session._state["pending"]) == 1
     r2 = engine.next_quiz()
@@ -91,7 +92,8 @@ def test_same_context_no_regeneration(env):
 # ---- 验收：后台先出题，check 直接复用 ready 题不重复生成 ----
 def test_monitor_then_check_reuses_ready(env):
     _set_diff(env["diff"], "redis 缓存预热")
-    engine._poll_once()
+    root = str(engine.PROJECT_ROOT)
+    engine.learning.generate_for_activity(root, engine.observe_project(root))
     assert env["gen"].calls == 1
     assert len(engine.session._state["pending"]) == 1
     assert engine.session._state["pending"][0]["status"] == "ready"

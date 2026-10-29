@@ -85,19 +85,30 @@ def test_real_unit_step_preserves_exit_status_and_junit_on_failure(tmp_path, fai
     workflow = WORKFLOW.read_text(encoding="utf-8")
     body = step(workflow, "Run isolated unit tests before release acceptance")
     command = textwrap.dedent(body.split("        run: |\n", 1)[1])
+    output_marker = "输出编码验证：中文·✓"
+    command = ("$OutputEncoding = [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)\n"
+               f"Write-Output '{output_marker}'\n" + command)
     shell = shutil.which("pwsh")
     assert shell, "The Windows workflow requires PowerShell Core"
     tests = tmp_path / "tests"
     tests.mkdir()
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (tmp_path / "bagu_trainer").mkdir()
+    (tmp_path / "bagu_trainer/__init__.py").write_text('"""Synthetic unit gate package."""\n')
+    shutil.copy2(WORKFLOW.parents[2] / "scripts/check_unused_imports.py", scripts / "check_unused_imports.py")
     (tests / "test_gate.py").write_text("def test_gate():\n    assert " + str(not fails) + "\n")
     environment = dict(os.environ, BAGU_USER_DATA_DIR=str(tmp_path / "isolated-profile"),
                        BAGU_TEST_INSTANCE="gate-exit-status",
                        PYTHON_KEYRING_BACKEND="keyring.backends.null.Keyring",
+                       PYTHONIOENCODING="utf-8",
                        BAGU_TEST_BANK_ROOT="",
                        PATH=str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", ""))
     result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", command],
-                            cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=30)
+                            cwd=tmp_path, env=environment, capture_output=True,
+                            encoding="utf-8", errors="strict", timeout=30)
     assert result.returncode == (1 if fails else 0), result.stdout + result.stderr
+    assert result.stdout is not None and output_marker in result.stdout
     report = ET.parse(tmp_path / "validation/unit-tests.xml")
     cases = report.findall(".//testcase")
     assert len(cases) == 1

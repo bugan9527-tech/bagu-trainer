@@ -2,7 +2,7 @@
 """生成失败链路集成测试：unavailable 明确暴露、绝不产出无选项/无答案题目。
 依赖 conftest 的全 fake 环境（无网络/无真实 LLM/无真实 config.json）。
 """
-import bagu_trainer.engine as engine
+import bagu_trainer.application.learning.engine as engine
 
 
 class UnavailableGenerator:

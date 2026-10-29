@@ -4,16 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from bagu_trainer.tk_runtime import create_root
-from bagu_trainer.ui_theme import apply_theme
+from bagu_trainer.desktop.tk_runtime import create_root
+from bagu_trainer.desktop.ui_theme import apply_theme
 
 from release_tests.test_first_use import installation
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk desktop")
 def test_empty_save_keeps_specific_error_after_control_refresh(installation):
-    from bagu_trainer import config, startup
-    from bagu_trainer.projects_panel import ProjectsPanel
+    from bagu_trainer.infrastructure import config
+    from bagu_trainer.desktop import startup
+    from bagu_trainer.desktop.projects_panel import ProjectsPanel
 
     startup.set_projects([installation.watched])
     original = config.CONFIG_PATH.read_bytes()
@@ -63,8 +64,9 @@ def test_empty_save_keeps_specific_error_after_control_refresh(installation):
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk desktop")
 @pytest.mark.parametrize("failure", [PermissionError("配置目录不可写"), OSError("配置磁盘写入失败")])
 def test_write_failure_survives_refresh_and_can_retry(installation, monkeypatch, failure):
-    from bagu_trainer import config, startup
-    from bagu_trainer.projects_panel import ProjectsPanel
+    from bagu_trainer.infrastructure import config
+    from bagu_trainer.desktop import startup
+    from bagu_trainer.desktop.projects_panel import ProjectsPanel
 
     second = installation.project / "second"
     second.mkdir()
@@ -110,12 +112,12 @@ def test_write_failure_survives_refresh_and_can_retry(installation, monkeypatch,
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk desktop")
 def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch):
-    import threading
     from types import SimpleNamespace
     from tkinter import filedialog
-    from bagu_trainer import config, startup
+    from bagu_trainer.infrastructure import config
+    from bagu_trainer.desktop import startup
     from bagu_trainer.desktop import DesktopApp
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     from release_tests.test_ui_theme import cancel_timers
 
     first = str(installation.watched)
@@ -127,9 +129,12 @@ def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch
         _normalize_project_root=str,
         session=SimpleNamespace(_diff_readers={}, forget_projects=lambda roots: None),
         observe_project=lambda path, **_: visited.append(path) or {"context": ""})
+    from release_tests.fakes import LearningFake
+    engine.learning = LearningFake(engine)
+    from bagu_trainer.application.projects import canonical_root
     monitor = DesktopMonitor(engine)
     monitor.poll()
-    assert visited == [first]
+    assert visited == [canonical_root(first)]
     app = DesktopApp(monitor)
     try:
         app._navigate_page("projects")
@@ -143,7 +148,7 @@ def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch
         assert app.jobs.empty()
         visited.clear()
         monitor.poll()
-        assert visited == [first] and monitor.initialized == {first}
+        assert visited == [canonical_root(first)] and monitor.initialized == {canonical_root(first)}
 
         # Navigate away/back through the real shell: the error remains visible.
         app._navigate_page("dashboard")
@@ -159,7 +164,7 @@ def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch
         app._apply_projects_serial(paths["roots"])
         visited.clear()
         monitor.poll()
-        assert visited == [str(second)] and monitor.initialized == {str(second)}
+        assert visited == [canonical_root(second)] and monitor.initialized == {canonical_root(second)}
         assert config.read_user_config()["project_roots"] == [str(second)]
         assert not panel.dirty and "保存失败" not in panel.hint.get()
     finally:
@@ -169,8 +174,9 @@ def test_desktop_applies_only_successfully_saved_scope(installation, monkeypatch
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk desktop")
 def test_selection_enables_remove_and_removal_requires_save(monkeypatch, tmp_path):
-    from bagu_trainer import config, startup
-    from bagu_trainer.projects_panel import ProjectsPanel
+    from bagu_trainer.infrastructure import config
+    from bagu_trainer.desktop import startup
+    from bagu_trainer.desktop.projects_panel import ProjectsPanel
 
     projects = [str(tmp_path / "first"), str(tmp_path / "second")]
     for project in projects:

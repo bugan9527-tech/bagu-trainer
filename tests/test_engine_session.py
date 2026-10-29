@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import engine
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.application.learning import engine
+from bagu_trainer.application.monitor import DesktopMonitor
 
 
 def generate(text="redis changed"):

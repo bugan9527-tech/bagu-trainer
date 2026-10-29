@@ -1,4 +1,6 @@
-# 干净 Windows 验收
+# 干净 Windows 验收（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版的验收包，旧 Tk 验收构建会把本文件复制为包内“验收说明”。0.5.0 Electron 的验证记录见[项目仓库 docs/ELECTRON_VALIDATION.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_VALIDATION.md)，当前桌面说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 目标：Windows x64，不安装 Python、Git，不配置 MCP，解压生产 ZIP 后可以使用。
 验证模型接口统一使用本地固定响应，不需要真实 Key，也不产生模型费用。

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import quiz_generator as qg
+from bagu_trainer.application.learning import generator as qg
 
 
 CONTEXT = "订单状态查询将缓存 TTL 从 60 秒改为 600 秒，没有增加主动失效机制。"

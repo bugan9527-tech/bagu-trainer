@@ -4,9 +4,10 @@
 """
 import json
 
-import bagu_trainer.engine as engine
-from bagu_trainer.scheduler import (FIRST_INTERVAL_DAYS, MIN_INTERVAL_DAYS,
-                                    next_state)
+import bagu_trainer.application.learning.engine as engine
+from bagu_trainer.domain.review import FIRST_INTERVAL_DAYS
+from bagu_trainer.domain.review import MIN_INTERVAL_DAYS
+from bagu_trainer.domain.review import next_state
 
 T0 = 1_800_000_000.0
 HOUR = 3600.0

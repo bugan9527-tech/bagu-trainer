@@ -10,10 +10,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer.bank_build.control import BuildProgress, SourceStatus
-from bagu_trainer.bank_build.service import BankBuildService, load_sources
-from bagu_trainer.bank_build.source_snapshot import download_label
-from bagu_trainer.bank_inventory import BankInventory
+from bagu_trainer.infrastructure.bank_build.control import BuildProgress
+from bagu_trainer.infrastructure.bank_build.control import SourceStatus
+from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+from bagu_trainer.infrastructure.bank_build.service import load_sources
+from bagu_trainer.infrastructure.bank_build.source_snapshot import download_label
+from bagu_trainer.infrastructure.bank_inventory import BankInventory
 from release_tests.test_bank_build import installed, archive_bytes, MARKDOWN, REPOSITORY, COMMIT, wait_for_ui
 
 
@@ -114,11 +116,11 @@ def test_structured_progress_is_backwards_compatible_and_cache_is_not_downloadin
 
 @pytest.fixture(params=["setup", "panel"])
 def ui(request, installed, offline, monkeypatch):
-    from bagu_trainer.bank_panel import BankPanel
-    from bagu_trainer.bank_setup import BankSetupWindow
-    from bagu_trainer.task_controller import TaskController
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.ui_theme import apply_theme
+    from bagu_trainer.desktop.bank_panel import BankPanel
+    from bagu_trainer.desktop.bank_setup import BankSetupWindow
+    from bagu_trainer.desktop.task_controller import TaskController
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.ui_theme import apply_theme
     repos = [REPOSITORY, "fixture/second", "fixture/third"]
     manifest = json.loads(installed.manifest.read_text(encoding="utf-8"))
     manifest["sources"] += [{"repository": repo, "directory": f"Repo{i}", "audited_commit": c * 40}
@@ -290,7 +292,7 @@ def test_ui_stale_scan_does_not_override_download_or_terminal_files(ui, installe
 
 
 def test_ui_failed_build_does_not_trust_completed_task_after_files_removed(ui, installed, monkeypatch):
-    from bagu_trainer.bank_build import importer
+    from bagu_trainer.infrastructure.bank_build import importer
     scan_after_cleanup = threading.Event()
     actual_scan = ui.view._scanner.scan
 

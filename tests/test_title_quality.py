@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """标题清洗规则：噪声拒绝、正常注解保留、Markdown 链接清洗。"""
-from bagu_trainer.title_quality import clean_title
+from bagu_trainer.domain.title_quality import clean_title
 
 
 def test_unwraps_markdown_and_html_links():

@@ -19,8 +19,9 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 
-from bagu_trainer.knowledge_base import KnowledgeBase  # noqa: E402
-from bagu_trainer.matcher import Matcher, _domain_profile  # noqa: E402
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase  # noqa: E402
+from bagu_trainer.infrastructure.matcher import Matcher
+from bagu_trainer.infrastructure.matcher import _domain_profile  # noqa: E402
 from eval_cases import POSITIVE_CASES, NEGATIVE_CASES  # noqa: E402
 from eval_heldout import (  # noqa: E402
     DOMAIN_SAFETY_CASES,

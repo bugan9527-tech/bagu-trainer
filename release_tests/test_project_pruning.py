@@ -7,12 +7,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import config, startup
+from bagu_trainer.infrastructure import config
+from bagu_trainer.desktop import startup
 from release_tests.test_startup import install, mark_model_tested, write_configuration
 
 
 def test_startup_removes_missing_project_and_keeps_working_projects(install):
-    from bagu_trainer import onboarding
+    from bagu_trainer.application.settings import verification as onboarding
     mark_model_tested(install)
     missing = str(install.watched / "deleted")
     write_configuration(install, {**install.configuration,
@@ -90,7 +91,7 @@ def test_read_only_probe_does_not_remove_missing_paths(install):
 
 
 def test_disconnected_drive_is_retained(install, monkeypatch):
-    from bagu_trainer import project_cleanup
+    from bagu_trainer.application.projects import cleanup as project_cleanup
     missing = str(install.watched / "deleted")
     write_configuration(install, {**install.configuration, "project_roots": [missing]})
     before = install.settings.read_bytes()
@@ -102,7 +103,7 @@ def test_disconnected_drive_is_retained(install, monkeypatch):
 
 
 def test_network_share_is_retained_even_when_temporarily_missing(install):
-    from bagu_trainer.project_cleanup import prune_missing_projects
+    from bagu_trainer.application.projects.cleanup import prune_missing_projects
     missing = r"\\server.invalid\share\project"
     write_configuration(install, {**install.configuration, "project_roots": [missing]})
     assert prune_missing_projects() == ([], [missing])
@@ -111,6 +112,9 @@ def test_network_share_is_retained_even_when_temporarily_missing(install):
 @pytest.mark.parametrize("keep_project", [False, True])
 def test_worker_prunes_deleted_project_and_preserves_other_baselines(install, monkeypatch, keep_project):
     from bagu_trainer import desktop
+    from bagu_trainer.application.monitor import DesktopMonitor
+    from bagu_trainer.application.projects import canonical_root
+    from release_tests.fakes import LearningFake
     removed = str(install.watched / "deleted")
     kept = str(install.watched)
     stop = threading.Event()
@@ -119,6 +123,7 @@ def test_worker_prunes_deleted_project_and_preserves_other_baselines(install, mo
         _normalize_project_root=str, PROJECT_ROOT=install.project,
         load_config=config.load_config, get_learning_stats=lambda: {"ok": False},
         session=SimpleNamespace(forget_projects=lambda roots: forgotten.extend(roots)))
+    engine.learning = LearningFake(engine)
     coordinator = startup.StartupCoordinator(engine_loader=lambda: engine)
     assert coordinator.prepare() is engine
     roots = [removed, kept] if keep_project else [removed]
@@ -129,10 +134,13 @@ def test_worker_prunes_deleted_project_and_preserves_other_baselines(install, mo
     coordinator.checker = checker
     def unexpected_poll():
         pytest.fail("polled stale paths before preparation")
-    monitor = SimpleNamespace(engine=engine, initialized=set(roots),
-                              observed={p: "baseline" for p in roots},
-                              waiting={p: "pending edit" for p in roots},
-                              failed_generations={removed: "failed"}, poll=unexpected_poll)
+    monitor = DesktopMonitor(engine)
+    monitor.apply_projects(roots)
+    monitor.initialized = set(map(canonical_root, roots))
+    monitor.observed = {canonical_root(p): "baseline" for p in roots}
+    monitor.waiting = {canonical_root(p): "pending edit" for p in roots}
+    monitor.failed_generations = {canonical_root(removed): "failed"}
+    monitor.poll = unexpected_poll
     ticks = iter([0, 31, 31])
     monkeypatch.setattr(desktop.time, "monotonic", lambda: next(ticks, 31))
     context = SimpleNamespace(monitor=monitor, coordinator=coordinator, events=coordinator.events,
@@ -140,19 +148,21 @@ def test_worker_prunes_deleted_project_and_preserves_other_baselines(install, mo
     desktop.DesktopApp._worker(context)
     expected = [kept] if keep_project else []
     assert config.read_user_config()["project_roots"] == expected
-    assert monitor.initialized == set(expected)
-    assert monitor.observed == {p: "baseline" for p in expected}
-    assert monitor.waiting == {p: "pending edit" for p in expected}
-    assert forgotten == [removed] and not monitor.failed_generations
+    assert monitor.initialized == set(map(canonical_root, expected))
+    assert monitor.observed == {canonical_root(p): "baseline" for p in expected}
+    assert monitor.waiting == {canonical_root(p): "pending edit" for p in expected}
+    assert forgotten == [canonical_root(removed)] and not monitor.failed_generations
     assert monitor.capabilities_ready is keep_project
     assert context.worker_done.is_set()
 
 
 def test_empty_watch_list_never_falls_back_to_installation_directory(install):
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     engine = SimpleNamespace(PROJECT_ROOT=install.project,
                              load_config=lambda: {"project_roots": []},
                              _normalize_project_root=str)
+    from release_tests.fakes import LearningFake
+    engine.learning = LearningFake(engine)
     monitor = DesktopMonitor(engine)
     assert monitor.poll() == {"state": "not_ready", "projects": 0}
     assert monitor.retry_generation() == {"state": "not_ready", "projects": 0}

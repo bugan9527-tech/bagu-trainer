@@ -1,12 +1,11 @@
 """PracticeController and pending-list delivery tests (no network/model)."""
 import sys
-from types import SimpleNamespace
 
 import pytest
 
 
 def test_review_time_uses_ascii_format_on_english_windows(monkeypatch):
-    import bagu_trainer.practice_controller as module
+    import bagu_trainer.desktop.practice_controller as module
     original = module.datetime
     class Moment:
         def strftime(self, fmt):
@@ -32,7 +31,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk prac
 
 def controller():
     import tkinter as tk
-    from bagu_trainer.practice_controller import PracticeController
+    from bagu_trainer.desktop.practice_controller import PracticeController
     root = tk.Tk()
     root.withdraw()
     answer = tk.StringVar(root)

@@ -38,7 +38,8 @@ class BlockProtocolSdk:
             raise AssertionError('Desktop tried to import the removed protocol SDK')
 sys.meta_path.insert(0, BlockProtocolSdk())
 
-from bagu_trainer import desktop, engine
+from bagu_trainer import desktop
+from bagu_trainer.application.learning import engine
 assert not hasattr(engine, 'mcp')
 assert not (project / 'bagu_trainer' / 'server.py').exists()
 settings = runpy.run_path(str(project / 'scripts' / 'config_window.py'))

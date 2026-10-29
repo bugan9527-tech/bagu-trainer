@@ -34,7 +34,9 @@ def test_example_config_uses_relocated_install_from_another_cwd(tmp_path):
     probe = """
 import json
 from pathlib import Path
-from bagu_trainer import config, desktop_instance, engine
+from bagu_trainer.infrastructure import config
+from bagu_trainer.infrastructure import desktop_instance
+from bagu_trainer.application.learning import engine
 cfg = config.load_config()
 print(json.dumps({
     'project': str(config.PROJECT_ROOT),
@@ -85,7 +87,7 @@ def test_startup_uses_selected_python_after_relocation(tmp_path, explicit):
     assert result.returncode == 0, result.stdout + result.stderr
     shortcut = startup / "BaguTrainer.lnk"
     assert shortcut.is_file()
-    from bagu_trainer.login_startup import read_shortcut
+    from bagu_trainer.infrastructure.login_startup import read_shortcut
     details = read_shortcut(shortcut)
     expected_python = Path(sys.executable) if explicit else project / ".venv" / "Scripts" / "python.exe"
     assert Path(details["target"]).resolve() == expected_python.with_name("pythonw.exe").resolve()

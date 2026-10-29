@@ -1,6 +1,5 @@
 """Absolute-path entry point usable by pythonw.exe and Windows Startup."""
 import sys
-import os
 from pathlib import Path
 
 if not getattr(sys, "frozen", False):
@@ -9,5 +8,5 @@ if not getattr(sys, "frozen", False):
 if __name__ == "__main__":
     from multiprocessing import freeze_support
     freeze_support()
-    from bagu_trainer.runtime import run
+    from bagu_trainer.desktop.runtime import run
     raise SystemExit(run())

@@ -3,7 +3,8 @@ import gc
 import sys
 
 import pytest
-from bagu_trainer import config, desktop_instance
+from bagu_trainer.infrastructure import config
+from bagu_trainer.infrastructure import desktop_instance
 
 
 @pytest.fixture(autouse=True)

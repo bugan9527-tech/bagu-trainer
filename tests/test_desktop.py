@@ -1,16 +1,14 @@
-import json
 import os
-import queue
-import threading
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from bagu_trainer import engine
-from bagu_trainer import desktop_instance as bridge
-from bagu_trainer.desktop_monitor import DesktopMonitor, ActivityDiffReader
+from bagu_trainer.application.learning import engine
+from bagu_trainer.infrastructure import desktop_instance as bridge
+from bagu_trainer.application.monitor import DesktopMonitor
+from bagu_trainer.application.monitor import ActivityDiffReader
 
 REAL_DESKTOP_RUNNING = bridge.desktop_running
 

@@ -5,8 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from bagu_trainer.desktop import DesktopApp
-from bagu_trainer.desktop_monitor import DesktopMonitor
-from bagu_trainer.quiz_validation import grounding_receipt
+from bagu_trainer.application.monitor import DesktopMonitor
+from bagu_trainer.domain.quizzes import grounding_receipt
 from release_tests.test_answer_history import history, SNAP, NOW, pump, dispose
 from release_tests.test_quiz_grounding import CANDIDATE, REVIEW, CONTEXT, SOURCE
 
@@ -208,13 +208,13 @@ def test_due_review_drops_manual_retry_identity_from_history(due_review):
 
 
 def test_restart_rehydrates_existing_due_review_without_duplicate(due_review, monkeypatch):
-    engine, store, calls, monitor, _, _ = due_review
+    engine, store, calls, monitor, clock, _ = due_review
     quiz = monitor.resume_quiz()
     database = store._conn.execute("PRAGMA database_list").fetchone()[2]
-    monkeypatch.setattr(engine.session, "_store", None)
-    monkeypatch.setattr(engine, "_db_path", lambda: database)
-    engine.session._state["quizzes"].clear()
-    engine.session._state["pending"].clear()
+    cfg = engine.load_config()
+    monkeypatch.setattr(engine, "load_config", lambda: {**cfg, "db_path": database})
+    engine.learning.close()
+    engine.initialize()
     try:
         resumed = DesktopMonitor(engine).resume_quiz()
         assert resumed["quiz_id"] == quiz["quiz_id"]

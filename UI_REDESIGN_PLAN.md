@@ -1,4 +1,6 @@
-# 客户端主窗口改版方案（待实施）
+# 客户端主窗口改版方案（Tk 时代历史方案）
+
+> 版本范围：本文是 0.4.x Tk 兼容版的历史设计与实施建议，不代表当前 Electron 界面。当前说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 日期：2026-10-22。根据当前工作区源码及用户提供的参考图制定；本文是设计与实施建议，不代表功能已经完成。
 

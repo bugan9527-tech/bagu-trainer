@@ -31,12 +31,13 @@ def write(path, value):
 
 
 def run(work, phase):
-    from bagu_trainer import config
-    from bagu_trainer.bank_build.service import BankBuildService, load_sources
-    from bagu_trainer.bank_build.control import SourceBatchError
-    from bagu_trainer.bank_storage import active_bank_dir
-    from bagu_trainer.store import Store
-    from bagu_trainer.scheduler import next_state
+    from bagu_trainer.infrastructure import config
+    from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+    from bagu_trainer.infrastructure.bank_build.service import load_sources
+    from bagu_trainer.infrastructure.bank_build.control import SourceBatchError
+    from bagu_trainer.infrastructure.bank_storage import active_bank_dir
+    from bagu_trainer.infrastructure.store import Store
+    from bagu_trainer.domain.review import next_state
 
     work = Path(work).resolve()
     user = work / "user"
@@ -138,8 +139,8 @@ def run(work, phase):
             milestones.append("previous_bank_configuration_learning_snapshot_readable")
             copy_practice(SNAPSHOT)
             milestones.append("copy_question_and_gated_multiline_solution")
-            from bagu_trainer.bank_cleanup import BankCleanupService
-            from bagu_trainer.bank_inventory import BankInventory
+            from bagu_trainer.infrastructure.bank_cleanup import BankCleanupService
+            from bagu_trainer.infrastructure.bank_inventory import BankInventory
             cleanup = BankCleanupService(service)
             plan = cleanup.plan("sources", [REPOS[1]])
             result = cleanup.execute(plan, engine=engine)
@@ -173,11 +174,11 @@ def run(work, phase):
 
 def copy_practice(snapshot):
     import tkinter as tk
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.ui_theme import apply_theme
-    from bagu_trainer.ui_state import window_var
-    from bagu_trainer.practice_controller import PracticeController
-    from bagu_trainer.practice_window import PracticeWindow
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.ui_theme import apply_theme
+    from bagu_trainer.desktop.ui_state import window_var
+    from bagu_trainer.desktop.practice_controller import PracticeController
+    from bagu_trainer.desktop.practice_window import PracticeWindow
     root = create_root()
     try:
         previous = root.clipboard_get()

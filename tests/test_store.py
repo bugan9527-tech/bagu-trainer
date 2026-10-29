@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Store 层测试：临时库 + 固定时间戳，无网络、无真实用户数据。"""
-from bagu_trainer.scheduler import next_state
-from bagu_trainer.store import Store
+from bagu_trainer.domain.review import next_state
+from bagu_trainer.infrastructure.store import Store
 
 T0 = 1_800_000_000.0
 HOUR = 3600.0
@@ -107,3 +107,35 @@ def test_snapshot_strips_internal_fields(tmp_path):
     assert "_created_at" not in row["snapshot"]
     assert row["snapshot"]["answer"] == "A"  # 判分所需字段保留
     s.close()
+
+
+def test_dashboard_read_snapshot_never_creates_or_expires_data(tmp_path):
+    path = tmp_path / "read-only.db"
+    assert Store.dashboard_stats(path, T0)["pending"] == 0
+    assert not path.exists()
+    store = Store(path)
+    try:
+        _put_state(store, "answered", "kp-1", False, T0 - DAY)
+        store.create_quiz("old", "kp-2", SNAP, "ready", "/p", "", T0 - DAY, T0 - 1)
+        assert Store.dashboard_stats(path, T0) == {
+            "total_attempts": 1, "accuracy": 0, "due_reviews": 1, "pending": 1}
+        assert Store.dashboard_stats(path, T0, expire_pending=True)["pending"] == 0
+        assert store.get_quiz("old")["status"] == "ready"
+        assert Store.history_page(path)["total"] == 1
+        detail = Store.history_detail(path, Store.history_page(path)["items"][0]["id"])
+        assert detail["quiz_id"] == "answered"
+    finally:
+        store.close()
+
+
+def test_database_snapshot_uses_public_store_operations(tmp_path):
+    source, destination = tmp_path / "source.db", tmp_path / "copy.db"
+    store = Store(source)
+    try:
+        _put_state(store, "q1", "kp-1", True, T0)
+        assert Store.is_learning_database(source)
+        assert Store.backup_database(source, destination, verify=True)
+        assert Store.history_page(destination)["total"] == 1
+        assert Store.source_manifest_at(source, []) == Store.source_manifest_at(destination, [])
+    finally:
+        store.close()

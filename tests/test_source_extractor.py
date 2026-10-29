@@ -1,13 +1,9 @@
 # -*- coding: utf-8 -*-
 """source_extractor 单元测试：标题匹配、长度上限、missing 标记、路径穿越防护。"""
-from pathlib import Path
-
-from bagu_trainer.source_extractor import (
-    extract_excerpt,
-    excerpt_for,
-    normalize_title,
-    safe_repo_file,
-)
+from bagu_trainer.infrastructure.source_extractor import extract_excerpt
+from bagu_trainer.infrastructure.source_extractor import excerpt_for
+from bagu_trainer.infrastructure.source_extractor import normalize_title
+from bagu_trainer.infrastructure.source_extractor import safe_repo_file
 
 MD = """# 数据库
 

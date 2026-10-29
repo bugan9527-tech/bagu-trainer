@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from release_tests.test_ui_theme import assert_inside, cancel_timers
-from bagu_trainer.tk_runtime import prepare_tk
+from bagu_trainer.desktop.tk_runtime import prepare_tk
+from release_tests.fakes import LearningFake
+from release_tests.fakes import ui_monitor
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk layout")
 
@@ -17,8 +19,7 @@ def test_window_content_reflows_and_actions_remain_reachable(monkeypatch, scale,
     prepare_tk()
     import tkinter as tk
     import ttkbootstrap  # load subclasses before replacing Tk with a test factory
-    from bagu_trainer.first_use import FirstUseWizard
-    from bagu_trainer.settings_window import ModelSettingsWindow
+    from release_tests.fakes import make_model_panel
     from bagu_trainer.desktop import DesktopApp
     real_tk = tk.Tk
     def scaled_root():
@@ -26,43 +27,13 @@ def test_window_content_reflows_and_actions_remain_reachable(monkeypatch, scale,
         root.tk.call("tk", "scaling", scale * 96 / 72)
         return root
     monkeypatch.setattr(tk, "Tk", scaled_root)
-    monkeypatch.setattr(FirstUseWizard, "_restore", lambda self: None)
     text = "长文本说明与中文路径；" * (180 if long else 1) + "末尾标记"
-    wizard = FirstUseWizard(SimpleNamespace(events=queue.Queue()))
-    try:
-        wizard.root.geometry("%dx%d" % wizard.root.minsize())
-        wizard._show("model")
-        wizard.status.set(text)
-        wizard.key_hint.set(text)
-        wizard.root.update()
-        wizard.model_view.reveal(wizard.test_button)
-        assert_inside(wizard.test_button, wizard.root)
-        assert_inside(wizard.start_button, wizard.root)
-        assert_inside(wizard.back_button, wizard.root)
-        assert wizard.steps_text.get() == "第 2 / 4 步"
-        assert float(wizard.step_progress.cget("value")) == 2
-        assert "当前" in wizard.step_labels[1].cget("text")
-        assert wizard.status_area.text.get("1.0", "end-1c") == text
-        wizard.status_area.text.yview_moveto(1)
-        wizard.root.update()
-        assert wizard.status_area.text.yview()[1] == 1
-        wizard._show("projects")
-        wizard.project_list.insert("end", "C:/学习项目/" + text)
-        for button in wizard.project_buttons:
-            assert_inside(button, wizard.root)
-        if long:
-            wizard.project_list.xview_moveto(1)
-            assert wizard.project_list.xview()[0] > 0
-    finally:
-        cancel_timers(wizard.root)
-        wizard._close()
-
-    settings = ModelSettingsWindow()
+    settings = make_model_panel()
     try:
         settings.root.geometry("%dx%d" % settings.root.minsize())
         settings.status.set(text)
         settings.root.update()
-        settings.url_var.set("https://example.invalid/" + text)
+        settings.base_url.set("https://example.invalid/" + text)
         settings.status.set(text)
         settings.form_view.reveal(settings.entries[-1])
         assert_inside(settings.entries[-1], settings.root)
@@ -72,9 +43,10 @@ def test_window_content_reflows_and_actions_remain_reachable(monkeypatch, scale,
         assert settings.status_area.text.get("1.0", "end-1c") == text
     finally:
         cancel_timers(settings.root)
-        settings._close()
+        settings.close()
+        settings.root.destroy()
 
-    app = DesktopApp(SimpleNamespace(paused=False))
+    app = DesktopApp(ui_monitor())
     try:
         app.root.geometry("%dx%d" % app.root.minsize())
         app.status.set(text)
@@ -123,6 +95,7 @@ def test_dashboard_reads_existing_aggregates_through_worker_queue():
         load_config=lambda: {"project_roots": ["C:/one", "C:/two"]},
         get_learning_stats=lambda: calls.append("read") or {"ok": True, "total_attempts": 4,
             "accuracy": .5, "due_reviews": 1})
+    engine.learning = LearningFake(engine)
     app = SimpleNamespace(monitor=SimpleNamespace(engine=engine), events=queue.Queue())
     DesktopApp._post_dashboard(app, "watching")
     name, snapshot = app.events.get_nowait()
@@ -132,10 +105,11 @@ def test_dashboard_reads_existing_aggregates_through_worker_queue():
 
 
 def test_single_line_message_height_is_not_expanded_by_scrollbar():
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.ui_theme import apply_theme, SPACE
-    from bagu_trainer.ui_layout import MessageArea
-    from bagu_trainer.ui_state import window_var
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.ui_theme import apply_theme
+    from bagu_trainer.desktop.ui_theme import SPACE
+    from bagu_trainer.desktop.ui_layout import MessageArea
+    from bagu_trainer.desktop.ui_state import window_var
     root = create_root()
     try:
         root.tk.call("tk", "scaling", 2 * 96 / 72)

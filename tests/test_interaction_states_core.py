@@ -1,8 +1,8 @@
 """Retry failed generation without replaying successful work or learning writes."""
 import pytest
 
-from bagu_trainer import engine
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.application.learning import engine
+from bagu_trainer.application.monitor import DesktopMonitor
 
 
 def test_manual_generation_retry_bypasses_only_failed_fingerprint(env, monkeypatch):

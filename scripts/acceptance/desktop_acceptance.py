@@ -131,9 +131,11 @@ def database_state(path):
 
 def phase(options):
     # Imports happen only after the orchestrator has selected an isolated profile.
-    from bagu_trainer import config, desktop, first_use, secrets, startup
-    from bagu_trainer.bank_build.service import BankBuildService
-    from bagu_trainer.bank_storage import active_bank_dir
+    from bagu_trainer.infrastructure import config
+    from bagu_trainer import desktop
+    from bagu_trainer.infrastructure import secrets
+    from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+    from bagu_trainer.infrastructure.bank_storage import active_bank_dir
     if options.memory_credentials:
         class Credentials:
             def get_password(self, *_):
@@ -142,7 +144,7 @@ def phase(options):
                 pass
         secrets._load_keyring = lambda: Credentials()
     work = options.work
-    from bagu_trainer import login_startup
+    from bagu_trainer.infrastructure import login_startup
     login_startup.shortcut_directory = lambda: work / "临时 Startup"
     profile = config.USER_DATA_ROOT
     watched = work / "监听 项目"
@@ -195,7 +197,7 @@ def phase(options):
                 return True
             n = setup_stage[0]
             if n == 0:
-                check("bagu_trainer.engine" not in sys.modules, "Engine loaded before readiness")
+                check("bagu_trainer.application.learning.engine" not in sys.modules, "Engine loaded before readiness")
                 app._navigate_page("bank")
                 capture("main-bank-empty", app.root)
                 bank._start()
@@ -267,7 +269,7 @@ def phase(options):
                 check(state == expected, "Restart/upgrade lost learning data")
                 check(all(Path(path).exists() for path in config.load_config()["project_roots"]), "Projects lost")
                 check(config.load_config()["llm"]["model"] == UPDATED_MODEL, "Updated model lost on restart")
-                from bagu_trainer import onboarding
+                from bagu_trainer.application.settings import verification as onboarding
                 check(onboarding.saved_model_verified(), "Saved settings verification receipt lost on restart")
                 milestones.append("restart_direct_main_and_history_restore")
                 milestones.append("updated_model_receipt_restored_without_network")
@@ -361,15 +363,15 @@ def phase(options):
                 practice.view._key_position(1)  # same explicit End action as a reader
                 capture("grade-and-review", practice)
                 app.practice.dismiss()
-                from bagu_trainer import onboarding
-                from bagu_trainer.settings_window import ModelSettingsWindow
+                from bagu_trainer.application.settings import verification as onboarding
                 previous_receipt[0] = onboarding.read_state()["model_verification"]
-                settings[0] = ModelSettingsWindow(app.root)
-                settings[0].model_var.set(UPDATED_MODEL)
+                app._navigate_page("model")
+                settings[0] = app._page_frame("model")
+                settings[0].model_name.set(UPDATED_MODEL)
                 check(settings[0].save_button.instate(["disabled"]), "Edited model can save before testing")
                 settings[0]._save()
                 check(config.load_config()["llm"]["model"] == "local-model", "Untested edit was persisted")
-                capture("settings-edited-save-disabled", settings[0].root)
+                capture("settings-edited-save-disabled", app.root)
                 settings[0]._test()
                 stage[0] = 3
             elif stage[0] == 3:
@@ -377,22 +379,21 @@ def phase(options):
                 if window.busy:
                     return False
                 check(window.verified is not None and window.save_button.instate(["!disabled"]), "Edited model did not pass explicit test")
-                capture("settings-tested", window.root)
+                capture("settings-tested", app.root)
                 window._save()
                 stage[0] = 4
             elif stage[0] == 4:
                 window = settings[0]
                 if window.busy or app.pending_actions:
                     return False
-                from bagu_trainer import onboarding
+                from bagu_trainer.application.settings import verification as onboarding
                 check(config.load_config()["llm"]["model"] == UPDATED_MODEL, "Changed model was not saved")
                 check(onboarding.saved_model_verified(), "Updated configuration receipt is not valid")
                 check(onboarding.read_state()["model_verification"] != previous_receipt[0], "Model edit kept old receipt")
-                check(not window.key_var.get(), "Key input not cleared after save")
+                check(not window.api_key.get(), "Key input not cleared after save")
                 check(database_state(config.db_path()) == json.loads((work / "first-state.json").read_text(encoding="utf-8")), "Model save changed learning history")
                 milestones.append("settings_edit_retest_save_and_updated_receipt")
-                capture("settings-saved", window.root)
-                window._close()
+                capture("settings-saved", app.root)
                 settings[0] = None
                 app._navigate_page("history")
                 stage[0] = 5
@@ -408,7 +409,8 @@ def phase(options):
                 if not hasattr(page, "retry_button"):
                     return False
                 capture("history-snapshot", app.root)
-                from bagu_trainer.ui_copy import question_text, solution_text
+                from bagu_trainer.desktop.ui_copy import question_text
+                from bagu_trainer.desktop.ui_copy import solution_text
                 import tkinter as tk
                 try:
                     clipboard_before = app.root.clipboard_get()
@@ -454,7 +456,7 @@ def phase(options):
                 return True
             return False
         schedule(app.root, step, cleanup)
-    from bagu_trainer.bank_panel import BankPanel
+    from bagu_trainer.desktop.bank_panel import BankPanel
     original_bank_panel = BankPanel.__init__
     def fixture_bank_panel(self, *args, **kwargs):
         kwargs["service"] = bank_service
@@ -464,8 +466,8 @@ def phase(options):
     try:
         desktop.main([])
     finally:
-        if "bagu_trainer.engine" in sys.modules:
-            engine = sys.modules["bagu_trainer.engine"]
+        if "bagu_trainer.application.learning.engine" in sys.modules:
+            engine = sys.modules["bagu_trainer.application.learning.engine"]
             if engine.session._store:
                 engine.session._store.close()
     check(not errors, "; ".join(errors))
@@ -586,7 +588,7 @@ def orchestrate(options):
         check(all(hashlib.sha256((work / p).read_bytes()).hexdigest() == digest for p, digest in bank_hashes.items()), "Bank changed on restart")
         check(KEY not in (work / "用户 数据" / "config.json").read_text(encoding="utf-8"), "Plaintext fixture key in config")
         if options.production_exe:
-            from bagu_trainer import desktop_instance
+            from bagu_trainer.infrastructure import desktop_instance
             desktop_instance.RUNTIME = work / "用户 数据" / "runtime"
             production_manifest = json.loads((options.production_exe.parent / "BUILD_MANIFEST.json").read_text(encoding="utf-8"))
             results["production_commit"] = production_manifest.get("source_commit")
@@ -680,7 +682,7 @@ def orchestrate(options):
         server.server_close()
         if not options.memory_credentials:
             # Delete only this driver's isolated credential, never the default service.
-            from bagu_trainer import secrets
+            from bagu_trainer.infrastructure import secrets
             profile = os.path.normcase(str((work / "用户 数据").resolve()))
             service = "bagu-trainer.profile." + hashlib.sha256(profile.encode("utf-8")).hexdigest()[:24]
             keyring = secrets._load_keyring()

@@ -14,14 +14,12 @@
 import json
 from datetime import datetime
 
-import pytest
-
-import bagu_trainer.config as config_mod
-import bagu_trainer.diff_reader as diff_reader
-import bagu_trainer.quiz_generator as qg
-import bagu_trainer.secrets as secrets_mod
-import bagu_trainer.engine as engine
-import bagu_trainer.session_reader as session_reader
+import bagu_trainer.infrastructure.config as config_mod
+import bagu_trainer.infrastructure.diff_reader as diff_reader
+import bagu_trainer.application.learning.generator as qg
+import bagu_trainer.infrastructure.secrets as secrets_mod
+import bagu_trainer.application.learning.engine as engine
+import bagu_trainer.infrastructure.session_reader as session_reader
 
 FAKE_KEY = "sk-fake-secret-key-9f8e7d6c5b4a"
 FAKE_PASSWORD = "db-pass-12345-xyz"

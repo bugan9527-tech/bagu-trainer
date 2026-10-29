@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Check, Database, Download, HardDrive, RefreshCw, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Database, Download, HardDrive, RefreshCw, Trash2, X } from 'lucide-react';
 import { request, useDesktop } from './state';
 import type { CleanupPlan, Inventory } from './types';
 import { bytes, ErrorNotice, PageHeading, Spinner, useAction } from './components';

@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 
 def run(bundle, work):
-    from bagu_trainer import desktop_instance
+    from bagu_trainer.infrastructure import desktop_instance
     from scripts.acceptance.desktop_acceptance import capture_window
     work.mkdir(parents=True, exist_ok=False)
     exe = bundle / "BaguTrainer.exe"

@@ -1,4 +1,6 @@
-# 桌面窗口布局
+# 桌面窗口布局（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留 Tk 页面布局与窗口行为。0.5.0 Electron 当前界面说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 短工作区的练习页通过“查看待答列表 / 返回当前题目”切换队列与阅读内容，提交操作保持在固定底部。表单在异步换行后继续保持已请求的字段可见；手动滚动与 End/Home 会解除该跟随。
 

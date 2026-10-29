@@ -9,9 +9,9 @@ import _tkinter
 
 import pytest
 
-from bagu_trainer import engine
+from bagu_trainer.application.learning import engine
 from bagu_trainer.desktop import DesktopApp
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.application.monitor import DesktopMonitor
 
 
 def pump(app, predicate, timeout=4):
@@ -286,25 +286,23 @@ def test_next_shortcut_respects_text_selection_and_input_focus(live_app):
 @pytest.mark.parametrize("action", ["reload_bank", "bank_cleanup"])
 def test_queued_bank_maintenance_finishes_while_model_is_blocked(live_app, monkeypatch, env, action):
     from types import SimpleNamespace
-    from bagu_trainer.bank_cleanup import CleanupResult
+    from bagu_trainer.infrastructure.bank_cleanup import CleanupResult
     app, _, _ = live_app
     assert app.test_entered.wait(1)
     maintained = threading.Event()
     if action == "reload_bank":
-        monkeypatch.setattr(engine, "KnowledgeBase", lambda: engine.kb)
-        monkeypatch.setattr(engine, "Matcher", lambda _: env["matcher"])
-        original = engine.reload_bank
+        original = engine.learning.replace_question_bank
         def reload():
             original()
             maintained.set()
-        monkeypatch.setattr(engine, "reload_bank", reload)
+        monkeypatch.setattr(engine.learning, "replace_question_bank", reload)
         app.jobs.put((action, None))
     else:
         def cleanup(*_args, **_kwargs):
             engine.invalidate_content()
             maintained.set()
             return CleanupResult([], [])
-        app.jobs.put((action, (SimpleNamespace(execute=cleanup), object(), False)))
+        app.jobs.put((action, (SimpleNamespace(clean=cleanup), SimpleNamespace(token="synthetic"), False)))
     assert maintained.wait(1), "maintenance waited for model I/O"
     assert not app.test_release.is_set()
     app.test_release.set()

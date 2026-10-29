@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-import bagu_trainer.config as config_mod
-import bagu_trainer.secrets as secrets_mod
+import bagu_trainer.infrastructure.config as config_mod
+import bagu_trainer.infrastructure.secrets as secrets_mod
 
 FAKE_KEY = "sk-fake-migration-key-7c4b2a9e8d1f"
 

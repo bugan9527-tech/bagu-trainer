@@ -24,9 +24,10 @@ PROJECT = Path(__file__).resolve().parent.parent
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
-from bagu_trainer.concepts import load_concept_profiles, validate_profiles  # noqa: E402
-from bagu_trainer.knowledge_base import KnowledgeBase  # noqa: E402
-from bagu_trainer.matcher import Matcher  # noqa: E402
+from bagu_trainer.infrastructure.concepts import load_concept_profiles
+from bagu_trainer.infrastructure.concepts import validate_profiles  # noqa: E402
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase  # noqa: E402
+from bagu_trainer.infrastructure.matcher import Matcher  # noqa: E402
 from scripts.build_concept_profiles import extract_profile  # noqa: E402
 
 

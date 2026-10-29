@@ -3,7 +3,7 @@ import sys
 
 import pytest
 
-from bagu_trainer.desktop_monitor import DesktopMonitor
+from bagu_trainer.application.monitor import DesktopMonitor
 from release_tests.test_answer_history import history, seed, SNAP, NOW, pump, dispose
 
 

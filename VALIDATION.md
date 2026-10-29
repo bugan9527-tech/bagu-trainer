@@ -1,8 +1,9 @@
 # 验证范围与复现
 
 > 历史记录版本说明：本页保留接入阶段原始结论，包含 0.1.0 → 0.2.0 合成安装夹具、v0.3.0 安装器构建及旧首次使用向导流程。
+> 0.5.0 Electron 当前验证记录见[项目仓库 docs/ELECTRON_VALIDATION.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_VALIDATION.md)。
 > 各项通过/未通过只适用于当时的版本、提交和环境；旧“向导准备”“卸载保留数据”不适用于 0.4.0。
-> 0.4.0 当前流程见 [FIRST_USE.md](FIRST_USE.md) 和 [WINDOWS_INSTALLER.md](WINDOWS_INSTALLER.md)。
+> 0.5.0 当前流程见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)；0.4.x Tk 兼容说明见 [FIRST_USE.md](FIRST_USE.md) 和 [WINDOWS_INSTALLER.md](WINDOWS_INSTALLER.md)（已归档）。
 > 最近的 0.4.0 工作区证据 `validation/artifact-path-fix-20261025/RESULTS.md`（未随仓库或发布包分发）记录相关回归通过，但完整冻结 UI 验收仍未通过，不能替代完整发布验收。
 > 0.4.0 [真实 Setup 生命周期脚本与说明](INSTALLED_LIFECYCLE_ACCEPTANCE.md) 已补齐；当前仅执行脚本回归和包摘要预检，六项真实安装场景均未执行，不改写以下历史结论。
 

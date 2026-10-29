@@ -1,4 +1,6 @@
-# 桌面交互状态
+# 桌面交互状态（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留旧版 Tk 交互状态和线程边界。0.5.0 Electron 当前界面与状态说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 2026-10-22：页面可见性与业务操作分别建模。普通导航不停止监听、不重建基线、不取消任务。状态用文字、按钮、禁用原因与进度共同表达，颜色仅作辅助。
 

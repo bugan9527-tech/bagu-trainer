@@ -1,4 +1,6 @@
-# 桌面显示与键盘适配
+# 桌面显示与键盘适配（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留 Tk 显示/缩放/键盘适配说明。0.5.0 Electron 的响应式布局和快捷键说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。
 
 2026-10-22。布局见 [UI_LAYOUT.md](UI_LAYOUT.md)，任务状态和退出边界见 [UI_STATES.md](UI_STATES.md)。
 

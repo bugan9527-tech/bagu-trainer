@@ -10,19 +10,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer.bank_cleanup import BankCleanupService, CleanupTarget
-from bagu_trainer.bank_build.service import _build_lock, load_sources
-from bagu_trainer.bank_build.source_cache import cache_directory
-from bagu_trainer.bank_storage import active_bank_dir
-from bagu_trainer.knowledge_base import KnowledgeBase
+from bagu_trainer.infrastructure.bank_cleanup import BankCleanupService
+from bagu_trainer.infrastructure.bank_cleanup import CleanupTarget
+from bagu_trainer.infrastructure.bank_build.service import _build_lock
+from bagu_trainer.infrastructure.bank_build.service import load_sources
+from bagu_trainer.infrastructure.bank_build.source_cache import cache_directory
+from bagu_trainer.infrastructure.bank_storage import active_bank_dir
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
 from release_tests.test_bank_batch import batch as original_batch, REPOS
 from release_tests.test_bank_build import installed
 
 
 @pytest.fixture
 def batch(original_batch, monkeypatch):
-    from bagu_trainer import config
-    from bagu_trainer.store import Store
+    from bagu_trainer.infrastructure import config
+    from bagu_trainer.infrastructure.store import Store
     value = original_batch
     # The previous cache-only tests used a deliberately invalid learning DB
     # and an unattributed legacy bank. Full deletion requires real ownership.
@@ -37,6 +39,9 @@ def batch(original_batch, monkeypatch):
 
 def fake_engine(batch):
     engine = SimpleNamespace(_STATE_LOCK=threading.RLock(), kb=KnowledgeBase(active_bank_dir(batch.install.project) / "questions.json"))
+    engine.learning = SimpleNamespace(
+        has_question_bank=lambda: not engine.kb.explicit_empty,
+        generation_window=lambda: None)
     def reload():
         engine.kb = KnowledgeBase(active_bank_dir(batch.install.project) / "questions.json")
     engine.reload_bank = reload
@@ -154,7 +159,7 @@ def test_used_source_rebuilds_validates_and_reloads_before_removing_files(batch)
 
 
 def test_last_source_switches_explicit_empty_and_preserves_learning(batch):
-    from bagu_trainer.desktop_monitor import DesktopMonitor
+    from bagu_trainer.application.monitor import DesktopMonitor
     engine = fake_engine(batch)
     old = active_bank_dir(batch.install.project)
     cleanup = BankCleanupService(batch.service)
@@ -178,7 +183,7 @@ def test_failed_rebuild_or_engine_switch_never_cleans_original_files(batch, monk
     plan = cleanup.plan("sources", [REPOS[1]])
     original = snapshot(batch)
     if failure == "build":
-        from bagu_trainer.bank_build import profiles
+        from bagu_trainer.infrastructure.bank_build import profiles
         monkeypatch.setattr(profiles, "build_profiles", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("合成构建失败")))
     else:
         actual = engine.reload_bank
@@ -216,7 +221,7 @@ def test_permission_failure_reports_partial_actual_result_without_affecting_curr
     cleanup = BankCleanupService(batch.service)
     plan = cleanup.plan("sources", [REPOS[1]])
     old = active_bank_dir(batch.install.project)
-    import bagu_trainer.source_deletion as module
+    import bagu_trainer.infrastructure.source_deletion as module
     actual = module.shutil.rmtree
     def denied(source, *args, **kwargs):
         if Path(source) == cache(batch, 1):
@@ -295,7 +300,7 @@ def test_configured_learning_database_with_custom_extension_is_kept(batch):
 
 
 def test_real_matcher_and_engine_accept_explicit_empty_bank(batch, monkeypatch):
-    from bagu_trainer import engine
+    from bagu_trainer.application.learning import engine
     monkeypatch.setattr(engine, "kb", engine.kb)
     monkeypatch.setattr(engine, "matcher", engine.matcher)
     engine.reload_bank()
@@ -315,7 +320,7 @@ def test_main_window_confirmation_cancel_last_source_and_history_deletion(histor
     monkeypatch.setattr(engine, "matcher", engine.matcher)
     engine.reload_bank()
     from release_tests.test_answer_history import SNAP
-    from bagu_trainer import config
+    from bagu_trainer.infrastructure import config
     settings = json.loads(batch.install.settings.read_text())
     settings["db_path"] = store.path
     batch.install.settings.write_text(json.dumps(settings))
@@ -346,7 +351,7 @@ def test_main_window_confirmation_cancel_last_source_and_history_deletion(histor
         assert app.resume_button.instate(["disabled"])
         assert app.practice.current is None and not old.exists()
         assert not engine.get_answer_detail(attempt)["ok"]
-        from bagu_trainer.store import Store
+        from bagu_trainer.infrastructure.store import Store
         with Store._history_connection(store.path) as connection:
             assert connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 0
         assert not errors
@@ -356,10 +361,10 @@ def test_main_window_confirmation_cancel_last_source_and_history_deletion(histor
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk history cleanup")
 def test_history_cleanup_entry_has_its_own_confirmation_and_keeps_current(batch):
-    from bagu_trainer.bank_panel import BankPanel
-    from bagu_trainer.task_controller import TaskController
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.ui_theme import apply_theme
+    from bagu_trainer.desktop.bank_panel import BankPanel
+    from bagu_trainer.desktop.task_controller import TaskController
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.ui_theme import apply_theme
     from release_tests.test_bank_build import wait_for_ui
     old = batch.service.build([REPOS[1]])
     current = batch.service.build([REPOS[0]])
@@ -386,10 +391,10 @@ def test_history_cleanup_entry_has_its_own_confirmation_and_keeps_current(batch)
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk deletion visibility")
 def test_delete_confirmation_actions_visible_without_native_focus(batch):
-    from bagu_trainer.bank_panel import BankPanel
-    from bagu_trainer.task_controller import TaskController
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.ui_theme import apply_theme
+    from bagu_trainer.desktop.bank_panel import BankPanel
+    from bagu_trainer.desktop.task_controller import TaskController
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.ui_theme import apply_theme
     from release_tests.test_bank_build import wait_for_ui
 
     root = create_root()

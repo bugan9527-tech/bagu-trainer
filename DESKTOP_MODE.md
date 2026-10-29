@@ -1,4 +1,6 @@
-# 桌面监听与独立答题窗口（0.4.0）
+# 桌面监听与独立答题窗口（0.4.x Tk 兼容版，归档）
+
+> 版本范围：本文仅适用于 0.4.x Tk 兼容版，保留旧版 Tk 监听、窗口、自启动和迁移说明。0.5.0 Electron 当前桌面说明见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md)。当前 Electron 不识别 `--install-startup`、`--migrate-from` 或 `scripts/start_desktop.py` 等旧入口。
 
 Windows 登录 → 单实例锁 → 立即显示主壳 → 后台准备检查与引擎加载 → 常驻主壳监听白名单项目 → 文件稳定 15 秒 → 匹配知识点并经 AI 生成/审核 → 待答徽标更新 → 练习中心选题 → 独立答题窗口提交并查看解析。
 
@@ -125,6 +127,6 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-startu
 `release_tests/test_window_broker_auth.py` 使用临时 runtime 和真实 Windows 命名管道，覆盖错误认证后继续服务、独立客户端进程查询与重复启动唤起、非法操作拒绝、实例锁和关闭收尾。
 
 启动检查、准备重试及再次启动的测试与扩展接口见 [STARTUP.md](STARTUP.md)。
-历史记录按对应版本阅读，0.4.0 当前通过项和未完成冻结验收见 [验证状态](README.md#发布与验证状态)。
+历史记录按对应版本阅读，0.4.x 历史通过项和未完成冻结验收见 [验证状态](README.md#发布与验证状态)。
 
 独立答题窗口使用同一 Tk 主线程的 Toplevel，不设模态抓取或嵌套事件循环。默认约 900×700，按 DPI 和可用工作区裁剪；正文整体滚动，底部操作固定。应用统一分发控制器状态，页面不自行覆盖回调。显式打开立即显示加载提示，后台按请求序号回传交付检查结果；失败或过期保留原题，旧请求不覆盖新题。没有下一题时“结束练习”隐藏窗口并保留结果。正常退出统一等待已开始的记录保存及后台任务，再销毁窗口。

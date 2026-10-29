@@ -3,15 +3,17 @@ import json
 import os
 import sys
 import threading
-import time
 from pathlib import Path
 
 import pytest
 
-from bagu_trainer.bank_build.service import BankBuildService, load_sources, _build_lock
-from bagu_trainer.bank_build.source_cache import cache_directory
-from bagu_trainer.bank_inventory import BankInventory, delete_source_cache
-from bagu_trainer.bank_storage import atomic_json
+from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+from bagu_trainer.infrastructure.bank_build.service import load_sources
+from bagu_trainer.infrastructure.bank_build.service import _build_lock
+from bagu_trainer.infrastructure.bank_build.source_cache import cache_directory
+from bagu_trainer.infrastructure.bank_inventory import BankInventory
+from bagu_trainer.infrastructure.bank_inventory import delete_source_cache
+from bagu_trainer.infrastructure.bank_storage import atomic_json
 from release_tests.test_bank_build import installed, http_archive, REPOSITORY, COMMIT
 from release_tests.test_bank_batch import batch, REPOS
 
@@ -162,15 +164,15 @@ def test_incomplete_scan_reports_missing_files_instead_of_silent_zero(installed,
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk inventory")
 @pytest.mark.parametrize("scale", [1, 1.5, 2])
 def test_panel_background_refresh_delete_and_narrow_dpi_layout(installed, http_archive, monkeypatch, scale):
-    from bagu_trainer.store import Store
+    from bagu_trainer.infrastructure.store import Store
     installed.learning.unlink()
     Store(installed.learning).close()
     (installed.data / "sources.json").write_text(json.dumps({"sources": [{
         "repository": REPOSITORY, "commit": COMMIT, "directory": "JavaGuide"}]}))
-    from bagu_trainer.bank_panel import BankPanel
-    from bagu_trainer.task_controller import TaskController
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.ui_theme import apply_theme
+    from bagu_trainer.desktop.bank_panel import BankPanel
+    from bagu_trainer.desktop.task_controller import TaskController
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.ui_theme import apply_theme
     from release_tests.test_bank_build import wait_for_ui
     from release_tests.test_ui_theme import assert_inside
     service = BankBuildService(installed.project, opener=http_archive.opener)
@@ -238,10 +240,10 @@ class SimpleWindow:
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk state refresh")
 def test_panel_download_failure_retry_and_external_deletion_refresh(batch):
-    from bagu_trainer.bank_panel import BankPanel
-    from bagu_trainer.task_controller import TaskController
-    from bagu_trainer.tk_runtime import create_root
-    from bagu_trainer.ui_theme import apply_theme
+    from bagu_trainer.desktop.bank_panel import BankPanel
+    from bagu_trainer.desktop.task_controller import TaskController
+    from bagu_trainer.desktop.tk_runtime import create_root
+    from bagu_trainer.desktop.ui_theme import apply_theme
     from release_tests.test_bank_build import wait_for_ui
     from release_tests.test_bank_batch import assert_previous_usable
     root = create_root()

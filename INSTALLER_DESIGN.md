@@ -1,6 +1,8 @@
-# v0.3.0 Windows 安装版实施规范
+# v0.3.0 Windows 安装版实施规范（历史设计记录）
 
-状态：安装器构建、生命周期及 CI 双产物草稿门禁已实现，当前产品版本为 `0.3.0`。入口为 `packaging/windows-installer.iss`，生命周期共用代码为 `packaging/windows-installer-lifecycle.iss`，输出名使用 `-Setup.exe`。升级、正常退出等待、卸载、快捷方式归属和数据保留已使用独立 AppId、编译时重定向目录与合成数据进行原生隔离夹具验收；开发机没有运行生产安装器。最终 Setup 的试装、同版覆盖、已安装 EXE 冻结及卸载已配置为临时 GitHub 托管 runner 的必要门禁；尚未远端运行的检查不标记通过。实现与复现命令见 [WINDOWS_INSTALLER.md](WINDOWS_INSTALLER.md) 和 [WINDOWS_PORTABLE.md](WINDOWS_PORTABLE.md)，证据与未验范围见 [VALIDATION.md](VALIDATION.md)。完整生产包的默认系统目录/向导、故障恢复、重启登录仍待后续验证。下文保留最初基于 `0.2.0` 的调查与实施计划作为历史设计基线，不代表当前未实现状态。
+> 版本范围：本文保留 v0.3.0 安装器设计基线，其中 PyInstaller/Tk 时代的载荷描述不代表 0.5.0 Electron。安装器脚本现与 Electron 共用；当前桌面、构建和验证边界见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md) 和[项目仓库 docs/ELECTRON_VALIDATION.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_VALIDATION.md)。
+
+状态：安装器构建、生命周期及 CI 双产物草稿门禁已实现，当时产品版本为 `0.3.0`。入口为 `packaging/windows-installer.iss`，生命周期共用代码为 `packaging/windows-installer-lifecycle.iss`，输出名使用 `-Setup.exe`。升级、正常退出等待、卸载、快捷方式归属和数据保留已使用独立 AppId、编译时重定向目录与合成数据进行原生隔离夹具验收；开发机没有运行生产安装器。最终 Setup 的试装、同版覆盖、已安装 EXE 冻结及卸载已配置为临时 GitHub 托管 runner 的必要门禁；尚未远端运行的检查不标记通过。实现与复现命令见 [WINDOWS_INSTALLER.md](WINDOWS_INSTALLER.md) 和 [WINDOWS_PORTABLE.md](WINDOWS_PORTABLE.md)，证据与未验范围见 [VALIDATION.md](VALIDATION.md)。完整生产包的默认系统目录/向导、故障恢复、重启登录仍待后续验证。下文保留最初基于 `0.2.0` 的调查与实施计划作为历史设计基线，不代表当前未实现状态。
 
 ## 1. 范围与固定决策
 
@@ -72,7 +74,7 @@ v0.3.0 新增 Windows x64 安装器，继续提供便携 ZIP。安装器使用 *
 5. 不通过读取用户 `config.json` 搜索自定义 DB。无法在不读配置的前提下穷举外部数据库或其他进程的 profile；因此只更新清单拥有的程序文件，绝不递归删除自定义目标中的未知内容。发现未知文件与新 payload 路径碰撞时应停止并提示换目录。
 6. 首次安装允许选择安全的自定义目录；升级使用同 AppId 上次目录，v0.3.0 不支持通过升级搬家。拒绝升级时传入另一目标造成重复登记；搬家需卸载后重装，数据仍保留。
 
-禁止把个人配置、题库正文、SQLite、日志或 `bridge-credentials.json` 放进安装 payload。安装器不生成默认配置，不下载题库，不调用 `--migrate-from`；首次运行继续使用现有向导，旧源码数据继续由用户显式迁移。
+禁止把个人配置、题库正文、SQLite、日志或 `bridge-credentials.json` 放进安装 payload。安装器不生成默认配置，不下载题库，不调用 `--migrate-from`；0.5.0 Electron 首次运行在七页工作台完成准备（0.4.x Tk 时代为首次向导），旧源码数据继续由用户显式迁移。
 
 ## 4. Inno Setup 配置约定
 

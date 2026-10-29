@@ -7,7 +7,7 @@ import zipfile
 import pytest
 
 from scripts import release_portable as release
-from bagu_trainer import secrets
+from bagu_trainer.infrastructure import secrets
 
 
 SHA = "a" * 40

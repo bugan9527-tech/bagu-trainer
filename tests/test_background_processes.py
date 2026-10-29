@@ -5,8 +5,8 @@ import sys
 
 import pytest
 
-from bagu_trainer.diff_reader import DiffReader
-from bagu_trainer import engine
+from bagu_trainer.infrastructure.diff_reader import DiffReader
+from bagu_trainer.application.learning import engine
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows console allocation")

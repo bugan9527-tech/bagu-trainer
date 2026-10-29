@@ -1,6 +1,5 @@
-"""First-use wizard integration: localhost HTTP and an in-memory credential store."""
+"""Model readiness and verification integration: localhost HTTP and an in-memory credential store."""
 import json
-import sys
 import threading
 import time
 from dataclasses import replace
@@ -9,9 +8,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import config, onboarding, secrets, startup
-from bagu_trainer.bank_build.service import BankBuildService
-from release_tests.test_bank_build import COMMIT, REPOSITORY, http_archive
+from bagu_trainer.infrastructure import config
+from bagu_trainer.application.settings import verification as onboarding
+from bagu_trainer.infrastructure import secrets
+from bagu_trainer.desktop import startup
+from release_tests.test_bank_build import COMMIT, REPOSITORY
 
 
 KEY = "sk-local-wizard-test-key-37ef9a"
@@ -117,9 +118,9 @@ def test_explicit_connection_save_and_restore_without_plaintext_key(installation
     assert cfg["llm"]["api_key"] == ""
     assert onboarding.saved_model_verified()
     report = startup.check_readiness()
-    assert onboarding.snapshot(report).step == "projects"
+    assert not next(check.ready for check in report.checks if check.name == "projects")
     startup.set_projects([installation.watched])
-    assert onboarding.snapshot(startup.check_readiness()).step == "finish"
+    assert startup.check_readiness().ready
     assert installation.database.read_bytes() == b"existing learning database"
     assert len(model_http.requests) == 1
     path, payload, authorization = model_http.requests[0]
@@ -241,168 +242,6 @@ def wait_ui(app, predicate):
     assert predicate()
 
 
-def make_wizard(installation, http_archive=None, engine_loader=None):
-    from bagu_trainer.initialization import InitializationApp
-    coordinator = startup.StartupCoordinator(engine_loader=engine_loader or (lambda: object()))
-    coordinator.prepare()
-    service = BankBuildService(installation.project, opener=http_archive.opener) if http_archive else None
-    app = InitializationApp(coordinator, bank_service=service)
-    app.root.withdraw()
-    wait_ui(app, lambda: not app.busy)
-    return app
-
-
-def fill_model(app, model_http):
-    app.base_url.set(model_http.base_url)
-    app.model_name.set("local-model")
-    app.api_key.set(KEY)
-    app.timeout.set("1")
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk first-use wizard")
-def test_entire_wizard_build_test_save_projects_and_engine_handoff(installation, http_archive, model_http, capsys):
-    engine, loads = object(), []
-    app = make_wizard(installation, http_archive, lambda: loads.append(1) or engine)
-    try:
-        assert app.step == "bank" and not model_http.requests and not loads
-        beats = []
-        def heartbeat():
-            beats.append(1)
-            if not app.closed:
-                app.root.after(15, heartbeat)
-        app.root.after(15, heartbeat)
-        http_archive.delay = 0.15
-        app.bank_setup.source_list.selection_set(REPOSITORY)
-        app.bank_setup._start()
-        wait_ui(app, lambda: app.step == "model" and not app.busy)
-        assert len(beats) >= 3
-        assert not model_http.requests
-        fill_model(app, model_http)
-        app._next()
-        assert not config.CONFIG_PATH.exists()
-        model_http.delay = 0.15
-        before = len(beats)
-        app._test_model()
-        assert app.start_button.instate(["disabled"])
-        wait_ui(app, lambda: not app.busy)
-        assert len(beats) - before >= 3
-        assert app.verified is not None and not loads
-        assert KEY not in app.status.get()
-        app._next()
-        wait_ui(app, lambda: not app.busy)
-        assert app.step == "projects" and app.api_key.get() == ""
-        assert installation.credentials.value == KEY
-        assert onboarding.saved_model_verified()
-        app.projects = [str(installation.watched)]
-        app._render_projects()
-        app._next()
-        wait_ui(app, lambda: not app.busy)
-        assert app.step == "finish" and not loads
-        app._next()
-        wait_ui(app, lambda: app.closed)
-        assert app.engine is engine and loads == [1]
-        assert len(model_http.requests) == 1
-        assert installation.database.read_bytes() == b"existing learning database"
-        assert KEY not in config.CONFIG_PATH.read_text(encoding="utf-8")
-        assert KEY not in "".join(capsys.readouterr())
-    finally:
-        if not app.closed:
-            app._close()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk first-use wizard")
-def test_completed_steps_resume_and_missing_credentials_reopen_model_step(installation, model_http):
-    seed_bank(installation)
-    app = make_wizard(installation)
-    assert app.step == "model"
-    fill_model(app, model_http)
-    app._test_model()
-    wait_ui(app, lambda: not app.busy)
-    app._next()
-    wait_ui(app, lambda: not app.busy)
-    assert app.step == "projects"
-    app._close()
-    resumed = make_wizard(installation)
-    try:
-        assert resumed.step == "projects"
-        assert resumed.base_url.get() == model_http.base_url
-        assert resumed.model_name.get() == "local-model"
-        assert resumed.api_key.get() == ""
-        assert len(model_http.requests) == 1  # Restoring does not test automatically.
-    finally:
-        resumed._close()
-    installation.credentials.value = None
-    missing = make_wizard(installation)
-    try:
-        assert missing.step == "model"
-        assert len(model_http.requests) == 1
-    finally:
-        missing._close()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk first-use wizard")
-def test_http_and_credential_failures_remain_retryable_in_wizard(installation, model_http):
-    seed_bank(installation)
-    app = make_wizard(installation)
-    try:
-        fill_model(app, model_http)
-        model_http.status = 401
-        app._test_model()
-        wait_ui(app, lambda: not app.busy)
-        assert "401" in app.status.get() and KEY not in app.status.get()
-        assert app.verified is None and not app.test_button.instate(["disabled"])
-        model_http.status = 200
-        app._test_model()
-        wait_ui(app, lambda: not app.busy)
-        installation.credentials.fail_write = True
-        app._next()
-        wait_ui(app, lambda: not app.busy)
-        assert app.step == "model" and "凭据管理器" in app.status.get()
-        assert not config.CONFIG_PATH.exists()
-        installation.credentials.fail_write = False
-        app._next()
-        wait_ui(app, lambda: not app.busy)
-        assert app.step == "projects" and len(model_http.requests) == 2
-    finally:
-        app._close()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk first-use wizard")
-def test_cancellation_and_editing_cannot_save_a_stale_test_result(installation, model_http):
-    seed_bank(installation)
-    app = make_wizard(installation)
-    try:
-        fill_model(app, model_http)
-        model_http.delay = 0.15
-        app._test_model()
-        app._cancel_test()
-        wait_ui(app, lambda: not app.busy)
-        assert app.verified is None
-        app._test_model()
-        app.model_name.set("changed-during-test")
-        wait_ui(app, lambda: not app.busy)
-        assert app.verified is None
-        app._next()
-        assert not config.CONFIG_PATH.exists()
-        assert app.step == "model"
-    finally:
-        app._close()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk first-use wizard")
-def test_restore_failure_is_actionable_and_retryable(installation):
-    onboarding.state_path().write_text("broken", encoding="utf-8")
-    app = make_wizard(installation)
-    try:
-        assert app.step == "loading" and "onboarding.json" in app.status.get()
-        onboarding.state_path().unlink()
-        app._next()
-        wait_ui(app, lambda: not app.busy)
-        assert app.step == "bank"
-    finally:
-        app._close()
-
-
 def test_first_use_gate_cannot_be_skipped_by_restarting_after_bank_build(installation, model_http):
     seed_bank(installation)
     installation.credentials.value = KEY
@@ -414,41 +253,7 @@ def test_first_use_gate_cannot_be_skipped_by_restarting_after_bank_build(install
     assert not startup.check_readiness().ready
     coordinator = startup.StartupCoordinator(engine_loader=lambda: pytest.fail("unverified model was loaded"))
     assert coordinator.prepare() is None
-    assert onboarding.snapshot(coordinator.report).step == "model"
+    assert not next(check.ready for check in coordinator.report.checks if check.name == "model")
     assert not model_http.requests
     verify_and_save(model_http)
     assert startup.check_readiness().ready
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk first-use wizard")
-def test_exit_during_connection_test_waits_without_opening_main(installation, model_http):
-    seed_bank(installation)
-    app = make_wizard(installation)
-    fill_model(app, model_http)
-    model_http.delay = 0.15
-    app._test_model()
-    app._close()
-    assert app.closing
-    wait_ui(app, lambda: app.closed)
-    assert app.engine is None and app.verified is None
-    assert not config.CONFIG_PATH.exists()
-
-
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk first-use wizard")
-def test_exit_during_engine_load_does_not_open_main(installation, model_http):
-    from bagu_trainer.initialization import InitializationApp
-    seed_bank(installation)
-    verify_and_save(model_http)
-    startup.set_projects([installation.watched])
-    def load():
-        time.sleep(0.15)
-        return object()
-    coordinator = startup.StartupCoordinator(engine_loader=load)
-    app = InitializationApp(coordinator)
-    app.root.withdraw()
-    wait_ui(app, lambda: not app.busy)
-    assert app.step == "finish"
-    app._next()
-    app._close()
-    wait_ui(app, lambda: app.closed)
-    assert app.engine is None

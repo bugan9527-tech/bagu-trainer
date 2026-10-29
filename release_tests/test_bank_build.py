@@ -17,13 +17,20 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import config
-from bagu_trainer.bank_build.control import BuildCancelled, BuildControl, BuildError, BuildTimeout
-from bagu_trainer.bank_build.downloads import ArchiveLimits, GithubRedirects, safe_extract
-from bagu_trainer.bank_build.service import BankBuildService, _build_lock, load_sources
-from bagu_trainer.bank_storage import active_bank_dir
-from bagu_trainer.concepts import load_concept_profiles
-from bagu_trainer.knowledge_base import KnowledgeBase
+from bagu_trainer.infrastructure import config
+from bagu_trainer.infrastructure.bank_build.control import BuildCancelled
+from bagu_trainer.infrastructure.bank_build.control import BuildControl
+from bagu_trainer.infrastructure.bank_build.control import BuildError
+from bagu_trainer.infrastructure.bank_build.control import BuildTimeout
+from bagu_trainer.infrastructure.bank_build.downloads import ArchiveLimits
+from bagu_trainer.infrastructure.bank_build.downloads import GithubRedirects
+from bagu_trainer.infrastructure.bank_build.downloads import safe_extract
+from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+from bagu_trainer.infrastructure.bank_build.service import _build_lock
+from bagu_trainer.infrastructure.bank_build.service import load_sources
+from bagu_trainer.infrastructure.bank_storage import active_bank_dir
+from bagu_trainer.infrastructure.concepts import load_concept_profiles
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
 
 
 COMMIT = "a" * 40
@@ -56,7 +63,7 @@ def test_reference_heading_without_question_words_is_searchable(installed, http_
     assert result.questions == 1
     assert bank.all()[0]["knowledge_point"] == "数据库索引结构"
     assert bank.all()[0]["usable_excerpt"]
-    from bagu_trainer.matcher import Matcher
+    from bagu_trainer.infrastructure.matcher import Matcher
     assert Matcher(bank).rank("数据库索引结构：查询利用索引缩小扫描范围，更新维护索引增加存储成本")
 
 
@@ -152,7 +159,7 @@ def assert_unchanged(install, original, pointer=None):
 
 def test_full_http_build_is_in_process_and_switches_complete_generation(installed, http_archive, monkeypatch):
     original = snapshot(installed)
-    engine_loaded = "bagu_trainer.engine" in sys.modules
+    engine_loaded = "bagu_trainer.application.learning.engine" in sys.modules
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kw: pytest.fail("external process was started"))
     events = []
     service = BankBuildService(installed.project, opener=http_archive.opener)
@@ -175,7 +182,7 @@ def test_full_http_build_is_in_process_and_switches_complete_generation(installe
     metadata = json.loads((result.directory / "sources.json").read_text(encoding="utf-8"))["sources"][0]
     assert metadata["archive_sha256"] == hashlib.sha256(http_archive.body).hexdigest()
     assert metadata["commit"] == COMMIT
-    assert ("bagu_trainer.engine" in sys.modules) == engine_loaded
+    assert ("bagu_trainer.application.learning.engine" in sys.modules) == engine_loaded
 
 
 def test_successful_rebuild_retains_previous_generation_and_stable_ids(installed, http_archive):
@@ -260,7 +267,7 @@ def test_cancel_during_download_chunk_preserves_old_data(installed, http_archive
 
 
 def test_build_exception_then_retry(installed, http_archive, monkeypatch):
-    from bagu_trainer.bank_build import profiles
+    from bagu_trainer.infrastructure.bank_build import profiles
     original = snapshot(installed)
     build_profiles = profiles.build_profiles
     def failed(*args, **kwargs):
@@ -488,7 +495,7 @@ def test_abrupt_process_exit_does_not_switch_bank_and_new_build_can_retry(instal
     probe = r'''
 import io, os, sys
 from pathlib import Path
-from bagu_trainer.bank_build.service import BankBuildService
+from bagu_trainer.infrastructure.bank_build.service import BankBuildService
 root = Path(sys.argv[1])
 class Response(io.BytesIO):
     headers = {}
@@ -522,7 +529,7 @@ def wait_for_ui(window, predicate):
 
 def cache_entry(installed, repository=REPOSITORY, commit=COMMIT):
     from dataclasses import replace
-    from bagu_trainer.bank_build.source_cache import cache_directory
+    from bagu_trainer.infrastructure.bank_build.source_cache import cache_directory
     source = replace(load_sources(installed.manifest)[REPOSITORY], repository=repository, commit=commit)
     return cache_directory(installed.data / "source-cache", source)
 
@@ -696,10 +703,10 @@ def test_concurrent_start_is_locked_before_cache_or_network(installed, http_arch
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk desktop")
 def test_desktop_source_selection_failure_cancel_and_retry(installed, http_archive):
-    from bagu_trainer.tk_runtime import prepare_tk
+    from bagu_trainer.desktop.tk_runtime import prepare_tk
     prepare_tk()
     import tkinter as tk
-    from bagu_trainer.bank_setup import BankSetupWindow
+    from bagu_trainer.desktop.bank_setup import BankSetupWindow
     parent = tk.Tk()
     parent.withdraw()
     results = []
@@ -742,29 +749,6 @@ def test_desktop_source_selection_failure_cancel_and_retry(installed, http_archi
         parent.destroy()
 
 
-@pytest.mark.skipif(sys.platform != "win32", reason="Windows Tk desktop")
-def test_initialization_can_launch_bank_builder_and_blocks_start_until_finished(installed, http_archive, monkeypatch):
-    from bagu_trainer import startup
-    from bagu_trainer.initialization import InitializationApp
-    coordinator = startup.StartupCoordinator(engine_loader=lambda: pytest.fail("premature engine"))
-    coordinator.prepare()
-    app = InitializationApp(coordinator, bank_service=BankBuildService(installed.project, opener=http_archive.opener))
-    app.root.withdraw()
-    try:
-        wait_for_ui(app, lambda: not app.busy)
-        child = app.bank_setup
-        child.source_list.selection_set(REPOSITORY)
-        child._start()
-        app._retry()
-        assert not app.busy
-        wait_for_ui(child, lambda: not child.busy)
-        wait_for_ui(app, lambda: not app.busy)
-        assert child.result.questions == 1
-        assert next(item for item in coordinator.report.checks if item.name == "bank").ready
-    finally:
-        app._close()
-
-
 def test_build_without_scripts_git_powershell_or_subprocesses(installed):
     package = Path(__file__).resolve().parents[1] / "bagu_trainer"
     shutil.copytree(package, installed.project / "bagu_trainer",
@@ -782,12 +766,12 @@ class Response(io.BytesIO):
     headers = {}
 def opener(request, timeout):
     return Response((root / 'fixture.zip').read_bytes())
-from bagu_trainer.bank_build.service import BankBuildService
-from bagu_trainer.knowledge_base import KnowledgeBase
+from bagu_trainer.infrastructure.bank_build.service import BankBuildService
+from bagu_trainer.infrastructure.knowledge_base import KnowledgeBase
 assert not (root / 'scripts').exists()
 result = BankBuildService(root, opener=opener).build(['Snailclimb/JavaGuide'])
 assert result.questions == 1 and KnowledgeBase().all()[0]['knowledge_tags']
-assert 'bagu_trainer.engine' not in sys.modules
+assert 'bagu_trainer.application.learning.engine' not in sys.modules
 assert not any(name.startswith('scripts.') for name in sys.modules)
 '''
     result = subprocess.run([sys.executable, "-B", "-c", probe, str(installed.project)],

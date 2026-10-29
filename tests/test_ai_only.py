@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from bagu_trainer import engine
-from bagu_trainer.desktop_monitor import DesktopMonitor
-from bagu_trainer.scheduler import next_state
+from bagu_trainer.application.learning import engine
+from bagu_trainer.application.monitor import DesktopMonitor
+from bagu_trainer.domain.review import next_state
 
 
 def snapshot(origin):

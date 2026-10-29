@@ -1,4 +1,6 @@
-# 0.4.0 真实 Setup 生命周期验收
+# 0.4.0 真实 Setup 生命周期验收（历史记录）
+
+> 版本范围：本文记录 0.4.0 Tk 时代的真实 Setup 生命周期验收，保留原始事实。安装器脚本现与 Electron 共用，但**没有**用 Electron 载荷执行这六项真实场景；0.5.0 的构建/验证边界见[项目仓库 docs/ELECTRON_DESKTOP.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_DESKTOP.md) 和[项目仓库 docs/ELECTRON_VALIDATION.md](https://github.com/bugan9527-tech/bagu-trainer/blob/main/docs/ELECTRON_VALIDATION.md)。
 
 本流程复用 `scripts/acceptance/installed_release.py`，不新增安装/卸载实现。
 `installer_lifecycle.py` 继续用于随机 AppId、重定向目录及合成 EXE 的隔离夹具，

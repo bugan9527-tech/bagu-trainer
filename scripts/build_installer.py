@@ -122,7 +122,7 @@ def validate_bundle(bundle, *, current_source=True, check_exe=True):
                 if item[-1] == "z":
                     modules.update(archive.open_embedded_archive(name).toc)
             entry = "start_electron_backend" if electron else "start_desktop"
-            implementation = "bagu_trainer.desktop_service" if electron else "bagu_trainer.desktop"
+            implementation = "bagu_trainer.desktop.service" if electron else "bagu_trainer.desktop"
             if entry not in modules or implementation not in modules:
                 raise ValueError("生产 EXE 入口或运行模块不符")
             if any(re.search(r"(^|[._/])(acceptance|desktop_acceptance|tests|release_tests|pytest)([._/]|$)", name)
