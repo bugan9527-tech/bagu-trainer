@@ -730,20 +730,22 @@ for _method_name, _method in list(EngineSession.__dict__.items()):
 
 
 class _EngineCompatibilityModule(types.ModuleType):
-    """Lazy read/write aliases for callers that historically used globals."""
-    def __getattr__(self, name):
-        if name in _DEPENDENCIES:
-            return getattr(_engine(), name)
-        raise AttributeError(name)
+    """Lazy dependency aliases are descriptors, not module dictionary entries.
 
-    def __setattr__(self, name, value):
-        if name in _DEPENDENCIES:
-            owner = _engine()
-            setattr(owner, name, value)
-            if name == "session" and value is not None:
-                value._engine = owner
-            return
-        super().__setattr__(name, value)
+    Introspection and patch tools must restore the owning engine's value rather
+    than deleting a module attribute that was never stored in this namespace.
+    """
+    def _set_dependency(self, name, value):
+        owner = _engine()
+        setattr(owner, name, value)
+        if name == "session" and value is not None:
+            value._engine = owner
+
+
+for _dependency in _DEPENDENCIES:
+    setattr(_EngineCompatibilityModule, _dependency, property(
+        lambda self, name=_dependency: getattr(_engine(), name),
+        lambda self, value, name=_dependency: self._set_dependency(name, value)))
 
 
 sys.modules[__name__].__class__ = _EngineCompatibilityModule

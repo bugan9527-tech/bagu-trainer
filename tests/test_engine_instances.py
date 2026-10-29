@@ -210,3 +210,23 @@ def test_engine_close_and_initialize_keep_engine_identity_and_replace_session(tm
         assert instance.session.list_pending() == []
     finally:
         instance.close()
+
+
+@pytest.mark.parametrize("name", ["kb", "matcher"])
+def test_legacy_dependency_patch_restores_owner_without_module_shadow(monkeypatch, name):
+    import inspect
+    from bagu_trainer.application.learning import engine as legacy
+
+    owner = bootstrap.get_engine()
+    original = getattr(owner, name)
+    descriptor = inspect.getattr_static(legacy, name)
+    assert hasattr(descriptor, "__set__")
+    replacement = object()
+    with monkeypatch.context() as patch:
+        patch.setattr(legacy, name, replacement)
+        assert getattr(legacy, name) is replacement
+        assert getattr(owner, name) is replacement
+        assert name not in vars(legacy)
+    assert getattr(legacy, name) is original
+    assert getattr(owner, name) is original
+    assert name not in vars(legacy)

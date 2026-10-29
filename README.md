@@ -85,7 +85,7 @@ v0.5.1 的后端分层、修复和清理范围见 [本版发布说明](RELEASE_0
 
 当前 `.github/workflows/windows-electron.yml` 执行 Electron 构建、核心测试、源码/冻结 EXE 验收，并上传构建 artifact；它**不创建草稿 Release**。正式发布资产由维护者在本机运行 `npm run package:zip` / `npm run package:installer`，核对 SHA-256 后上传。`.github/workflows/windows-portable.yml` 是 **v0.4.x 旧 Tk 兼容工作流**，仍包含旧版草稿 Release 步骤，不能与 Electron 工作流混用。
 
-当前 Electron 验证记录见 [docs/ELECTRON_VALIDATION.md](docs/ELECTRON_VALIDATION.md)：源码和冻结 EXE 已使用隔离合成数据验证七页导航、草稿恢复、答题、重复提交保护、历史与重练、中文路径及首次使用；没有用真实个人模型账号执行付费连接测试或真实 AI 出题，也没有执行真实 Windows 安装、覆盖升级、登录后自启动或完整卸载。产物未签名；构建/解包审计不等于生命周期验收通过。
+Electron 迁移阶段的验证记录见 [docs/ELECTRON_VALIDATION.md](docs/ELECTRON_VALIDATION.md)：源码和冻结 EXE 已使用隔离合成数据验证七页导航、草稿恢复、答题、重复提交保护、历史与重练、中文路径及首次使用。该历史记录没有覆盖真实个人模型账号的付费调用、真实 Windows 安装、覆盖升级、登录后自启动或完整卸载；v0.5.1 的新增验证结果以本版发布附件为准。产物未签名；构建/解包审计不等于生命周期验收通过。
 
 历史 Tk 版本的记录保留在原文档中，版本和未验证范围必须一并阅读：[历史验证记录](VALIDATION.md) 包含旧向导流程、v0.3.0 构建及 0.1.0 → 0.2.0 隔离夹具结果；0.4.0 本地产物路径修复证据 `validation/artifact-path-fix-20261025/RESULTS.md`（未随仓库或发布包分发）记录 148 项相关回归通过，但完整冻结 UI 验收仍报 `No acceptance milestones completed`；0.4.0 的 [真实 Setup 生命周期验收](INSTALLED_LIFECYCLE_ACCEPTANCE.md) 已补齐脚本和说明，但当前六项真实安装场景均未执行。这些历史事实不自动适用于 0.5.1 Electron。
 
