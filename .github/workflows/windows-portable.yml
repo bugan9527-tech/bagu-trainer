@@ -69,7 +69,7 @@ jobs:
           New-Item -ItemType Directory -Path validation -Force | Out-Null
           git --version 2>&1 | Tee-Object -FilePath validation/unit-runtime.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python -B -c "import sys; from bagu_trainer.tk_runtime import create_root; root = create_root(); root.withdraw(); root.update(); print('Python:', sys.executable); print('Tcl:', root.tk.call('info', 'patchlevel')); print('Tk:', root.tk.call('package', 'require', 'Tk')); print('Tcl library:', root.tk.call('info', 'library')); print('Tk library:', root.tk.call('set', 'tk_library')); root.destroy()" 2>&1 | Tee-Object -FilePath validation/unit-runtime.txt -Append
+          python -B -c "import sys; from bagu_trainer.desktop.tk_runtime import create_root; root = create_root(); root.withdraw(); root.update(); print('Python:', sys.executable); print('Tcl:', root.tk.call('info', 'patchlevel')); print('Tk:', root.tk.call('package', 'require', 'Tk')); print('Tcl library:', root.tk.call('info', 'library')); print('Tk library:', root.tk.call('set', 'tk_library')); root.destroy()" 2>&1 | Tee-Object -FilePath validation/unit-runtime.txt -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run isolated unit tests before release acceptance
         id: unit_tests
@@ -80,6 +80,8 @@ jobs:
           # Historical corpus benchmarks are optional; never download personal/third-party banks here.
           BAGU_TEST_BANK_ROOT: ''
         run: |
+          python -B scripts/check_unused_imports.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B -m pytest tests -q -W error --junitxml=validation/unit-tests.xml
           exit $LASTEXITCODE
       - name: Preserve unit test report and runtime diagnostics
